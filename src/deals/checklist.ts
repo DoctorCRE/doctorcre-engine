@@ -131,6 +131,7 @@ type Item = {
 	status: Status;
 	due_on: string | null;
 	evidence_ref: string | null;
+	finished_on: string | null;
 	owner: string | null;
 	document_type: string | null;
 	source: Source | RecordSource;
@@ -149,6 +150,7 @@ type Facts = {
 		evidence_ref: string | null;
 		executed_on: string | null;
 		expiration_on: string | null;
+		recorded_on: string | null;
 	} | null;
 	criticalDates: {
 		id: string | null;
@@ -189,42 +191,50 @@ const invoiceDate = new Intl.DateTimeFormat("en-US", {
 	timeZone: "UTC",
 });
 
+type Evidence = { evidence_ref: string; finished_on: string | null };
+
 function evidenceOf({ deal, lease, commissions }: Facts) {
-	const evidence = new Map<string, string>();
+	const evidence = new Map<string, Evidence>();
 	if (lease?.status === "current" && lease.evidence_ref) {
 		if (isDate(lease.executed_on))
-			evidence.set("executed_lease", lease.evidence_ref);
+			evidence.set("executed_lease", {
+				evidence_ref: lease.evidence_ref,
+				finished_on: lease.executed_on,
+			});
 		if (isDate(lease.expiration_on))
-			evidence.set("expiration_recorded", lease.evidence_ref);
+			evidence.set("expiration_recorded", {
+				evidence_ref: lease.evidence_ref,
+				finished_on: lease.recorded_on,
+			});
 	}
 	if (isDate(deal.invoiced_on))
-		evidence.set(
-			"invoice_recorded",
-			`Invoiced ${invoiceDate.format(new Date(deal.invoiced_on))}`,
-		);
+		evidence.set("invoice_recorded", {
+			evidence_ref: `Invoiced ${invoiceDate.format(new Date(deal.invoiced_on))}`,
+			finished_on: deal.invoiced_on,
+		});
+	const received = commissions.map((c) => c.received_on);
 	if (
 		commissions.length > 0 &&
-		commissions.every((c) => c.status === "received" && isDate(c.received_on))
+		commissions.every((c) => c.status === "received") &&
+		received.every(isDate)
 	)
-		evidence.set(
-			"commission_received",
-			commissions.length === 1
-				? "Commission payment received"
-				: `${commissions.length} commission payments received`,
-		);
+		evidence.set("commission_received", {
+			evidence_ref:
+				commissions.length === 1
+					? "Commission payment received"
+					: `${commissions.length} commission payments received`,
+			finished_on: received.toSorted().at(-1) ?? null,
+		});
 	return evidence;
 }
 
 function settle(
 	item: Item,
-	evidence: string | undefined,
+	evidence: Evidence | undefined,
 	request: Request | undefined,
 	today: string,
 ): Item {
-	const complete = evidence && {
-		status: "complete" as const,
-		evidence_ref: evidence,
-	};
+	const complete = evidence && { status: "complete" as const, ...evidence };
 	if (!request) return { ...item, ...complete };
 	const progress =
 		complete ||
@@ -232,6 +242,7 @@ function settle(
 			? {
 					status: "received" as const,
 					evidence_ref: request.evidence_filename || "Received document",
+					finished_on: request.fulfilled_on,
 				}
 			: { status: dueStatus(request.due_on, today) });
 	return {
@@ -259,6 +270,7 @@ function criticalDateItems({ deal, criticalDates, today }: Facts): Item[] {
 						status: dueStatus(date.due_on, today),
 						due_on: date.due_on,
 						evidence_ref: date.source,
+						finished_on: null,
 						owner: deal.owner || null,
 						document_type: null,
 						source: { record_verb: "add-critical-date" },
@@ -298,6 +310,7 @@ export function checklistOf(facts: Facts) {
 							status: "not_recorded",
 							due_on: null,
 							evidence_ref: null,
+							finished_on: null,
 							owner: facts.deal.owner || null,
 							document_type: NOT_DOCUMENTS.has(itemId) ? null : itemId,
 							source,
@@ -336,6 +349,9 @@ const requestsOf = (db: Kysely<DB>, deal: string) =>
 			isoMillis(sql.ref("fulfilled_at"))
 				.$castTo<string | null>()
 				.as("fulfilled_at"),
+			asText(sql`(fulfilled_at at time zone 'America/Chicago')::date`).as(
+				"fulfilled_on",
+			),
 			"fulfilled_by",
 			"evidence_attachment_id",
 			"evidence_filename",

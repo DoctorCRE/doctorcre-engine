@@ -1725,7 +1725,7 @@ The `deal-checklist.v1` groups become the eight phases. Research, Site selection
 
 ### Deal plan
 
-The owner approved the timeline design on 2026-11-25. The deal page's [Plan](screens/deals.md#plan) tab and Deals [Timeline](screens/deals.md#timeline) draw each deal's checklist and steps in time. None of it is built yet.
+The owner approved the timeline design on 2026-11-25. The deal page's [Plan](screens/deals.md#plan) tab and Deals [Timeline](screens/deals.md#timeline) draw each deal's checklist and steps in time. Only the recorded days on the deal read are built.
 
 **Placement.** The workflow is the [checklist under the phases](#checklist-under-the-phases), in its fixed order. Each row is recorded or expected, never both.
 
@@ -1761,6 +1761,8 @@ Once a to-do has five finished examples with recorded days, the panel shows the 
 **A partner's own date.** A partner may set their own end day on one of a deal's to-dos by dragging its expected bar. It is the only plan date stored. It saves through the change history, so Undo restores the one before, and Reset to typical clears the deal's own dates. It cannot be a past day. The column or table needs the owner's yes on the schema file's commit before production.
 
 **The plan read.** One pure engine function takes a deal's checklist, phase changes, steps, critical dates, own dates, the typical lengths and today in Central time. It returns every row with its recorded or expected days and state, the arrows, the at-risk dates, the expected signing date and the stale flag. The deal read serves it as `plan`. The board read gives each open deal its phase spans, expected signing date, stale flag, at-risk count and current phase's rows from the same function. Expected days are worked out on every read and never saved, so they never appear on Home or Calendar.
+
+**Recorded days on the deal read.** `phase_spans` lists each `deal_phase_change` row in order with its `phase`, `from_on` and `to_on`, as Central days. The current phase has no `to_on`, and a phase the import seeded without move evidence has no `from_on`. Each step in `next_actions` gives `set_on`, the day of its `created_at`, and `done_on`, the day of its `done_at`. Each checklist item gives `finished_on` when its record holds the day: the lease's `executed_on` for the executed lease, the day the lease's first version was saved for the lease expiration, so an amendment does not move it, the deal's `invoiced_on`, the last `received_on` once every payment is received, and the day a document request was fulfilled. Every other item's `finished_on` is null, and the old-schema read leaves the lease expiration's `finished_on` null too.
 
 ### Doc skill sessions
 

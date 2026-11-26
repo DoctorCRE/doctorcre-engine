@@ -29,7 +29,8 @@ const request = (row_key: string, due_on: string, filename?: string) => ({
 	satisfied: false,
 	receipts: [],
 	status: filename ? "fulfilled" : "open",
-	fulfilled_at: filename ? "2030-06-01T12:00:00.123Z" : null,
+	fulfilled_at: filename ? "2030-06-01T03:00:00.123Z" : null,
+	fulfilled_on: filename ? "2030-05-31" : null,
 	fulfilled_by: filename ? "example-actor" : null,
 	evidence_attachment_id: filename ? "example-attachment" : null,
 	evidence_filename: filename ?? null,
@@ -124,6 +125,7 @@ test("recorded facts complete items and requests set owner, date and status", ()
 				evidence_ref: "example-lease.pdf",
 				executed_on: "2030-01-01",
 				expiration_on: null,
+				recorded_on: "2030-01-02",
 			},
 			commissions: [
 				{ status: "received", received_on: "2030-06-03" },
@@ -177,6 +179,7 @@ test("recorded facts complete items and requests set owner, date and status", ()
 			status: "complete",
 			due_on: "2030-07-01",
 			evidence_ref: "example-lease.pdf",
+			finished_on: "2030-01-01",
 			owner: "Example Owner",
 			document_type: "executed_lease",
 			source: SOURCES[0],
@@ -193,6 +196,7 @@ test("recorded facts complete items and requests set owner, date and status", ()
 		status: "overdue",
 		due_on: "2030-06-01",
 		evidence_ref: "example-lease",
+		finished_on: null,
 		owner: "example-partner",
 		document_type: null,
 		source: { record_verb: "add-critical-date" },
@@ -205,5 +209,49 @@ test("recorded facts complete items and requests set owner, date and status", ()
 			["requirements", "overdue"],
 			["market_survey", "due"],
 		],
+	);
+});
+
+test("a finished item carries the day its record holds, and nothing else does", () => {
+	const finished = (changes: Partial<Facts>) =>
+		Object.fromEntries(
+			checklistOf(facts(changes))
+				.phases.flatMap((p) => p.items)
+				.flatMap((i) => (i.finished_on ? [[i.id, i.finished_on]] : [])),
+		);
+	assert.deepEqual(finished({}), {});
+	assert.deepEqual(
+		finished({
+			deal: { ...facts().deal, invoiced_on: "2030-06-02" },
+			lease: {
+				status: "current",
+				evidence_ref: "example-lease.pdf",
+				executed_on: "2030-01-01",
+				expiration_on: "2040-01-01",
+				recorded_on: "2030-01-05",
+			},
+			commissions: [
+				{ status: "received", received_on: "2030-06-04" },
+				{ status: "received", received_on: "2030-06-03" },
+			],
+			requests: [request("representation", "2030-05-01", "example.pdf")],
+		}),
+		{
+			representation: "2030-05-31",
+			executed_lease: "2030-01-01",
+			expiration_recorded: "2030-01-05",
+			invoice_recorded: "2030-06-02",
+			commission_received: "2030-06-04",
+		},
+	);
+	assert.deepEqual(
+		finished({
+			commissions: [
+				{ status: "received", received_on: "2030-06-04" },
+				{ status: "unpaid", received_on: null },
+			],
+			requests: [request("requirements", "2030-06-01")],
+		}),
+		{},
 	);
 });
