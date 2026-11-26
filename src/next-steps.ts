@@ -178,6 +178,8 @@ async function lockSubject(
 	if (!record) throw new SaveRefusal(new Refusal(404, "not_found"));
 }
 
+export const replacedNextStepReason = "Replaced by a new next step";
+
 export async function cancelCurrentStep(
 	tx: Transaction<DB>,
 	subject: CurrentSubject,
@@ -217,7 +219,7 @@ export async function cancelCurrentStep(
 		.set({
 			resolution: "cancelled",
 			resolved_at: sql<string>`clock_timestamp()`,
-			resolution_reason: "Replaced by a new next step",
+			resolution_reason: replacedNextStepReason,
 		})
 		.where(openStep);
 	if (seen !== undefined) {
