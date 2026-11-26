@@ -57,6 +57,17 @@ function summaryClaim(subject: string, until = 120_000) {
 	});
 }
 
+function splitClaim(body: string) {
+	return Response.json({
+		kind: "email_split",
+		claim_id: firstClaim,
+		claim_until: new Date(120_000).toISOString(),
+		activity_id: context.id,
+		subject: "Thursday",
+		body,
+	});
+}
+
 const status = (code: number) => new Response(null, { status: code });
 
 type Reply = Response | "drop" | { reply: Response; now: number };
@@ -119,7 +130,7 @@ const link = (...replies: Reply[]) => runLink(replies);
 const poll = (readiness: string) => ({
 	path: "/api/engine/doc/link/claim",
 	readiness,
-	work: readiness === "ready" ? "judgment" : null,
+	work: readiness === "ready" ? "judgment, email_split" : null,
 	body: null,
 });
 const result = (body: unknown) => ({
@@ -480,3 +491,17 @@ for (const [subject, kind] of [
 		);
 	});
 }
+
+test("a ready Doc link asks for judgment and email_split, and a split claim finishes", async () => {
+	const body = "See you Thursday.\n\nSam\n\nSent from my phone";
+	assert.deepEqual(await link(splitClaim(body), status(204)), [
+		poll("ready"),
+		judgment({
+			kind: "answered",
+			result: {
+				authored: ["See you Thursday.", "Sam", "Sent from my phone"],
+			},
+		}),
+		poll("ready"),
+	]);
+});

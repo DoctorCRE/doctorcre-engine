@@ -332,7 +332,8 @@ export async function runDocLink(
 		if (readiness === "personal_plan_required") continue;
 		const headers = new Headers();
 		if (readiness) headers.set("Doc-Link-Readiness", readiness);
-		if (readiness === "ready") headers.set("Doc-Link-Work", "judgment");
+		if (readiness === "ready")
+			headers.set("Doc-Link-Work", "judgment, email_split");
 		const poll = await postDocLink(config, "claim", { headers }, fetch);
 		if (poll?.status === 401) return;
 		if (poll?.status !== 200 || readiness !== "ready") continue;
