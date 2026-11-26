@@ -89,8 +89,9 @@ const teamsJoin =
 	/^Join (?:the meeting now|Microsoft Teams Meeting|on your computer):? <?https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^ <>]+>?$/i;
 const zoomJoin =
 	/^Join Zoom Meeting:? <?https:\/\/(?:[\w-]+\.)?zoom\.us\/j\/\d+(?:\?[^ <>]+)?>?$/i;
+const inviteRule = /^_{8,}$/;
 const inviteDetail =
-	/^(?:Join the meeting now|Meeting ID: \d+(?: \d+)*|Passcode: [\w-]+)$/i;
+	/^(?:Join the meeting now|Join: <?https:\/\/teams\.microsoft\.com\/[^ <>]+>?|Meeting ID: \d+(?: \d+)*|Passcode: [\w-]+|_{8,}|Need help\?.*|Dial in by phone|\+?[\d ()-]+,,\d+#.*|Find a local number.*|Phone conference ID: [\d ]+#|For organizers: .*)$/i;
 
 const replyOpener =
 	/\bOn[ \t]+(?=[^<>\r\n]{0,48}\d)[^<>]{1,240}?(?:<[^<>]{1,160}>)?\s*\bwrote:/i;
@@ -109,7 +110,7 @@ const contactValue = new RegExp(
 const contactLabel =
 	/\b(?:direct|main|office|phone|cell|mobile|fax|tel(?:ephone)?|e-?mail|web|[cftmpoe])\b/gi;
 const signatureDetail =
-	/^(?:(?:[A-Z]{2} )?(?:license|lic\.|dre|bre|nmls)[ :#]+[\w-]*\d[\w-]*|(?:(?:general|regional|office|transaction|leasing|commercial|managing|associate|executive|chief|operating|vice|senior) ){0,4}(?:dentist|director|manager|broker|president|partner|associate|coordinator|officer)|(?:[\w-]+\.)+(?:com|org|net|co|io)|\d+ [\w. ]+ (?:st\.?|street|road|rd\.?|avenue|ave\.?|lane|ln\.?|drive|dr\.?|blvd\.?)\.?|[\w. ]+, [A-Z]{2} \d{5}(?:-\d{4})?)$/i;
+	/^(?:(?:[A-Z]{2} )?(?:license|lic\.|dre|bre|nmls)[ :#]+[\w-]*\d[\w-]*|(?:(?:general|regional|office|transaction|leasing|commercial|managing|associate|executive|chief|operating|vice|senior) ){0,4}(?:dentist|director|manager|broker|agent|president|partner|associate|coordinator|officer)|(?:[\w-]+\.)+(?:com|org|net|co|io)|\d+ [\w. ]+ (?:st\.?|street|road|rd\.?|avenue|ave\.?|lane|ln\.?|drive|dr\.?|blvd\.?)\.?|[\w. ]+, [A-Z]{2} \d{5}(?:-\d{4})?)$/i;
 const legalFooter =
 	/(?:^|(?<=[.!?])[ \t]+)this\s+(?:e-?mail|message|communication)(?:\s+and\s+(?:any|its)\s+attachments)?\s+(?:may\s+contain|contains?)\s+(?:confidential(?:\s+and\s+(?:legally\s+)?privileged)?|(?:legally\s+)?privileged(?:\s+and\s+confidential)?)\s+information\.(?=\s|$)|(?:^|(?<=[.!?])[ \t]+)if\s+you\s+(?:received\s+it\s+in\s+error|(?:have\s+)?received\s+this\s+(?:e-?mail|message)\s+in\s+error|are\s+not\s+the\s+intended\s+recipient),?\s+please\s+(?:delete\s+it|notify\s+the\s+sender(?:\s+and\s+delete\s+(?:it|this\s+message))?)\.(?=\s|$)/gim;
 const deviceFooter = /^sent from my (?:iphone|ipad|android|mobile device)$/i;
@@ -246,19 +247,6 @@ function historyStart(body: string) {
 	return leadingDivider(body, Math.min(headerStart(body, start), start));
 }
 
-function splitStoredAuthored(authored: string, history: string) {
-	const start = leadingDivider(authored, headerStart(authored));
-	if (start >= authored.length) {
-		return { body: authored, folded: history || null };
-	}
-	const moved = authored.slice(start).trim();
-	const stored = history.trim();
-	return {
-		body: authored.slice(0, start).trimEnd(),
-		folded: stored ? `${moved}\n\n${stored}` : moved,
-	};
-}
-
 function contactDetails(line: string) {
 	const residue = line.replace(contactValue, "");
 	return (
@@ -279,24 +267,44 @@ function contactDetails(line: string) {
 type TextRange = { start: number; end: number };
 type PositionedLine = TextRange & { line: MailLine; text: string };
 
-function inlineSignature(line: string, name: string) {
-	if (!name) return;
-	const at = line.toLowerCase().lastIndexOf(name);
-	if (at < 0 || (at > 0 && !/\s/.test(line.charAt(at - 1)))) return;
+// A signature can repeat the name with a middle initial or nickname, as in "Sam Q. Example".
+function signatureName(name: string) {
+	const words = name.split(/\s+/).filter(Boolean);
+	if (!words.length) return;
+	const pattern = words
+		.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+		.join(String.raw`(?:\s+[^\s.!?,;:]+\.?){0,2}\s+`);
+	return new RegExp(String.raw`(?<!\S)${pattern}(?![\w'])`, "gi");
+}
+
+const titleParts = /^[A-Z][\w'&.-]*(?: [A-Z][\w'&.-]*)*$/;
+
+function inlineSignature(line: string, signer: RegExp) {
+	const match = [...line.matchAll(signer)].at(-1);
+	if (!match) return;
+	const at = match.index;
 	if (line.length - at > 500) return;
 	const before = line.slice(0, at);
 	const sign = before.match(/(?:^|(?<=[.!?])\s+)([\w ]+[,.!]?)\s+$/);
+	const signed = !!sign?.[1] && signOff.test(sign[1].trim());
 	const start =
-		sign?.[1] && signOff.test(sign[1].trim())
+		sign && signed
 			? (sign.index ?? 0) + sign[0].length - sign[0].trimStart().length
 			: at;
-	if (start === at && before.trim() && !/[.!?]\s+$/.test(before)) return;
-	const details = line.slice(at + name.length).replace(/^\s*\|?\s*/, "");
+	if (!signed && before.trim() && !/[.!?]\s+$/.test(before)) return;
+	const details = line.slice(at + match[0].length).replace(/^\s*\|?\s*/, "");
 	const detailStart = line.length - details.length;
 	for (const { index } of details.matchAll(/\.(?=\s|$)|$/g)) {
 		const end = Math.min(line.length, detailStart + index + 1);
 		if (contactDetails(line.slice(detailStart, end))) return { start, end };
 	}
+	const titles = details.trim() ? details.trimEnd().split(/\s*\|\s*/) : [];
+	if (
+		signed &&
+		details.length <= 120 &&
+		titles.every((part) => titleParts.test(part))
+	)
+		return { start, end: line.length };
 }
 
 function footerRanges(body: string, name: string) {
@@ -308,6 +316,7 @@ function footerRanges(body: string, name: string) {
 	let hasContact = false;
 	let hasName = false;
 	let offset = 0;
+	const signer = signatureName(name);
 	for (const raw of body.split("\n")) {
 		const line = raw.trim();
 		const lower = line.toLowerCase();
@@ -318,7 +327,7 @@ function footerRanges(body: string, name: string) {
 			hasName ||= named;
 		} else {
 			if (hasContact && hasName) ranges.push({ start, end: offset - 1 });
-			const inline = inlineSignature(raw, name);
+			const inline = signer && inlineSignature(raw, signer);
 			if (inline)
 				ranges.push({ start: offset + inline.start, end: offset + inline.end });
 			if (deviceFooter.test(line) || imageFooter.test(line)) {
@@ -454,31 +463,23 @@ export function cleanEmailThread(
 	const earlier = new Set<string>();
 	const senders = new Map<string, MailLine[][]>();
 	const cleaned = messages.map(
-		({ body, authored = null, history = null, sender, sender_name }) => {
-			const lines = mailLines(body);
+		({ body, authored = null, history = null, ...sender }) => {
+			const text = authored ?? body;
+			const lines = mailLines(text);
 			const content = lines.filter(({ text }) => text.trim());
 			const removed = historyLines(content, earlier);
-			for (const { key } of content) {
+			for (const { key } of authored === null ? content : mailLines(body)) {
 				if (key) earlier.add(key);
 			}
 
-			const address = sender.trim().toLowerCase();
+			const address = sender.sender.trim().toLowerCase();
 			if (address) {
 				const own = content.filter((line) => !removed.has(line));
 				const group = senders.get(address);
 				if (group) group.push(own);
 				else senders.set(address, [own]);
 			}
-			return {
-				body,
-				authored,
-				history,
-				lines,
-				content,
-				removed,
-				sender_name,
-				sender,
-			};
+			return { ...sender, text, history, lines, content, removed };
 		},
 	);
 
@@ -491,21 +492,30 @@ export function cleanEmailThread(
 	}
 
 	return cleaned.map((message) => {
-		if (message.authored !== null) {
-			return splitStoredAuthored(message.authored, message.history ?? "");
-		}
-		const { body, lines, content, removed } = message;
+		const { text, history, lines, content, removed } = message;
 		let inInvite = false;
-		for (const line of content) {
+		for (const [index, line] of content.entries()) {
 			const { key } = line;
+			const heading = inviteHeading.test(key);
 			inInvite =
-				inviteHeading.test(key) ||
+				heading ||
 				teamsJoin.test(key) ||
 				zoomJoin.test(key) ||
 				(inInvite && inviteDetail.test(key));
-			if (inInvite) removed.add(line);
+			if (!inInvite) continue;
+			removed.add(line);
+			const previous = content[index - 1];
+			if (heading && previous && inviteRule.test(previous.key)) {
+				removed.add(previous);
+			}
 		}
-		return foldEmailBody(body, lines, removed, recurring, message);
+		const cleaned = foldEmailBody(text, lines, removed, recurring, message);
+		const stored = history?.trim();
+		if (!stored) return cleaned;
+		return {
+			body: cleaned.body,
+			folded: cleaned.folded ? `${cleaned.folded}\n\n${stored}` : stored,
+		};
 	});
 }
 
