@@ -43,6 +43,7 @@ import { dealStars } from "./deals/stars.ts";
 import { dealTours } from "./deals/tours.ts";
 import { typicalLengths } from "./deals/typical-lengths.ts";
 import { type DealWatchEnv, dealWatch } from "./deals/watch.ts";
+import { workflowSuggestions } from "./deals/workflow-suggestions.ts";
 import { docRoutes } from "./doc.ts";
 import {
 	claimDocLink,
@@ -254,6 +255,7 @@ app.use(
 app.route("/jobs", cadence);
 app.route("/jobs", nextDeals);
 app.route("/jobs", notificationReads);
+app.route("/jobs", workflowSuggestions);
 app.route("/jobs", dealJobs);
 app.route("/jobs", callContextJobs);
 app.route("/jobs", invoiceJobs);

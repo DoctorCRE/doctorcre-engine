@@ -344,6 +344,27 @@ export function checklistOf(facts: Facts) {
 	return { ...head, phases, due_items, requests_state: "current" };
 }
 
+const FINISHED_CHECKLIST = new Set(["complete", "received"]);
+
+export function nextChecklistStep(
+	phases: {
+		id: string;
+		label: string;
+		items: { id: string; label: string; status: string }[];
+	}[],
+	phaseId: string | null,
+) {
+	const phase = phases.find((item) => item.id === phaseId);
+	const next = phase?.items.find(
+		(item) =>
+			!item.id.startsWith("critical-date:") &&
+			!FINISHED_CHECKLIST.has(item.status),
+	);
+	return next && phase
+		? { todo: next.id, label: next.label, phaseLabel: phase.label }
+		: null;
+}
+
 const requestsOf = (db: Kysely<DB>, deal: string) =>
 	db
 		.selectFrom("v_requirement_request")

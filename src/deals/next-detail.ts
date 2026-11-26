@@ -191,6 +191,21 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 			jsonArrayFrom(emailFollowUpsOf(db, eb.ref("d.id"))).as(
 				"email_follow_ups",
 			),
+			jsonArrayFrom(
+				eb
+					.selectFrom("proposal as suggestion")
+					.select((eb) => [
+						"suggestion.id as proposal_id",
+						"suggestion.what",
+						"suggestion.evidence",
+						asText(eb.ref("suggestion.due_on")).as("due_on"),
+					])
+					.whereRef("suggestion.deal_id", "=", "d.id")
+					.where("suggestion.kind", "=", "workflow_step")
+					.where("suggestion.status", "=", "pending")
+					.orderBy("suggestion.created_at")
+					.orderBy("suggestion.id"),
+			).as("workflow_suggestions"),
 			jsonObjectFrom(
 				eb
 					.selectFrom("current_lease as lease")
