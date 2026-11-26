@@ -16,6 +16,8 @@ const draft = id(6);
 const duplicateProposal = id(7);
 const duplicateDraft = id(8);
 const headerProposal = id(9);
+const partnerProposal = id(61);
+const dell = id(70);
 const start = "2026-01-05T15:00:00.000001Z";
 const nextMicrosecond = "2026-01-05T15:00:00.000002Z";
 const footer = "Please copy the surveyor.\nThanks again.";
@@ -37,6 +39,7 @@ const messages: {
 	conversation?: string;
 	split?: [authored: string, history: string];
 	mailboxes?: string[];
+	sender?: [address: string, name: string];
 }[] = [
 	{ id: 10, at: start, body: captured },
 	{
@@ -136,6 +139,21 @@ const messages: {
 		conversation: "Header thread",
 		split: [`${authored}\n\n${outlookHeaderBlock}`, history],
 	},
+	{
+		id: 60,
+		at: start,
+		body: captured,
+		messageId: "<partner-ask@example.test>",
+		conversation: "Partner thread",
+	},
+	{
+		id: 62,
+		at: nextMicrosecond,
+		body: authored,
+		messageId: "<partner@example.test>",
+		conversation: "Partner thread",
+		sender: ["dell@example.test", "Wayne Example"],
+	},
 ];
 
 before(async () => {
@@ -143,8 +161,9 @@ before(async () => {
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values
-			('${viewer}', 'person', 'Example Reviewer'), ('${other}', 'person', 'Other Reviewer');
-		insert into app_user (id, slug) values ('${viewer}', 'thread-reviewer'), ('${other}', 'other-reviewer');
+			('${viewer}', 'person', 'Example Reviewer'), ('${other}', 'person', 'Other Reviewer'), ('${dell}', 'person', 'Wayne Example');
+		insert into app_user (id, slug) values ('${viewer}', 'thread-reviewer'), ('${other}', 'other-reviewer'), ('${dell}', 'dell');
+		insert into party_email (party_id, address, label) values ('${dell}', 'dell@example.test', 'work');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${viewer}');`);
 	// Current insert rules prevent creating these historical duplicates.
 	await db.query(`alter table email drop constraint email_message_id_key;
@@ -156,8 +175,8 @@ before(async () => {
 			[activityId, message.at],
 		);
 		await db.query(
-			`insert into email (activity_id, message_id, conversation_id, sender, subject, body, authored, history, imported)
-			values ($1, $2::text, $3, 'maya@example.test', $4, $5, $6, $7, $2 is null)`,
+			`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body, authored, history, imported)
+			values ($1, $2::text, $3, $8, $9, $4, $5, $6, $7, $2 is null)`,
 			[
 				activityId,
 				message.messageId ?? null,
@@ -165,6 +184,7 @@ before(async () => {
 				message.subject ?? "Suite plan",
 				message.body,
 				...(message.split ?? [null, null]),
+				...(message.sender ?? ["maya@example.test", null]),
 			],
 		);
 		await db.query(
@@ -181,7 +201,8 @@ before(async () => {
 		values ('${followUp}', 'next_step', '${id(10)}', 'email', 'I sent the plan.', 'old_system', '${deal}', 'Review the plan', '${viewer}'),
 			('${filing}', 'file_to_deal', '${id(10)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
 			('${duplicateProposal}', 'file_to_deal', '${id(40)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
-			('${headerProposal}', 'file_to_deal', '${id(50)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null);
+			('${headerProposal}', 'file_to_deal', '${id(50)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
+			('${partnerProposal}', 'file_to_deal', '${id(60)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null);
 		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
 		values ('${draft}', '${id(10)}', '${viewer}', 'old_system', 'Re: Suite plan', 'Thanks.', 'I sent the plan.'),
 			('${duplicateDraft}', '${id(41)}', '${viewer}', 'old_system', 'Re: Suite plan', 'Thanks.', 'I sent the plan.');
@@ -295,4 +316,11 @@ test("folds a plain-text Outlook reply header block left in stored authored text
 	assert.deepEqual(entries, [
 		entry(50, authored, `${outlookHeaderBlock}\n\n${history}`),
 	]);
+});
+
+test("names a message from a partner's mailbox address by the partner, not its display name", async () => {
+	const names = (await thread(`proposals/${partnerProposal}`)).map(
+		({ sender_name }) => sender_name,
+	);
+	assert.deepEqual(names, [null, "Dell"]);
 });

@@ -65,7 +65,15 @@ export function decisionPosition(
 
 type Sender = { sender: string; sender_name: string | null };
 
+// A partner's own address always reads as "Joe" or "Dell", whatever display name the message carried.
+const partnerName = sql<
+	string | null
+>`(select initcap(app_user.slug) from party_email
+	join app_user on app_user.id = party_email.party_id and app_user.is_account_partner
+	where party_email.address = e.sender)`;
+
 type ThreadRow = Sender & {
+	partner_name: string | null;
 	activity_id: string;
 	happened_at: string;
 	exact_happened_at: string;
@@ -657,7 +665,7 @@ export async function readHomeEmailThread(
 	sourceId: string,
 ) {
 	const { rows } = await sql<ThreadRow>`
-		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name, a.summary,
+		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name, ${partnerName} as partner_name, a.summary,
 			${isoMillis(sql.ref("a.happened_at"))} as happened_at,
 			a.happened_at::text as exact_happened_at, e.message_id, e.subject, e.body, e.authored, e.history
 		from email source
@@ -672,11 +680,11 @@ export async function readHomeEmailThread(
 	const { groups, source } = groupThreadRows(rows, sourceId);
 	const bodies = cleanEmailThread(groups.map(({ display }) => display));
 	const thread = groups.map(({ display }, index) => {
-		const { activity_id, sender_name, happened_at } = display;
+		const { activity_id, partner_name, sender_name, happened_at } = display;
 		const cleaned = bodies[index];
 		return {
 			activity_id,
-			sender_name,
+			sender_name: partner_name ?? sender_name,
 			happened_at,
 			body: cleaned?.body ?? display.body,
 			folded: cleaned?.folded ?? null,
