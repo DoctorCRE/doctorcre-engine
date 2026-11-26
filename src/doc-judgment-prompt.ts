@@ -37,7 +37,7 @@ Return {"summary":"...","action_title":null,"quote":"..."}.`,
 Extract relevant facts for the destinations supplied in the JSON. Copy each destination's kind and id exactly. File only facts you can attribute to a listed destination. Use at most one deal and only relevant vendors. If the evidence conflicts or no facts can be assigned confidently, return {"facts":[]}.
 Return {"facts":[{"destination":{"kind":"deal","id":"..."},"text":"...","quote":"..."}]}. The destination kind is "deal" or "vendor" as supplied.`,
 	email_split: `${evidence}
-List the paragraphs of the body that the sender wrote: the message, inline answers, postscripts, the sign-off and the sender's name. Leave out reply and forward headers, quoted earlier messages, signature details after the name (title, company, address, phone, email, web), legal and device footers, and banners. Copy each paragraph exactly from the body, in body order. Never reword, join or reorder text.
+List the paragraphs of the body that the sender wrote: the message, inline answers, postscripts, the sign-off and the sender's name. Leave out reply and forward headers, quoted earlier messages, signature details after the name (title, company, address, phone, email, web), legal and device footers, and banners. Copy each paragraph exactly from the body, in body order. When the body is one long line, return each paragraph the sender meant as its own item. Never reword, join or reorder text.
 Return {"authored":["...","..."]}, or {"authored":[]} when the sender wrote nothing new.`,
 } satisfies Record<JudgmentClaim["kind"], string>;
 
