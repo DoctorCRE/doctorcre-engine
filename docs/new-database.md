@@ -1075,6 +1075,8 @@ When a role moves to a different party and arrives as a lead, the board, drawer 
 
 The score and old prospect engagement fields are empty. Timing events and research findings are empty lists. The legacy Undo control is absent.
 
+Each board lead carries `market`, the `id` and `name` of the one market whose name matches its city, ignoring case and surrounding spaces, or null when its city matches no market or more than one. This is the city half of the market rule; matching by county waits until a lead has a county (#1370). `market_counts` lists every market by name with its `id` and the `count` of board leads placed in it, zero included.
+
 The drawer's `plans` text omits old research tags. The read keeps the original note in `notes`, with old record codes named as on the deal page.
 
 `GET /api/engine/quiet-follow-ups` reads the new lead and active vendor roles and their current owners. It counts from the most recent linked email, call or meeting, or from the date the role was added when there is no recorded contact. Dates use the Central calendar day. A copied standalone lead follow-up date overrides the cadence until the step has a recorded update. An open step on the record or its linked client keeps the record off Quiet, including an edited copied step or a held or future step. Copied lead IDs and references still resolve to the same drawer. A lead without an owner stays unclaimed.

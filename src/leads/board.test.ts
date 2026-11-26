@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import { sql } from "kysely";
+import { nextTransaction } from "../next-connection.ts";
 import type { Reader } from "../reader.ts";
+import { copyTest } from "../test-copy.ts";
 import { withRollback } from "../test-rollback.ts";
-import { readLeadBoard } from "./board.ts";
+import { readLeadBoard, readNextLeadBoard } from "./board.ts";
 
 // Every seeded name is made up.
 async function seed(tx: Reader) {
@@ -712,3 +714,62 @@ test("bad timing on any lead, then the first lead past 500 findings or activitie
 			error: "invalid_lead_opportunity_timing",
 		});
 	}));
+
+describe("the new Leads read places a lead in a market by its city", () => {
+	const copy = copyTest();
+	const read = async () => {
+		const answer = await nextTransaction(copy.connectionString, "read", (tx) =>
+			readNextLeadBoard(tx),
+		);
+		assert.ok(!("error" in answer));
+		return answer;
+	};
+	const marketOf = async (party: number) =>
+		(await read()).leads.find((l) => l.party_id === uuid(party))?.market;
+	const bay = { id: uuid(901), name: "Example Bay" };
+
+	// Every market, city and lead name is made up.
+	before(async () => {
+		await copy.setup();
+		await copy.db.query(`begin; select set_config('engine.job', 'old_system', true);
+			insert into how_found (slug, label) values ('referral', 'Referral');
+			insert into role (slug, label) values ('lead', 'Lead');
+			insert into stage (role, slug, label) values ('lead', 'new', 'New');
+			insert into market (id, name) values ('${uuid(901)}', 'Example Bay'),
+				('${uuid(902)}', 'Twin Falls Example'), ('${uuid(903)}', 'TWIN FALLS EXAMPLE'),
+				('${uuid(904)}', 'Empty Harbor Example');
+			insert into party (id, kind, name, city, how_found) values
+				('${uuid(911)}', 'person', 'Example City Match', 'Example Bay', 'referral'),
+				('${uuid(912)}', 'person', 'Example Case Match', 'example bay', 'referral'),
+				('${uuid(913)}', 'person', 'Example Ambiguous', 'Twin Falls Example', 'referral'),
+				('${uuid(914)}', 'person', 'Example Outside', 'Nowhere Example', 'referral'),
+				('${uuid(915)}', 'person', 'Example No City', null, 'referral');
+			insert into party_role (party_id, role, stage)
+				select id, 'lead', 'new' from party where name like 'Example %';
+			commit;`);
+	});
+	after(copy.cleanup);
+
+	test("a city naming one market places the lead there and counts it", async () => {
+		assert.deepEqual(await marketOf(911), bay);
+		assert.deepEqual(await marketOf(912), bay);
+		assert.deepEqual(
+			(await read()).market_counts.toSorted((a, b) => a.id.localeCompare(b.id)),
+			[
+				{ ...bay, count: 2 },
+				{ id: uuid(902), name: "Twin Falls Example", count: 0 },
+				{ id: uuid(903), name: "TWIN FALLS EXAMPLE", count: 0 },
+				{ id: uuid(904), name: "Empty Harbor Example", count: 0 },
+			],
+		);
+	});
+
+	test("a city naming more than one market places the lead nowhere", async () => {
+		assert.equal(await marketOf(913), null);
+	});
+
+	test("a lead outside every market, or without a city, has no market", async () => {
+		assert.equal(await marketOf(914), null);
+		assert.equal(await marketOf(915), null);
+	});
+});

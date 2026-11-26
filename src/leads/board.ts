@@ -37,7 +37,9 @@ type WorkspaceLead = {
 	event_confidence: string | null;
 	next_action_date: string | null;
 	opportunity_timing: OpportunityTiming;
+	market?: Market | null;
 };
+type Market = { id: string; name: string };
 type Hold = { reason: "contact_ineligible" | "unsupported_stage" };
 
 const CONTACTABLE_STATES = new Set(["active", "nurture"]);
@@ -205,6 +207,12 @@ export async function readLeadBoard(db: Reader) {
 	return leadBoard(await leadsInBoardOrder(db));
 }
 
+// The city half of the deal copy's market rule; county matching waits for a lead county (#1370).
+// A city that names no market, or more than one, places the lead nowhere.
+const marketByCity = sql`select case when count(*) = 1
+	then jsonb_build_object('id', min(m.id::text), 'name', min(m.name)) end
+	from market m where lower(btrim(m.name)) = lower(p.city)`;
+
 export async function readNextLeadBoard(db: Transaction<NextDB>) {
 	const { rows } = await sql<Row>`
 		with board as (
@@ -214,7 +222,8 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 				(select company.name from party_company pc join party company on company.id = pc.company_id
 					where pc.person_id = p.id and pc.ended_on is null
 					order by pc.started_on desc nulls last, company.id limit 1) as practice_name,
-				p.city, (select s.label from party_specialty ps join specialty s on s.slug = ps.specialty
+				p.city, (${marketByCity}) as market,
+				(select s.label from party_specialty ps join specialty s on s.slug = ps.specialty
 					where ps.person_id = p.id order by s.slug limit 1) as specialty,
 				r.created_at, r.changed_at as updated_at,
 				case when r.stage = 'nurture' then 'nurture_drip' else r.stage end as stage,
@@ -279,7 +288,22 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 						and a.happened_at <= now()
 					order by a.happened_at desc, a.id limit ${EVIDENCE_LIMIT + 1}) a), '[]')) as contact
 		from board b order by b.stage_sort, b.name, b.id`.execute(db);
-	return leadBoard(rows);
+	const board = await leadBoard(rows);
+	if (board.error) return { error: board.error } as const;
+	const markets = await db
+		.selectFrom("market")
+		.select(["id", "name"])
+		.orderBy("name")
+		.orderBy("id")
+		.execute();
+	const counts = Map.groupBy(board.leads, (lead) => lead.market?.id);
+	return {
+		...board,
+		market_counts: markets.map((market) => ({
+			...market,
+			count: counts.get(market.id)?.length ?? 0,
+		})),
+	};
 }
 
 async function leadBoard(rows: Row[]) {
