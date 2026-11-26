@@ -8,29 +8,19 @@ import { asText } from "../reader.ts";
 import { fit, isChangeId, isText, isUuid } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
 import { latestChange } from "../seen-change.ts";
+import { todosOf } from "./checklist.ts";
 
-// Fixed workflow order and plain labels for lease typical lengths; move_in sits on its own date.
-// biome-ignore format: one row per to-do reads as a table.
-const LEASE_TODOS: readonly (readonly [todo: string, phase: string, label: string])[] = [
-	["before_research", "pending", "Before Research begins"],
-	["representation", "research", "Representation agreement"],
-	["requirements", "research", "Intake and requirements"],
-	["market_survey", "site_selection", "Market survey"],
-	["tour_notes", "site_selection", "Tours and tour notes"],
-	["loi_submission", "negotiation", "LOIs sent"],
-	["loi_grid", "negotiation", "Terms comparison"],
-	["business_terms", "negotiation", "Agreed business terms"],
-	["contract_draft", "legal", "Lease draft to attorney"],
-	["attorney_comments", "legal", "Attorney comments"],
-	["legal_review", "legal", "Healthcare lease review"],
-	["ti_scope", "legal", "TI scope and bids"],
-	["executed_lease", "closing", "Executed lease"],
-	["commencement_letter", "closing", "Commencement letter"],
-	["executed_comp", "closing", "Executed comp"],
-	["expiration_recorded", "closing", "Lease end recorded"],
-	["check_in_90_day", "closing", "90-day check-in"],
-	["invoice_recorded", "closed", "Invoice"],
-	["commission_received", "closed", "Commission received"],
+// Lease to-dos come from the checklist; move_in sits on its own date, and a deal's phase before
+// Research has no checklist row, so it leads the list. The checklist's Invoice phase is the Closed phase.
+const LEASE_TODOS = [
+	{
+		todo: "before_research",
+		phase: "pending",
+		label: "Before Research begins",
+	},
+	...todosOf("lease")
+		.filter(({ todo }) => todo !== "move_in")
+		.map((t) => ({ ...t, phase: t.phase === "invoice" ? "closed" : t.phase })),
 ];
 const TODOS_BY_KIND = new Map([["lease", LEASE_TODOS]]);
 const MIN_MEASURED = 5;
@@ -56,6 +46,7 @@ type Measured = {
 
 async function readMeasured(db: Transaction<DB>, dealKind: string) {
 	// Only to-dos whose own start and finish days are recorded contribute positive examples.
+	// Executed lease is unmeasured: Closing begins at signing, so the design gives it no start day.
 	const { rows } = await sql<Measured>`
 		with spans as (
 			select p.deal_id, p.phase,
@@ -68,10 +59,6 @@ async function readMeasured(db: Transaction<DB>, dealKind: string) {
 		samples as (
 			select 'before_research' as todo, (to_on - from_on) as days from spans
 			where phase = 'pending' and from_on is not null and to_on > from_on
-			union all
-			select 'executed_lease', (l.executed_on - s.from_on) from deal d join current_lease l on l.deal_id = d.id
-			join lateral (select max(from_on) as from_on from spans where deal_id = d.id and phase = 'closing' and from_on <= l.executed_on) s on s.from_on is not null
-			where d.kind = ${dealKind} and l.executed_on > s.from_on
 			union all
 			select 'invoice_recorded', (i.invoiced_on - s.from_on) from deal d join deal_invoiced i on i.deal_id = d.id
 			join lateral (select max(from_on) as from_on from spans where deal_id = d.id and phase = 'closed' and from_on <= i.invoiced_on) s on s.from_on is not null
@@ -110,7 +97,7 @@ async function readTypicalLengths(db: Transaction<DB>, dealKind: string) {
 		readMeasured(db, dealKind),
 	]);
 	const meta = new Map(
-		(TODOS_BY_KIND.get(dealKind) ?? []).map(([todo, phase, label], order) => [
+		(TODOS_BY_KIND.get(dealKind) ?? []).map(({ todo, phase, label }, order) => [
 			todo,
 			{ phase, label, order },
 		]),
@@ -163,7 +150,7 @@ async function saveTypicalLength(
 		tx,
 	);
 	const known =
-		TODOS_BY_KIND.get(deal_kind)?.some(([slug]) => slug === todo) ?? false;
+		TODOS_BY_KIND.get(deal_kind)?.some((t) => t.todo === todo) ?? false;
 	if (!known) {
 		const existing = await tx
 			.selectFrom("typical_length")
