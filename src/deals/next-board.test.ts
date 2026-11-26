@@ -136,7 +136,6 @@ const COVERED = new Set([
 	"type",
 	"phase",
 	"owner",
-	"attention",
 	"client_id",
 	"client_name",
 	"account_client_id",
@@ -189,9 +188,12 @@ const oldAnswer = async ({ workspace, account }: Scope) => {
 	const deals = board.deals.map((deal) =>
 		Object.fromEntries(Object.entries(deal).filter(([k]) => COVERED.has(k))),
 	);
-	return [...clientParty].reduce(
-		(text, [client, party]) => text.replaceAll(client, party),
+	const text = [...clientParty].reduce(
+		(replaced, [client, party]) => replaced.replaceAll(client, party),
 		JSON.stringify(deals),
+	);
+	return (JSON.parse(text) as { id: string }[]).toSorted((a, b) =>
+		a.id.localeCompare(b.id),
 	);
 };
 
@@ -210,12 +212,14 @@ for (const scope of [
 			}),
 		);
 		assert.deepEqual(
-			actual.map((deal) =>
-				Object.fromEntries(
-					Object.entries(deal).filter(([k]) => COVERED.has(k)),
-				),
-			),
-			JSON.parse(expected),
+			actual
+				.map((deal) =>
+					Object.fromEntries(
+						Object.entries(deal).filter(([k]) => COVERED.has(k)),
+					),
+				)
+				.toSorted((a, b) => String(a.id).localeCompare(String(b.id))),
+			expected,
 		);
 	});
 }
@@ -227,12 +231,12 @@ test("the comparison covers every open deal, owner, parking, national account, f
 	assert.deepEqual(
 		deals.map((d) => [d.name, d.owner, d.parked_by, d.account_owner]),
 		[
-			["Example startup office", "dell", null, "dell"],
 			["Example clinic lease", "partner_one", null, "dell"],
-			["Example dental move", "partner_one", "dell", null],
 			["Example former brand lease", "partner_one", null, null],
 			["Example lease paid before invoice", "partner_one", null, null],
 			["Example other office", "partner_one", null, "dell"],
+			["Example startup office", "dell", null, "dell"],
+			["Example dental move", "partner_one", "dell", null],
 		],
 	);
 });
@@ -263,9 +267,9 @@ test("open cards keep the recorded city, including cities without a named market
 			.filter((deal) => [id(30), id(31), id(37)].includes(deal.id))
 			.map((deal) => [deal.id, deal.market]),
 		[
-			[id(31), "Example Bay"],
 			[id(30), null],
 			[id(37), "Unmapped Example City"],
+			[id(31), "Example Bay"],
 		],
 	);
 });

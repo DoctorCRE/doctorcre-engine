@@ -12,6 +12,7 @@ import {
 	readOldRecordNames,
 } from "../old-record-names.ts";
 import { asText } from "../reader.ts";
+import { dealAttention } from "./attention.ts";
 import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
 import { automaticPhaseReceipt, phaseReceiptFields } from "./phase-receipt.ts";
@@ -164,7 +165,7 @@ export const selectNextDeals = (
 					"type",
 				),
 				"owner.slug as owner",
-				"d.needs_attention as attention",
+				dealAttention.as("attention"),
 				"c.party_id as client_id",
 				"cp.name as client_name",
 				"a.account_client_id",
@@ -340,7 +341,7 @@ export function nextBoardQuery(
 		.$if(list === "open", (q) =>
 			q
 				.where(isOpenBoardDeal)
-				.orderBy("attention", "desc")
+				.orderBy(sql`attention is not null`, "desc")
 				.orderBy("next_date", (o) => o.asc().nullsLast()),
 		)
 		.$if(list === "closed", (q) =>
@@ -463,7 +464,7 @@ export async function readNextBoard(
 				and source = 'old_system_ref' and value like 'C-%' having count(*) = 1) as account_client_ref,
 			count(b.id) filter (where b.operating_state = 'active')::int as open_deals,
 			count(b.id) filter (where b.operating_state = 'parked')::int as parked_deals,
-			count(b.id) filter (where b.operating_state = 'active' and b.attention)::int as attention_deals,
+			count(b.id) filter (where b.operating_state = 'active' and b.attention is not null)::int as attention_deals,
 			count(b.id) filter (where b.operating_state = 'active' and exists (
 				select from next_step s where s.deal_id = b.id and s.status = 'open'
 				and s.item_title is null and s.due_on < days.today

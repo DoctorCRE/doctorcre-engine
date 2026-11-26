@@ -200,7 +200,7 @@ async function oldPage(deal: string) {
 	);
 	assert.ok(!("error" in page) && "next_step" in page, "an open deal");
 	return {
-		header: [page.name, page.type, page.phase, page.owner, page.attention],
+		header: [page.name, page.type, page.phase, page.owner],
 		client: page.client_name,
 		next_step: [page.next_step, page.next_date],
 		steps: page.next_actions.map((s) => [
@@ -226,7 +226,7 @@ async function newPage(deal: string) {
 	);
 	assert.ok(!("error" in page));
 	return {
-		header: [page.name, page.type, page.phase, page.owner, page.attention],
+		header: [page.name, page.type, page.phase, page.owner],
 		client: page.client_name,
 		next_step: [page.next_step, page.next_date],
 		steps: page.next_actions
@@ -511,16 +511,24 @@ for (const schema of [undefined, "next"]) {
 		assert.equal(board.accounts.length, 1);
 		assert.equal(board.deals.length, schema ? 5 : 6);
 		if (schema) {
+			// A reason sorts ahead of a dated step. The two step-less deals share
+			// that reason; the parked deal has none.
 			assert.deepEqual(
 				board.deals.map((deal) => deal.id),
-				[id(32), id(30), id(35), id(36), id(37)],
+				[id(35), id(36), id(32), id(30), id(37)],
 			);
-			assert.deepEqual(board.deals[0].last_step, {
-				kind: "completed_action",
-				summary: "Example confirm terms",
-				occurred_at: "2025-02-04T18:00:00+00:00",
-			});
-			assert.equal(board.deals[1].open_actions.length, 1);
+			assert.deepEqual(
+				board.deals.find((deal) => deal.id === id(32))?.last_step,
+				{
+					kind: "completed_action",
+					summary: "Example confirm terms",
+					occurred_at: "2025-02-04T18:00:00+00:00",
+				},
+			);
+			assert.equal(
+				board.deals.find((deal) => deal.id === id(30))?.open_actions.length,
+				1,
+			);
 		}
 	});
 

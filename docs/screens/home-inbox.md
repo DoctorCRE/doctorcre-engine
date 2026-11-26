@@ -53,7 +53,7 @@ What the assistant could not settle alone. The goal is zero.
 - [ ] The title row reads **Deals** with **Board** on the right, and **Board** opens the Deals board.
 - [ ] One counts line under it reads "38 open · 4 parked · 6 national · 9 prospects". A count of zero is left out. The counts add up to the Monday review total, and the line opens the Deals board.
 - [ ] The seven phases follow, each with its count of open deals, in board column order. A phase opens the board at that column.
-- [ ] **Needs attention** lists by name the deals that carry the board's Needs attention badge, with its reason, such as "Step 3 days late" or "Flagged". Each name opens the deal page.
+- [ ] **Needs attention** lists by name the deals that carry the board's Needs attention badge, with the reason that badge shows, such as "A next step is late." Each name opens the deal page. See [Deal attention](../new-database.md#deal-attention).
 - [ ] "7 have no next step" counts the open deals whose list row says "No next step set" and opens that list on Missing next step. An undated step still counts as a step, and so does a client step the row shows.
 - [ ] **Monday review** shows this week's progress, "31 of 47", and opens the review. When a deal closed or was lost or a prospect was dropped this week, it adds "includes 1 closed or lost and 2 dropped this week" so the total still holds.
 - [ ] Every number matches what the Deals board, Deals list and Monday review show at the same moment. See [Deals](deals.md).
