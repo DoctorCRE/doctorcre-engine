@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { after, before, test } from "node:test";
-import { setTimeout } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 import { Hono } from "hono";
 import pg from "pg";
@@ -285,8 +284,23 @@ test("Doc-Link-Work claims a split only together with judgment", async () => {
 	);
 });
 
-test("two mailboxes enqueue one split when they run together", async () => {
-	const activity = await email(31, "Shared inbox.", [JOE, DELL]);
+test("a second direct insert of an email_split for one email is refused", async () => {
+	const activity = await email(31, "One email.", [JOE, DELL]);
+	const insert = (owner: string, key: number) =>
+		db.query(
+			`insert into doc_judgment_job (owner_user_id, activity_id, idempotency_key, kind)
+			values ($1, $2, $3, 'email_split')`,
+			[owner, activity, id(key)],
+		);
+	await insert(JOE, 310);
+	await assert.rejects(insert(DELL, 311), {
+		code: "23505",
+		constraint: "doc_judgment_job_one_split",
+	});
+});
+
+test("queue_email_split from Joe and then Dell leaves one split", async () => {
+	const activity = await email(32, "Shared inbox.", [JOE, DELL]);
 	const open = async (user: string) => {
 		const client = new pg.Client({
 			connectionString,
@@ -304,28 +318,28 @@ test("two mailboxes enqueue one split when they run together", async () => {
 	const dell = await open(DELL);
 	try {
 		await joe.query("select queue_email_split($1)", [activity]);
-		const pid = (
-			await dell.query<{ pid: number }>("select pg_backend_pid() as pid")
-		).rows[0]?.pid;
-		let settled = false;
-		const second = dell
-			.query("select queue_email_split($1)", [activity])
-			.finally(() => {
-				settled = true;
-			});
-		const started = Date.now();
-		while (!settled && Date.now() - started < 5000) {
-			const { rows } = await db.query<{ wait_event_type: string | null }>(
-				"select wait_event_type from pg_stat_activity where pid = $1",
-				[pid],
+		// Dell runs before Joe commits, so only the unique index stops a second insert.
+		await dell.query("set local lock_timeout = '1ms'");
+		let blocked = false;
+		try {
+			await dell.query("select queue_email_split($1)", [activity]);
+		} catch (error) {
+			assert.equal(
+				error instanceof Error && "code" in error ? error.code : undefined,
+				"55P03",
 			);
-			if (rows[0]?.wait_event_type === "Lock") break;
-			await setTimeout(20);
+			blocked = true;
 		}
-		if (!settled && Date.now() - started >= 5000)
-			throw new Error("second enqueue did not finish or wait");
 		await joe.query("commit");
-		await second;
+		if (blocked) {
+			await dell.query("rollback");
+			await dell.query("begin");
+			await dell.query(
+				"select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', $1, true)",
+				[DELL],
+			);
+			await dell.query("select queue_email_split($1)", [activity]);
+		}
 		await dell.query("commit");
 		assert.equal(
 			(
