@@ -83,6 +83,7 @@ insert into job values
 	('review_close', 'Review close'), ('lead_stage', 'Lead stages'), ('candidate_sweep', 'Candidate sweeps'), ('agent', 'Agent'), ('old_system', 'Old system');
 
 insert into job values ('nightly_checklist', 'Nightly checklist reminders');
+insert into job values ('attention_alerts', 'Deal attention alerts');
 insert into job values ('workflow_suggestions', 'Workflow suggestions');
 
 -- The engine names who acts once per transaction: set_config('engine.user_id', <id>, true) for a user, and
@@ -1663,6 +1664,14 @@ create table home_update (
 	constraint home_update_property_kind check (property_id is null or kind = 'tour_feedback'),
 	unique (user_id, deal_id, checklist_item_ref, due_on),
 	unique (id, user_id)
+);
+
+-- Current alerted attention reason per open deal; cleared when attention clears so a returning reason alerts again.
+create table deal_attention_alert (
+	deal_id uuid primary key references deal on delete cascade,
+	reason text not null check (reason ~ '\S'),
+	owner_user_id uuid not null references app_user,
+	alerted_at timestamptz not null default now()
 );
 
 -- A step is marked through just one key, even when a call produced it.
@@ -4180,7 +4189,7 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county, market_city,
 	territory, territory_piece, party_territory, party_territory_review, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link, weekly_review, deal_star to engine;
+	activity_about, email, next_step, home_mark, deal_attention_alert, social_account, idea, design_template, introduction, party_link, weekly_review, deal_star to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
@@ -4207,6 +4216,7 @@ grant update (what, owner_party_id, due_on, hold_until, item_bullets, done_at, r
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, drop_reason, waiting_on_party_id, waiting_reason) on home_mark to engine;
 grant update (read_at) on home_update to engine;
+grant update (reason, owner_user_id, alerted_at) on deal_attention_alert to engine;
 -- Only the owner's import supplies the old event that closed a step.
 revoke insert on next_step from engine;
 grant insert (id, created_at, what, owner_party_id, due_on, hold_until, item_title, item_bullets, source_ref,

@@ -22,6 +22,7 @@ import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
+import { attentionAlertJobs } from "./deals/attention-alerts.ts";
 import { callContextJobs, dealCallContext } from "./deals/call-context.ts";
 import { dealCallOutcomes } from "./deals/call-outcomes.ts";
 import { clientLeases } from "./deals/client-leases.ts";
@@ -255,6 +256,7 @@ app.use(
 app.route("/jobs", cadence);
 app.route("/jobs", nextDeals);
 app.route("/jobs", notificationReads);
+app.route("/jobs", attentionAlertJobs);
 app.route("/jobs", workflowSuggestions);
 app.route("/jobs", dealJobs);
 app.route("/jobs", callContextJobs);
