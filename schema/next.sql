@@ -84,6 +84,7 @@ insert into job values
 
 insert into job values ('nightly_checklist', 'Nightly checklist reminders');
 insert into job values ('attention_alerts', 'Deal attention alerts');
+insert into job values ('workflow_suggestions', 'Workflow suggestions');
 
 -- The engine names who acts once per transaction: set_config('engine.user_id', <id>, true) for a user, and
 -- set_config('engine.job', <slug>, true) for a job, with engine.user_id then the user it works for, if any.
@@ -1719,7 +1720,7 @@ create trigger home_mark_dropped_final before update or delete on home_mark
 create table proposal (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
-	kind text not null check (kind in ('next_step', 'next_step_done', 'phase_move', 'new_lead', 'lead_stage_move', 'file_to_deal', 'possible_new_deal', 'email_lead', 'log_call')),
+	kind text not null check (kind in ('next_step', 'next_step_done', 'phase_move', 'new_lead', 'lead_stage_move', 'file_to_deal', 'possible_new_deal', 'email_lead', 'log_call', 'workflow_step')),
 	activity_id uuid,
 	activity_kind text constraint proposal_activity_kind_check
 		check (activity_kind in ('email', 'call', 'meeting') or (activity_kind = 'note' and kind = 'next_step_done')),
@@ -1763,8 +1764,9 @@ create table proposal (
 	foreign key (activity_id, call_deal_id) references activity_about (activity_id, deal_id) deferrable initially deferred,
 	foreign key (lead_role, from_stage) references stage (role, slug),
 	foreign key (lead_role, to_stage) references stage (role, slug),
-	constraint proposal_source check (case when kind = 'email_lead' then
-		candidate_id is not null and activity_id is null and activity_kind is null
+	constraint proposal_source check (case
+		when kind = 'email_lead' then candidate_id is not null and activity_id is null and activity_kind is null
+		when kind = 'workflow_step' then candidate_id is null and activity_id is null and activity_kind is null
 		else candidate_id is null and activity_id is not null and activity_kind is not null end),
 	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id, candidate_id) = case when kind = 'possible_new_deal' then 0 else 1 end),
 	filed_deal_id uuid references deal,
@@ -1797,6 +1799,8 @@ create table proposal (
 			and (kind <> 'file_to_deal' or deal_id is not null)
 			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		or (kind = 'workflow_step' and deal_id is not null and what is not null
+			and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'log_call' and activity_kind = 'call' and property_id is null and what is not null
 			and num_nonnulls(owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'next_step_done' and deal_id is not null and activity_kind in ('note', 'call', 'meeting')
@@ -1814,6 +1818,9 @@ create table proposal (
 create unique index proposal_source_payload_once on proposal
 	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found, phase_stated, phase_on, next_step_id)
 	nulls not distinct where activity_id is not null;
+
+create unique index proposal_one_pending_workflow_step on proposal (deal_id)
+	where kind = 'workflow_step' and status = 'pending';
 
 create function deal_filing_reason(email_id uuid, selected_deal_id uuid) returns text
 language sql as $$
@@ -1852,6 +1859,10 @@ begin
 		)) then
 			raise exception 'mail capture proposes an unreviewed candidate for its mailbox owner'
 				using errcode = 'check_violation', constraint = 'email_lead_proposal_source';
+		end if;
+		if new.kind = 'workflow_step' and acting_job <> 'workflow_suggestions' then
+			raise exception 'the workflow suggestions job proposes the next checklist step'
+				using errcode = 'check_violation', constraint = 'workflow_step_proposal_source';
 		end if;
 		if new.kind = 'next_step_done' then
 			perform from deal where id = new.deal_id for no key update;
@@ -1938,7 +1949,7 @@ begin
 				else summary || E'\n\n' || new.what end
 			where id = new.activity_id;
 		end if;
-	when 'next_step' then
+	when 'next_step', 'workflow_step' then
 		new.merged_step_id := nullif(current_setting('engine.proposal_merged_step', true), '')::uuid;
 		if new.merged_step_id is not null then return new; end if;
 		-- The decision can override the step owner without changing the suggestion.

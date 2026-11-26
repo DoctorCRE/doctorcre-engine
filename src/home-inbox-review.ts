@@ -178,6 +178,7 @@ export const visibleSuggestion = (
 	userId: string | Expression<string>,
 ) => sql<boolean>`
 	case
+		when p.kind = 'workflow_step' then false
 		when p.kind in ('file_to_deal', 'possible_new_deal') and p.status = 'pending' and exists (
 			select from email sent join party_email pe on pe.address = sent.sender
 			join app_user u on u.id = pe.party_id and u.is_account_partner

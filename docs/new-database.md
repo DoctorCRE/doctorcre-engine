@@ -890,6 +890,20 @@ Clear lead mail is an intake save. See [Leads from email](#leads-from-email) for
 
 Only dated next-step proposals can record `due_source` as `stated` or `defaulted`.
 
+### Checklist suggestions
+
+An open deal with no ordinary open step and no pending next-step suggestion gets one checklist suggestion from the workflow suggestions job. The door is `POST /jobs/deals/workflow-suggestions` with `idempotency_key`. The answer is `{ proposed, already_proposed }`. The same key replays that answer. Another job is `403 unknown_job`.
+
+The proposal kind is `workflow_step`. It names the deal and the checklist to-do, with no activity and no owner. One pending row is allowed per deal. Evidence is `From the checklist · {label} is next in {phase}`, using the checklist's own label and phase name. The due date is today in Central time plus that to-do's typical length for the deal's kind, when a length is stored, and empty otherwise.
+
+An ordinary open step is a next step with no checklist title. A checklist item step does not count. A pending next-step or checklist suggestion blocks another one. A filing, call log, or phase suggestion does not. Prospective Client and Due Diligence have no to-dos, so the job proposes nothing there, and it proposes nothing when the current phase's to-dos are finished. A parked, closed, invoiced, or lost deal is not an open deal. A later run counts a deal that already has a pending checklist suggestion and adds nothing. A to-do stays settled once a partner accepts or dismisses its suggestion: the checklist keeps no per-deal done state for most to-dos, so the job skips any to-do an earlier checklist suggestion on that deal named, whatever its decision, and proposes the next one or nothing.
+
+Accept and Dismiss are the same decision as any other suggestion. Accept saves that wording and date as the clicking partner's step, or as the owner named in an edit. The suggestion is not that step. It stays off Home until a partner accepts it. The deal read returns pending rows as `workflow_suggestions`, each with `proposal_id`, `what`, `evidence` and `due_on`.
+
+The to-do is the first unfinished, unsettled one in the current phase of the [checklist under the phases](#checklist-under-the-phases). The job and the deal read use the same checklist deal type and lease read, so before any suggestion is decided it is also the to-do the [deal plan](#deal-plan) places first.
+
+The Studio calls the door once a day from carr-system's nightly run (`bin/nightly.sh` and a `tools/` script), the run that carried the [checklist reminders](#deal-watches-and-nightly-checklist-reminders). That call sits behind its own switch, which stays off until `schema/add-workflow-suggestions.sql` is applied.
+
 Acceptance saves the next step, phase history row, lead role or applied stage-evidence row in the same transaction. A failure leaves the proposal pending. New next steps and applied stage evidence use the proposal's id. An accepted proposal that joins an open step records its id in `merged_step_id`. Phase moves check the expected current phase while holding the deal, and stage moves use the existing conditional lead update. A new lead requires an existing party, starts New and supplies how found if the party lacks it. Dismissal creates nothing. Corrections are new proposals.
 
 The owner added the "log a call" suggestion kind on 2026-11-18. A `log_call` suggestion keeps a summary and cites the recorded call about its deal or party. For a shared copied call, acceptance saves a note on that target with the proposal's id, the cited call's time and the suggested summary. For any other call, acceptance keeps the text in the call's summary without filing a note. The cited call remains the only call activity (decision 151).
