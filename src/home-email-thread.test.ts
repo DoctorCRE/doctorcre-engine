@@ -120,7 +120,10 @@ function availableText(messages: Parameters<typeof cleanEmailThread>[0]) {
 }
 
 function oneLine(text: string) {
-	return text.trim().replace(/\s+/g, " ");
+	return text
+		.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+		.trim()
+		.replace(/\s+/g, " ");
 }
 
 test("keeps authored calendar fields and instructions", () => {
@@ -571,7 +574,7 @@ test("cleans a stored authored part like an unsplit body and folds stored histor
 	});
 	const signature = "Best regards,\nDana Example\nAgent\nDirect: 555-010-3000";
 	const partner =
-		"Best regards, Dana  JORDAN 'DANA' EXAMPLE Agent | Example Panhandle REALTY";
+		"Best regards, Dana  JORDAN 'DANA' EXAMPLE Agent | Example Region GROUP";
 	const contact =
 		"Dana Q. Example 555-010-3434 Telephone 555-010-6121 Fax dana@example.test";
 	const teamsInvite = [
@@ -639,22 +642,83 @@ test("a sign-off folds only a known title or contact details after the name, nev
 });
 
 test("a sign-off stands for the name of a signature the sender is stored under only in part", () => {
-	const rob = (body: string) => ({
+	const alex = (body: string) => ({
 		body,
-		sender: "rob@example.test",
-		sender_name: "Rob",
+		sender: "alex@example.test",
+		sender_name: "Alex",
 	});
 	for (const signature of [
-		"Thanks,\nRobert C. Jackson\n(555) 010-2000\nFax (555) 010-2001",
-		"Thanks\nRobert Jackson\nAgent\nDirect: 555-010-2000",
+		"Thanks,\nAlexander C. Example\n(555) 010-2000\nFax (555) 010-2001",
+		"Thanks\nAlexander Example\nAgent\nDirect: 555-010-2000",
 	]) {
 		assert.deepEqual(
-			cleanEmailThread([rob(`Plan attached.\n\n${signature}`)]),
+			cleanEmailThread([alex(`Plan attached.\n\n${signature}`)]),
 			[{ body: "Plan attached.", folded: signature }],
 		);
 	}
 	const sentence = "Plan attached.\nThanks,\nCall Me Soon\nPlease use the door";
-	assert.deepEqual(cleanEmailThread([rob(sentence)]), [
+	assert.deepEqual(cleanEmailThread([alex(sentence)]), [
 		{ body: sentence, folded: null },
 	]);
+});
+
+test("folds Outlook signatures padded with zero-width spaces under a longer or quoted name", () => {
+	const pad = "\u200b\u200c\u200d\u2060\ufeff";
+	const alex = (body: string) => ({
+		body,
+		sender: "alex@example.test",
+		sender_name: "Alex Example",
+	});
+	const sam = (body: string) => ({
+		body,
+		sender: "sam@example.test",
+		sender_name: "Sam Example",
+	});
+	const alexSignature =
+		"Alexander C. Example 555-010-3434 Telephone 555-010-6121 Fax alex@example.test";
+	const flatSignature =
+		"Best regards, Sam  JORDAN 'SAM' EXAMPLE Agent | Example Region GROUP 555.010.6555 sam@example.test Licensed in State A & State B";
+	const lineSignature = [
+		"JORDAN 'SAM' EXAMPLE",
+		"Agent",
+		"|",
+		"Example Region",
+		"",
+		"REALTY",
+		"555.010.6555",
+		"sam@example.test",
+		"Licensed in State A & State B",
+	].join("\n");
+	assert.deepEqual(
+		cleanEmailThread([
+			alex(`Thanks. Just let me know. ${pad} ${alexSignature}`),
+			sam(
+				`We can help with that. ${flatSignature.replace("Sam ", `Sam ${pad}`)}`,
+			),
+			sam(
+				`Sam\n\nBtw - Please let us know if you need anything.\n${pad}\n${lineSignature}`,
+			),
+		]),
+		[
+			{ body: "Thanks. Just let me know.", folded: alexSignature },
+			{ body: "We can help with that.", folded: flatSignature },
+			{
+				body: "Sam\n\nBtw - Please let us know if you need anything.",
+				folded: lineSignature,
+			},
+		],
+	);
+});
+
+test("a capitalized instruction between a name and contact lines stays in the message", () => {
+	const body = [
+		"Sam",
+		"Call Landlord Tomorrow",
+		"555.010.6555",
+		"sam@example.test",
+	].join("\n");
+	const [entry] = cleanEmailThread([
+		{ body, sender: "sam@example.test", sender_name: "Sam Example" },
+	]);
+	assert.match(entry?.body ?? "", /Call Landlord Tomorrow/);
 });
