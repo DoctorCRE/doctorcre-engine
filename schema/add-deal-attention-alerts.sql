@@ -9,22 +9,19 @@ on conflict (slug) do nothing;
 create table if not exists deal_attention_alert (
 	deal_id uuid primary key references deal on delete cascade,
 	reason text not null check (reason ~ '\S'),
-	since date not null,
 	owner_user_id uuid not null references app_user,
-	home_update_id uuid not null,
-	alerted_at timestamptz not null default now(),
-	foreign key (home_update_id, owner_user_id) references home_update (id, user_id)
+	alerted_at timestamptz not null default now()
 );
 
 grant select, insert, delete on deal_attention_alert to engine;
-grant update (reason, since, owner_user_id, home_update_id, alerted_at) on deal_attention_alert to engine;
+grant update (reason, owner_user_id, alerted_at) on deal_attention_alert to engine;
 grant select on deal_attention_alert to engine_reader;
 
 commit;
 
 -- Read back the job registration, table columns and grants. Expect one job row,
--- six columns, select/insert/delete on engine, select on engine_reader, and update
--- on the five non-key columns only.
+-- four columns, select/insert/delete on engine, select on engine_reader, and update
+-- on the three non-key columns only.
 -- select slug, label from next.job where slug = 'attention_alerts';
 -- select attname, format_type(atttypid, atttypmod), attnotnull
 -- from pg_attribute where attrelid = 'next.deal_attention_alert'::regclass

@@ -139,7 +139,7 @@ The switch-day plan used this order:
 14. If a check fails before any new save lands, pause again and return that switch to its old setting. After new saves land, fix forward and do not route back. Routing back needs the owner's yes, after listing every save made since the switch, because switches do not copy saves back.
 15. End the pause after all checks pass.
 
-The old nightly checklist reminder step is off because old checklists stopped updating when saves moved. The replacement reads and queues reminders through the engine when the Studio caller switches to it (carr-system #3271). Deal watch settings and delivery stay in CARR. `ENGINE_DEAL_WATCH_CHANGES` in the old API is off until switch day; when true, it adds engine deal changes to the watch sweep. [Deal watches and nightly checklist reminders](new-database.md#deal-watches-and-nightly-checklist-reminders).
+The old nightly checklist reminder step is off because old checklists stopped updating when saves moved. The replacement reads and queues reminders through the engine when the Studio caller switches to it (carr-system #3271). Deal attention alerts (`POST /jobs/deals/attention-alerts`) also run once a day from `carr-system`'s nightly run behind a separate Studio switch that stays off until [the deal attention alerts migration](../schema/add-deal-attention-alerts.sql) is applied. Deal watch settings and delivery stay in CARR. `ENGINE_DEAL_WATCH_CHANGES` in the old API is off until switch day; when true, it adds engine deal changes to the watch sweep. [Deal watches and nightly checklist reminders](new-database.md#deal-watches-and-nightly-checklist-reminders).
 
 ## Going back
 

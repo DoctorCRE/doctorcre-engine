@@ -247,6 +247,7 @@ test("quiet hours hold attention alerts until quiet_until across midnight and DS
 			update user_preference set time_zone = 'America/Chicago',
 				quiet_from = '${quietFrom}', quiet_until = '${quietUntil}'
 			where user_id = '${joeId}';
+			delete from home_update where deal_id = '${dealId}';
 			delete from deal_attention_alert where deal_id = '${dealId}';
 			commit;`);
 		t.mock.timers.setTime(Date.parse(nowIso));
@@ -257,14 +258,74 @@ test("quiet hours hold attention alerts until quiet_until across midnight and DS
 		const {
 			rows: [row],
 		} = await db.query<{ held_until: Date | null }>(
-			`select u.held_until from deal_attention_alert a
-				join home_update u on u.id = a.home_update_id where a.deal_id = $1`,
+			"select held_until from home_update where deal_id = $1",
 			[dealId],
 		);
 		assert.deepEqual(row, {
 			held_until: expectedHold ? new Date(expectedHold) : null,
 		});
 	}
+});
+
+test("locking acted-on deals prevents alerting a stale owner or newly parked deal", async (t) => {
+	const { db, runSql, save, joeId, dellId, sweep, today } =
+		await setupFixture(t);
+	const [ownerDeal, parkDeal] = [randomUUID(), randomUUID()];
+	await runSql(`begin;
+		select set_config('engine.user_id', '${joeId}', true);
+		insert into deal (id, name, owner_user_id) values
+			('${ownerDeal}', 'Example Reassign', '${joeId}'),
+			('${parkDeal}', 'Example Park Race', '${joeId}');
+		insert into next_step (deal_id, owner_party_id, what, due_on) values
+			('${ownerDeal}', '${joeId}', 'Late step', '${addDays(today, -1)}'),
+			('${parkDeal}', '${joeId}', 'Late step', '${addDays(today, -1)}');
+		commit;`);
+
+	await db.query("begin");
+	let sweeping: ReturnType<typeof sweep> | undefined;
+	try {
+		await db.query(`set local engine.user_id = '${joeId}'`);
+		await db.query("update deal set owner_user_id = $1 where id = $2", [
+			dellId,
+			ownerDeal,
+		]);
+		await db.query(
+			"update deal set parking_reason = 'client_paused' where id = $1",
+			[parkDeal],
+		);
+		sweeping = sweep();
+		const deadline = AbortSignal.timeout(5_000);
+		let blocked = false;
+		while (!deadline.aborted && !blocked) {
+			const { rowCount } = await db.query(
+				"select pid from pg_locks where not granted and pg_backend_pid() = any(pg_blocking_pids(pid))",
+			);
+			blocked = (rowCount ?? 0) > 0;
+		}
+		assert.equal(blocked, true, "expected sweep to wait on deal row locks");
+		await db.query("commit");
+	} catch (error) {
+		await db.query("rollback").catch(() => {});
+		await sweeping?.catch(() => {});
+		throw error;
+	}
+
+	assert.deepEqual(await sweeping, [
+		200,
+		{ alerted: 1, unchanged: 0, cleared: 0 },
+	]);
+	assert.deepEqual(await save(JOE, "updates", {}, "GET"), [
+		200,
+		{ unread_count: 0, updates: [] },
+	]);
+	const [, dellUpdates] = await save(DELL, "updates", {}, "GET");
+	assert.equal(dellUpdates.unread_count, 1);
+	assert.ok(Array.isArray(dellUpdates.updates));
+	assert.partialDeepStrictEqual(dellUpdates.updates[0], {
+		title: "A next step is late.",
+		context_label: "Example Reassign",
+		open_url: `/deals?deal=${ownerDeal}`,
+	});
 });
 
 test("a rolled-back sweep leaves nothing and the door refuses wrong jobs or bad bodies", async (t) => {
@@ -335,38 +396,33 @@ for (const migrated of [false, true]) {
 				await rules.query(migration);
 				await rules.query(migration);
 			}
-			const [joeId, dellId, dealId, updateId] = Array.from({ length: 4 }, () =>
-				randomUUID(),
+			const { rows: columns } = await rules.query<{ attname: string }>(
+				`select attname from pg_attribute
+				where attrelid = 'next.deal_attention_alert'::regclass
+					and attnum > 0 and not attisdropped
+				order by attnum`,
 			);
+			assert.deepEqual(
+				columns.map((column) => column.attname),
+				["deal_id", "reason", "owner_user_id", "alerted_at"],
+			);
+			const [joeId, dealId] = [randomUUID(), randomUUID()];
 			await rules.query(`begin; set local engine.job = 'old_system';
-				insert into party (id, kind, name) values
-					('${joeId}', 'person', 'Joe Example'), ('${dellId}', 'person', 'Dell Example');
-				insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
+				insert into party (id, kind, name) values ('${joeId}', 'person', 'Joe Example');
+				insert into app_user (id, slug) values ('${joeId}', 'joe');
 				insert into deal (id, name, owner_user_id) values ('${dealId}', 'Example Rule Deal', '${joeId}');
-				insert into home_update (id, user_id, deal_id, what)
-					values ('${updateId}', '${joeId}', '${dealId}', 'A next step is late.');
 				commit;`);
 			await rules.query("set role engine; set engine.job = 'attention_alerts'");
 			await assert.rejects(
 				rules.query(
-					`insert into deal_attention_alert (deal_id, reason, since, owner_user_id, home_update_id)
-					values ('${dealId}', '   ', '2026-01-01', '${joeId}', '${updateId}')`,
+					`insert into deal_attention_alert (deal_id, reason, owner_user_id)
+					values ('${dealId}', '   ', '${joeId}')`,
 				),
 				{ code: "23514", constraint: "deal_attention_alert_reason_check" },
 			);
-			await assert.rejects(
-				rules.query(
-					`insert into deal_attention_alert (deal_id, reason, since, owner_user_id, home_update_id)
-					values ('${dealId}', 'A next step is late.', '2026-01-01', '${dellId}', '${updateId}')`,
-				),
-				{
-					code: "23503",
-					constraint: "deal_attention_alert_home_update_id_owner_user_id_fkey",
-				},
-			);
 			await rules.query(
-				`insert into deal_attention_alert (deal_id, reason, since, owner_user_id, home_update_id)
-				values ('${dealId}', 'A next step is late.', '2026-01-01', '${joeId}', '${updateId}')`,
+				`insert into deal_attention_alert (deal_id, reason, owner_user_id)
+				values ('${dealId}', 'A next step is late.', '${joeId}')`,
 			);
 			await assert.rejects(
 				rules.query(

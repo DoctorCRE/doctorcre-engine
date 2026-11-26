@@ -1669,11 +1669,8 @@ create table home_update (
 create table deal_attention_alert (
 	deal_id uuid primary key references deal on delete cascade,
 	reason text not null check (reason ~ '\S'),
-	since date not null,
 	owner_user_id uuid not null references app_user,
-	home_update_id uuid not null,
-	alerted_at timestamptz not null default now(),
-	foreign key (home_update_id, owner_user_id) references home_update (id, user_id)
+	alerted_at timestamptz not null default now()
 );
 
 -- A step is marked through just one key, even when a call produced it.
@@ -4208,7 +4205,7 @@ grant update (what, owner_party_id, due_on, hold_until, item_bullets, done_at, r
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, drop_reason, waiting_on_party_id, waiting_reason) on home_mark to engine;
 grant update (read_at) on home_update to engine;
-grant update (reason, since, owner_user_id, home_update_id, alerted_at) on deal_attention_alert to engine;
+grant update (reason, owner_user_id, alerted_at) on deal_attention_alert to engine;
 -- Only the owner's import supplies the old event that closed a step.
 revoke insert on next_step from engine;
 grant insert (id, created_at, what, owner_party_id, due_on, hold_until, item_title, item_bullets, source_ref,
