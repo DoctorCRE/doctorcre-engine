@@ -235,7 +235,8 @@ test("a vendor's details show the ruling and owner of its vendor role, not of it
 	});
 });
 
-async function summaryQuiet(owner: string, category?: string) {
+type Counts = { count: number; quiet: number };
+async function summary(owner: string) {
 	const response = await door.request(
 		{ user: "joe" },
 		`vendors/summary?owner=${owner}`,
@@ -243,10 +244,15 @@ async function summaryQuiet(owner: string, category?: string) {
 		{ DIRECTORY_READ_SCHEMA: "next" },
 	);
 	assert.equal(response.status, 200);
-	const body = (await response.json()) as {
-		all: { quiet: number };
-		categories: { slug: string; quiet: number }[];
+	return (await response.json()) as {
+		all: Counts;
+		no_category: Counts;
+		categories: ({ slug: string } & Counts)[];
 	};
+}
+
+async function summaryQuiet(owner: string, category?: string) {
+	const body = await summary(owner);
 	return category === undefined
 		? body.all.quiet
 		: body.categories.find((c) => c.slug === category)?.quiet;
@@ -279,4 +285,29 @@ test("the vendor list narrows to the vendors Quiet follow-ups proposes", async (
 	assert.equal(((await list("quiet=true")) as { total: number }).total, 2);
 	const { query } = (await list("q=Made-up")) as { query: object };
 	assert.equal("quiet" in query, false);
+});
+
+test("the vendor list narrows to the vendors the No category tile counts", async () => {
+	const uncategorized = (await list("no_category=true")) as {
+		query: object;
+		rows: { id: string }[];
+		total: number;
+	};
+	assert.partialDeepStrictEqual(uncategorized.query, { no_category: true });
+	assert.ok(uncategorized.total > 0);
+	assert.equal(
+		uncategorized.rows.some((row) => row.id === lender),
+		false,
+	);
+	assert.ok(uncategorized.rows.some((row) => row.id === architect));
+	for (const owner of ["all", "joe", "dell"]) {
+		const { total } = (await list(`no_category=true&owner=${owner}`)) as {
+			total: number;
+		};
+		assert.equal(total, (await summary(owner)).no_category.count, owner);
+	}
+	const refused = await get("?no_category=true&category=lender");
+	assert.equal(refused.status, 400);
+	const { query } = (await list("q=Example")) as { query: object };
+	assert.equal("no_category" in query, false);
 });

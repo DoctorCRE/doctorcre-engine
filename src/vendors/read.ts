@@ -40,6 +40,7 @@ export type VendorQuery = ListQuery<
 	stage: string | null;
 	disposition: string | null;
 	quiet?: true;
+	no_category?: true;
 };
 
 // The legacy `category` column has no lookup key; `category_slug` does.
@@ -447,6 +448,7 @@ export async function readNextVendorList(
 		throw new BusinessRefusal({ error: "VIEWER_OWNER_UNKNOWN" });
 	const { category, disposition, owner, q, quiet, scope, stage, territory } =
 		query;
+	const uncategorized = query.no_category === true;
 	const term = q === null ? null : `%${q.replace(/([\\%_])/g, "\\$1")}%`;
 	const matching = liveNextVendors(db)
 		.$if(quiet === true, (qb) =>
@@ -465,6 +467,8 @@ export async function readNextVendorList(
 		and (${disposition}::text is null or ${nextDisposition} = ${disposition})
 		and (${category}::text is null or exists (select from party_role cr join role r on r.slug = cr.role
 			where cr.party_id = p.id and r.category_of = 'vendor' and cr.role = ${category}))
+		and (not ${uncategorized} or not exists (select from party_role cr join role r on r.slug = cr.role
+			where cr.party_id = p.id and r.category_of = 'vendor'))
 		and (${territory}::text is null or ${nextTerritory} = ${territory} or exists
 			(select from party_territory pt join territory t on t.id = pt.territory_id
 			where pt.party_id = p.id and (${activeTerritory}) and t.name = ${territory}))
