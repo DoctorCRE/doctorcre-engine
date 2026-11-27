@@ -28,13 +28,14 @@ before(async () => {
 			('${ask}', 'email', '2026-11-02T15:00:00Z'), ('${reply}', 'email', '2026-11-03T15:00:00Z'),
 			('${onOtherDeal}', 'email', '2026-11-04T15:00:00Z'), ('${caseyOnly}', 'email', '2026-11-05T15:00:00Z'),
 			('${call}', 'call', '2026-11-06T15:00:00Z');
-		insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body) values
+		insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body, authored, history) values
 			('${ask}', 'ask@example.test', 'Suite thread', 'rob@example.test', 'Rob Example', 'Suite plan',
-				'Can you send the plan?'),
+				'Can you send the plan?', null, null),
 			('${reply}', 'reply@example.test', 'Suite thread', 'sam@example.test', 'Sam Example', 'RE: Suite plan',
-				E'Here it is.\\n\\nOn Mon, Nov 2, 2026 at 9:00 AM Rob Example <rob@example.test> wrote:\\n> Can you send the plan?'),
-			('${onOtherDeal}', 'other@example.test', null, 'rob@example.test', 'Rob Example', 'Other', 'Other deal.'),
-			('${caseyOnly}', 'casey@example.test', null, 'rob@example.test', 'Rob Example', 'Private', 'For Casey.');
+				E'Here it is.\\n\\nOn Mon, Nov 2, 2026 at 9:00 AM Rob Example <rob@example.test> wrote:\\n> Can you send the plan?',
+				'Here it is.', E'On Mon, Nov 2, 2026 at 9:00 AM Rob Example <rob@example.test> wrote:\\n> Can you send the plan?'),
+			('${onOtherDeal}', 'other@example.test', null, 'rob@example.test', 'Rob Example', 'Other', 'Other deal.', null, null),
+			('${caseyOnly}', 'casey@example.test', null, 'rob@example.test', 'Rob Example', 'Private', 'For Casey.', null, null);
 		insert into email_mailbox (activity_id, user_id) values
 			('${ask}', '${id(1)}'), ('${reply}', '${id(1)}'), ('${ask}', '${id(2)}'), ('${reply}', '${id(2)}'),
 			('${onOtherDeal}', '${id(1)}'), ('${caseyOnly}', '${id(2)}');
@@ -62,7 +63,7 @@ const thread = async (response: Response) =>
 const read = (email: string, caller = alex, dealId = deal) =>
 	request(caller, `deals/${dealId}/emails/${email}`, {}, binding);
 
-test("a filed email opens as its cleaned conversation, oldest first", async () => {
+test("a filed email opens as its conversation, oldest first", async () => {
 	for (const caller of [alex, casey]) {
 		const response = await read(reply, caller);
 		assert.equal(response.status, 200);

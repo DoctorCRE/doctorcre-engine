@@ -15,7 +15,6 @@ const filing = id(5);
 const draft = id(6);
 const duplicateProposal = id(7);
 const duplicateDraft = id(8);
-const headerProposal = id(9);
 const partnerProposal = id(61);
 const dell = id(70);
 const sharedProposal = id(63);
@@ -25,8 +24,6 @@ const nextMicrosecond = "2026-01-05T15:00:00.000002Z";
 const footer = "Please copy the surveyor.\nThanks again.";
 const authored = "I sent the plan.\n\nUse the west door.";
 const history = "Earlier message\nAn older plan.";
-const outlookHeaderBlock =
-	"________________________________\n*From:* Sam Example <sam@example.test>\n*Sent:* Mon, Jan 5, 2026 9:30 AM\n*To:* Maya Example <maya@example.test>\n*Subject:* Suite plan\n\nCan you send the plan?";
 const captured =
 	"I sent the plan. Use the west door. Earlier message An older plan.";
 const carried = "Forwarded floor plan.";
@@ -134,14 +131,6 @@ const messages: {
 		mailboxes: [viewer, other],
 	},
 	{
-		id: 50,
-		at: start,
-		body: `${authored}\n\n${outlookHeaderBlock}\n\n${history}`,
-		messageId: "<outlook-header@example.test>",
-		conversation: "Header thread",
-		split: [`${authored}\n\n${outlookHeaderBlock}`, history],
-	},
-	{
 		id: 60,
 		at: start,
 		body: captured,
@@ -223,7 +212,6 @@ before(async () => {
 		values ('${followUp}', 'next_step', '${id(10)}', 'email', 'I sent the plan.', 'old_system', '${deal}', 'Review the plan', '${viewer}'),
 			('${filing}', 'file_to_deal', '${id(10)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
 			('${duplicateProposal}', 'file_to_deal', '${id(40)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
-			('${headerProposal}', 'file_to_deal', '${id(50)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
 			('${sharedProposal}', 'file_to_deal', '${id(64)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
 			('${partnerProposal}', 'file_to_deal', '${id(60)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null);
 		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
@@ -278,7 +266,7 @@ test("keeps an ambiguous message, case-distinct IDs and empty captures separate"
 	assert.partialDeepStrictEqual(entries[1], entry(21, carried, null));
 });
 
-test("the cleaner counts messages once and excludes evidence from another mailbox", async () => {
+test("a thread leaves out messages from another mailbox and shows unsplit bodies as stored", async () => {
 	const entries = (await thread())
 		.filter(({ activity_id }) =>
 			[25, 30, 31, 32].some((n) => activity_id === id(n)),
@@ -330,15 +318,6 @@ test("a proposal and draft on different copies identify the same displayed email
 		entry(41, authored, history),
 	);
 	assert.deepEqual(reply.thread, proposal.thread);
-});
-
-test("folds a plain-text Outlook reply header block left in stored authored text", async () => {
-	const entries = (await thread(`proposals/${headerProposal}`)).map(
-		({ activity_id, body, folded }) => ({ activity_id, body, folded }),
-	);
-	assert.deepEqual(entries, [
-		entry(50, authored, `${outlookHeaderBlock}\n\n${history}`),
-	]);
 });
 
 test("names a message from a partner's mailbox address by the partner, not its display name", async () => {
