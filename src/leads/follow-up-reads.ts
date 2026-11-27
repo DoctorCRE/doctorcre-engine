@@ -40,14 +40,20 @@ export const vendorRelationship = (role: string) => {
 };
 
 // `recorded` is a join on lastRecordedContacts for the same party.
+const lastVendorContactDay = (role: string, recorded: string) =>
+	sql`coalesce(${chicagoDay(sql.ref(`${recorded}.happened_at`))}, ${chicagoDay(sql.ref(`${role}.created_at`))})`;
+
 export const vendorIsQuiet = (role: string, recorded: string, days: number) => {
 	const partyId = sql.ref(`${role}.party_id`);
 	return sql`${sql.ref(`${role}.disposition`)} is null
 		and not exists (select from active_do_not_contact dnc where dnc.party_id = ${partyId})
 		and not exists (${openPartySteps(partyId)})
-		and coalesce(${chicagoDay(sql.ref(`${recorded}.happened_at`))}, ${chicagoDay(sql.ref(`${role}.created_at`))})
-			+ ${days}::int <= ${chicagoDay(sql`now()`)}`;
+		and ${lastVendorContactDay(role, recorded)} + ${days}::int <= ${chicagoDay(sql`now()`)}`;
 };
+
+export const vendorQuietDays = (role: string, recorded: string, days: number) =>
+	sql<number | null>`case when ${vendorIsQuiet(role, recorded, days)}
+		then ${chicagoDay(sql`now()`)} - ${lastVendorContactDay(role, recorded)} end`;
 
 export const copiedLeadIdentity = (partyId: RawBuilder<unknown>) =>
 	sql`select min(value) filter (where source = 'old_system_lead') as value,

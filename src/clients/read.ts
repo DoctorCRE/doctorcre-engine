@@ -201,15 +201,16 @@ export function listAnswer<
 	body: Body,
 	stamp: Stamp,
 	dataset = DATASETS[query.dataset],
+	page_size: number = PAGE_SIZE,
 ) {
-	const page_count = Math.max(1, Math.ceil(total / PAGE_SIZE));
+	const page_count = Math.max(1, Math.ceil(total / page_size));
 	return {
 		viewer,
 		dataset: query.dataset,
 		query,
 		total,
 		page: query.page,
-		page_size: PAGE_SIZE,
+		page_size,
 		page_count,
 		out_of_range: query.page > page_count,
 		...body,

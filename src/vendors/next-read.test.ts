@@ -311,3 +311,74 @@ test("the vendor list narrows to the vendors the No category tile counts", async
 	const { query } = (await list("q=Example")) as { query: object };
 	assert.equal("no_category" in query, false);
 });
+
+test("a category answers all its vendors in relationship order, with their categories and quiet days", async () => {
+	const [core, building, unrated, parked, avoided] = [
+		301, 302, 303, 304, 305,
+	].map(id);
+	await door.db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into role (slug, label, category_of) values
+			('surveyor', 'Surveyor', 'vendor'), ('appraiser', 'Appraiser', 'vendor');
+		insert into party (id, kind, name)
+			select id, 'person', 'Made-up Filler ' || n from (
+				select n, ('00000000-0000-4000-9000-' || lpad(n::text, 12, '0'))::uuid id
+				from generate_series(1, 30) n) f;
+		insert into party_role (party_id, role, relationship_level)
+			select id, role, case role when 'vendor' then 2 end
+			from party, unnest(array['vendor', 'surveyor']) role where name like 'Made-up Filler %';
+		insert into party (id, kind, name) values
+			('${core}', 'person', 'Made-up Zed Core'), ('${building}', 'person', 'Made-up Building'),
+			('${unrated}', 'person', 'Made-up Unrated'), ('${parked}', 'person', 'Made-up Parked'),
+			('${avoided}', 'person', 'Made-up Avoided');
+		insert into party_role (party_id, role, relationship_level, disposition, disposition_reason, created_at) values
+			('${core}', 'vendor', 3, null, null, now()),
+			('${building}', 'vendor', 1, null, null,
+				((now() at time zone 'America/Chicago')::date - 120 + time '12:00') at time zone 'America/Chicago'),
+			('${unrated}', 'vendor', null, null, null, now()),
+			('${parked}', 'vendor', 3, 'parked', 'Made-up reason', now()),
+			('${avoided}', 'vendor', 3, 'avoid', 'Made-up reason', now());
+		insert into party_role (party_id, role)
+			select id, 'surveyor' from party where id in ('${core}', '${building}', '${unrated}', '${parked}', '${avoided}');
+		insert into party_role (party_id, role) values ('${core}', 'appraiser');
+		commit;`);
+	const listed = (await list("category=surveyor")) as {
+		query: { sort: string };
+		total: number;
+		page_count: number;
+		rows: {
+			id: string;
+			categories: object[];
+			quiet: boolean;
+			quiet_days: number | null;
+		}[];
+	};
+	assert.equal(listed.query.sort, "relationship");
+	assert.equal(listed.total, 35);
+	assert.equal(listed.rows.length, 35);
+	assert.equal(listed.page_count, 1);
+	const named = listed.rows.filter((row) =>
+		[core, building, unrated, parked, avoided].includes(row.id),
+	);
+	assert.deepEqual(
+		named.map((row) => row.id),
+		[core, building, unrated, parked, avoided],
+	);
+	assert.equal(listed.rows.at(-1)?.id, avoided);
+	assert.partialDeepStrictEqual(named, [
+		{
+			categories: [
+				{ slug: "appraiser", label: "Appraiser" },
+				{ slug: "surveyor", label: "Surveyor" },
+			],
+			quiet: false,
+			quiet_days: null,
+		},
+		{ categories: [{ slug: "surveyor" }], quiet: true, quiet_days: 120 },
+	]);
+	const paged = (await list("owner=all")) as {
+		rows: object[];
+		page_count: number;
+	};
+	assert.equal(paged.rows.length, 25);
+	assert.ok(paged.page_count > 1);
+});

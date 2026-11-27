@@ -16,7 +16,10 @@ import {
 import type { DB } from "../database.d.ts";
 import {
 	lastRecordedContacts,
+	VENDOR_RELATIONSHIPS,
 	vendorIsQuiet,
+	vendorQuietDays,
+	vendorRelationship,
 } from "../leads/follow-up-reads.ts";
 import { DEFAULT_CADENCE } from "../leads/quiet-follow-ups.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
@@ -31,7 +34,7 @@ import {
 	trackRecordFacts,
 } from "./track-record.ts";
 
-export const VENDOR_SORTS = [...SORTS, "territory"] as const;
+export const VENDOR_SORTS = [...SORTS, "territory", "relationship"] as const;
 export type VendorQuery = ListQuery<
 	"vendors",
 	(typeof VENDOR_SORTS)[number]
@@ -56,6 +59,9 @@ const ORDER = {
 	last_deal_desc: sql`vr.last_deal_at desc nulls last, lower(p.name), v.id`,
 	last_deal_asc: sql`vr.last_deal_at asc nulls last, lower(p.name), v.id`,
 	territory: sql`lower(v.territory) asc nulls last, lower(p.name), v.id`,
+	// The old table records no ruling as active.
+	relationship: sql`case v.disposition when 'avoid' then 6 when 'parked' then 5
+		else coalesce(3 - v.relationship_level, 4) end, lower(p.name), v.id`,
 };
 
 const liveVendors = (db: Kysely<DB>) =>
@@ -366,7 +372,13 @@ const NEXT_ORDER = {
 	last_deal_desc: sql`vr.last_deal_at desc nulls last, lower(p.name), p.id`,
 	last_deal_asc: sql`vr.last_deal_at asc nulls last, lower(p.name), p.id`,
 	territory: sql`lower(${nextTerritory}) asc nulls last, lower(p.name), p.id`,
+	relationship: sql`array_position(array[${sql.join(VENDOR_RELATIONSHIPS.map((r) => sql`${r.word}`))}]::text[],
+		${vendorRelationship("pr")}), lower(p.name), p.id`,
 };
+
+const nextCategories = sql<{ slug: string; label: string }[]>`(
+	select coalesce(jsonb_agg(jsonb_build_object('slug', r.slug, 'label', r.label) order by r.label, r.slug), '[]')
+	from party_role cr join role r on r.slug = cr.role where cr.party_id = p.id and r.category_of = 'vendor')`;
 
 async function nextViewerId(db: Transaction<NextDB>, viewer: string) {
 	const user = await db
@@ -449,16 +461,16 @@ export async function readNextVendorList(
 	const { category, disposition, owner, q, quiet, scope, stage, territory } =
 		query;
 	const uncategorized = query.no_category === true;
+	// A category's table filters in place, so it needs every vendor at once.
+	const whole = category !== null || uncategorized;
 	const term = q === null ? null : `%${q.replace(/([\\%_])/g, "\\$1")}%`;
+	const days = DEFAULT_CADENCE.vendor_days;
 	const matching = liveNextVendors(db)
+		.leftJoin(sql`(${lastRecordedContacts})`.as("recorded"), (join) =>
+			join.on(sql<boolean>`recorded.party_id = p.id`),
+		)
 		.$if(quiet === true, (qb) =>
-			qb
-				.leftJoin(sql`(${lastRecordedContacts})`.as("recorded"), (join) =>
-					join.on(sql<boolean>`recorded.party_id = p.id`),
-				)
-				.where(
-					sql<boolean>`${vendorIsQuiet("pr", "recorded", DEFAULT_CADENCE.vendor_days)}`,
-				),
+			qb.where(sql<boolean>`${vendorIsQuiet("pr", "recorded", days)}`),
 		)
 		.where(sql<boolean>`
 		(${scope === "team"} or pr.owner_user_id = ${ownerId}::uuid)
@@ -478,6 +490,7 @@ export async function readNextVendorList(
 	const { total } = await matching
 		.select(sql<number>`count(*)::int`.as("total"))
 		.executeTakeFirstOrThrow();
+	const pageSize = whole ? Math.max(total, 1) : PAGE_SIZE;
 	const rows = await nextVendorRows(matching, ownerId, query.contract)
 		.$if(Boolean(query.contract), (qb) =>
 			qb.select([
@@ -485,11 +498,14 @@ export async function readNextVendorList(
 				"cat.label as deal_type",
 				asText(sql.ref("vr.last_deal_at")).as("last_deal_at"),
 				nextTerritory.as("territory"),
+				nextCategories.as("categories"),
+				sql<boolean>`${vendorIsQuiet("pr", "recorded", days)}`.as("quiet"),
+				vendorQuietDays("pr", "recorded", days).as("quiet_days"),
 			]),
 		)
 		.orderBy(NEXT_ORDER[query.sort])
-		.limit(PAGE_SIZE)
-		.offset((query.page - 1) * PAGE_SIZE)
+		.limit(pageSize)
+		.offset((query.page - 1) * pageSize)
 		.execute();
 	const facets = await db
 		.selectNoFrom([
@@ -522,6 +538,8 @@ export async function readNextVendorList(
 			partial: null,
 		},
 		stamp,
+		undefined,
+		pageSize,
 	);
 }
 
