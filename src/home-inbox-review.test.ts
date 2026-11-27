@@ -18,13 +18,14 @@ const evidenceReviewer = id(66);
 const filingWithPhone = id(67);
 const tourReply = id(68);
 const knownContact = randomUUID();
-const quotedRequestFooter = "Thanks,\nKnown Contact\n555-010-1234";
 const quotedRequest = `Hello,
 Could you please also let me know whether the west suite is still available for a tour later this month?
 Please send the plan.
 November 8 works for the tour.
 
-${quotedRequestFooter}
+Thanks,
+Known Contact
+555-010-1234
 From: Example Partner
 Sent: 2026-01-02T19:00:00Z
 Could you call?`;
@@ -1887,8 +1888,8 @@ test("draft and proposal details return only the viewer's distinct messages in t
 			activity_id: id(12),
 			sender_name: "Known Contact",
 			happened_at: "2026-01-04T00:00:00.000Z",
-			body: quotedRequest.replace(`${quotedRequestFooter}\n`, ""),
-			folded: quotedRequestFooter,
+			body: quotedRequest,
+			folded: null,
 		},
 	]);
 });
@@ -1912,75 +1913,6 @@ test("dashboard hides proposals and drafts when their source is in another mailb
 		assert.equal((await request(user, path, { method: "GET" })).status, 404);
 	}
 	assert.deepEqual(await dashboard(user.user), { reminders: [], waiting: [] });
-});
-
-test("single-message threads keep unsupported content available", async () => {
-	const emails = [75, 76, 77, 79, 81, 82, 83, 84].map(id);
-	const proposals = emails.map(() => randomUUID());
-	const reviewer = id(80);
-	const user = { user: "thread-cleanup-reviewer" };
-	const footer = "Best regards,\nPat Example\nPhone: 555-010-1234";
-	const bodies = [
-		"Thanks!\nCould you confirm that Tuesday still works?",
-		"Here is the plan.\n----\nPlease check the second page.",
-		`Please send the plan.\n\n${footer}`,
-		"Thanks!\nhttps://example.test/floor-plan",
-		"Current message.\r\nFrom: Pat <pat@example.test>\r\nSent: yesterday\r\nOld message.",
-		"Current message.\r\nFrom: Pat\r\n <pat@example.test>\r\nSent: yesterday\r\nOld message.",
-		"Current message.\r\nFrom: Pat\r\n  Sent: yesterday\r\nOld message.",
-		"Current message.\r\n  Please keep this line.",
-	];
-	await db.query(`begin;
-		select set_config('engine.job', 'old_system', true);
-		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Thread Reviewer');
-		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');`);
-	for (const [index, email] of emails.entries()) {
-		await db.query(
-			"insert into activity (id, kind, happened_at) values ($1, 'email', '2026-01-01'::date + $2::int)",
-			[email, index],
-		);
-		await db.query(
-			`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
-			values ($1::uuid, $1::uuid::text || '@example.test', null, 'pat@example.test', 'Pat Example', 'Example plan', $2)`,
-			[email, bodies[index]],
-		);
-		await db.query(
-			"insert into email_mailbox (activity_id, user_id) values ($1, $2)",
-			[email, reviewer],
-		);
-		await db.query(
-			"insert into activity_about (activity_id, party_id) values ($1, $2)",
-			[email, reviewer],
-		);
-		await db.query(
-			`insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job)
-			values ($1, 'possible_new_deal', $2, 'email', 'Please check the plan.', 'old_system')`,
-			[proposals[index], email],
-		);
-	}
-	await db.query("commit");
-	const threads = [];
-	for (const proposal of proposals) {
-		const response = await request(user, `proposals/${proposal}`, {
-			method: "GET",
-		});
-		assert.equal(response.status, 200);
-		const detail: unknown = await response.json();
-		assert.ok(isArguments(detail) && Array.isArray(detail.thread));
-		threads.push(
-			detail.thread
-				.filter(isArguments)
-				.map(({ body, folded }) => ({ body, folded })),
-		);
-	}
-	assert.deepEqual(
-		threads,
-		bodies.map((body, index) => [
-			index === 2
-				? { body: "Please send the plan.", folded: footer }
-				: { body, folded: null },
-		]),
-	);
 });
 
 test("Home email reviews return each message with its visible and folded text", async () => {
@@ -2045,9 +1977,16 @@ test("Home email reviews return each message with its visible and folded text", 
 			[message.id, index],
 		);
 		await db.query(
-			`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
-			values ($1::uuid, $1::uuid::text || '@example.test', 'Clean thread', $2, $3, 'Suite 200', $4)`,
-			[message.id, message.address, message.sender, message.body],
+			`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body, authored, history)
+			values ($1::uuid, $1::uuid::text || '@example.test', 'Clean thread', $2, $3, 'Suite 200', $4, $5, $6)`,
+			[
+				message.id,
+				message.address,
+				message.sender,
+				message.body,
+				message.kept,
+				message.folded,
+			],
 		);
 		await db.query(
 			"insert into email_mailbox (activity_id, user_id) values ($1, $2)",
