@@ -9,7 +9,7 @@ Run from the root of an isolated checkout at the head under test. Use only the c
 
 ## Launch
 
-In Foreman's attempt container, the image and setup in `.foreman/contract.yaml` have already run. PostgreSQL 18 answers at the default `TEST_DATABASE_URL` (`postgres://postgres@127.0.0.1:5432/postgres`, trust auth, `max_locks_per_transaction=256` for #420). The locked dependencies are installed. The `engine_verify` database holds the engine schema and the partner sign-in tables. The network is gone once setup ends.
+In Foreman's attempt container, the image and setup in `.foreman/contract.yaml` have already run. Setup leaves no server running: it creates the PostgreSQL 18 cluster (trust auth, `max_locks_per_transaction=256` for #420), loads `engine_verify` and stops it. The check and start bring it up with `pg_ctlcluster 18 main start`, after which it answers at the default `TEST_DATABASE_URL` (`postgres://postgres@127.0.0.1:5432/postgres`). The locked dependencies are installed. The `engine_verify` database holds the engine schema and the partner sign-in tables. The network is gone once setup ends.
 
 Elsewhere, use the Node version in `.node-version` and `psql`, and run `npm ci`. Database tests need a local, disposable PostgreSQL 18 server with `pgcrypto` and `pg_trgm`. With the `postgres:18` image already pulled, use the README's Docker block: it starts a server with `max_locks_per_transaction=256`, runs the check against it, and removes it on exit. Otherwise use a server already on loopback and set `TEST_DATABASE_URL` to it. The loader accepts only a loopback host, makes a random database and drops it afterwards. Never point it at a server holding business data, and never use a Neon or production URL.
 
