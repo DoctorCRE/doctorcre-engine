@@ -1,5 +1,4 @@
-# NODE_OPTIONS reaches the node --test run inside scripts/database-check.ts, so the check writes JUnit without a script change.
-check: (pg_ctlcluster 18 main status || pg_ctlcluster 18 main start) && mkdir -p out && NODE_OPTIONS='--test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=out/junit.xml' npm run check
+check: bash .foreman/check.sh
 test_report: out/junit.xml
 image: node:26.12.1-bookworm@sha256:3b764117159bda01d2396391e7789b6a9106af9729cfd001ef55e98557868310
 # The check and start bring PostgreSQL 18 up themselves (a no-op when it already runs) at the default TEST_DATABASE_URL, postgres://postgres@127.0.0.1:5432/postgres. Setup leaves no server running.
