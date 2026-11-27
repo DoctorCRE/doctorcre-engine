@@ -150,6 +150,9 @@ export async function hasManagedPolicy(
 	return false;
 }
 
+// USER and LOGNAME let Claude Code find its sign-in in the macOS keychain.
+const childEnvironment = new Set(["HOME", "LOGNAME", "PATH", "TMPDIR", "USER"]);
+
 function runClaude(
 	claude: string,
 	timeout: number,
@@ -190,8 +193,7 @@ function runClaude(
 	}
 	const env = { ...process.env };
 	for (const name of Object.keys(env)) {
-		if (name !== "HOME" && name !== "PATH" && name !== "TMPDIR")
-			delete env[name];
+		if (!childEnvironment.has(name)) delete env[name];
 	}
 	env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = "1";
 	if (task?.mcp) env.DOC_LINK_CREDENTIAL = task.mcp.credential;
