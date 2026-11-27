@@ -41,7 +41,14 @@ const SHARED_FIELDS = [
 	"owner",
 ];
 const LIST_FIELDS = {
-	clients: [...SHARED_FIELDS, "status", "type", "pipeline"],
+	clients: [
+		...SHARED_FIELDS,
+		"status",
+		"type",
+		"pipeline",
+		"practice_type",
+		"national_account",
+	],
 	vendors: [
 		...SHARED_FIELDS,
 		"category",
@@ -146,11 +153,31 @@ function listQuery<D extends Dataset, Sort extends string>(
 	};
 }
 
+// Free text, like the territory; an empty value asks for clients with none.
+function practiceType(params: URLSearchParams) {
+	const given = params.get("practice_type");
+	if (given === null) return {};
+	if (given.length > MAX_SEARCH || CONTROL.test(given))
+		throw invalid({ parameter: "practice_type", reason: "malformed" });
+	return { practice_type: given.trim() };
+}
+
+function nationalAccount(params: URLSearchParams) {
+	const given = params.get("national_account");
+	if (given === null) return {};
+	if (given !== "any" && !UUID.test(given))
+		throw invalid({ parameter: "national_account", reason: "malformed" });
+	return { national_account: given.toLowerCase() };
+}
+
+// Absent unless asked, so an unfiltered list keeps its old echo.
 const clientQuery = (params: URLSearchParams, viewer: string): ClientQuery => ({
 	...listQuery("clients", params, viewer, SORTS),
 	status: slug(params, "status"),
 	type: slug(params, "type"),
 	pipeline: oneOf(params, "pipeline", PIPELINES, "any"),
+	...practiceType(params),
+	...nationalAccount(params),
 });
 
 const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
@@ -218,6 +245,9 @@ directory.get("/clients", (c) =>
 			return {
 				next: (db, stamp) => readNextClientList(db, viewer, query, stamp),
 			};
+		for (const parameter of ["practice_type", "national_account"])
+			if (parameter in query)
+				throw invalid({ parameter, reason: "unsupported" });
 		return (db, stamp) => readClientList(db, viewer, query, stamp);
 	}),
 );
