@@ -72,6 +72,7 @@ Vendors opens on a tile for each vendor category.
 - [ ] **Edit** and **Link to someone** work as before.
 - [ ] Then the next step, Contacts & offices, Conversations, Relationships, Partnership (deals worked and referred, offers, seeking) and Where.
 - [ ] **Relationships** starts with four counts: **Sent us**, **We sent them**, **Chosen**, and **Knows**.
+- [ ] Relationships comes from the engine's one read of the vendor's relationships (`GET /api/engine/vendors/{id}/relationships`, [new-database.md](../new-database.md#vendors-redesign-reads)).
 - [ ] The vendor is the top box. Named groups hang under it: **Relationship partner** (Joe or Dell), **Sent us**, **We sent them**, **On deals, source not recorded** as a dashed line, **Knows** with a diamond, and **Can introduce us to** with a dashed ring.
 - [ ] **Sent us** shows each client the vendor referred. Green with a check names the deal the referral became, such as "Voss Dental, first office · Deal closed". Gray with an open ring says "No deal yet".
 - [ ] **We sent them** shows each client a partner introduced to this vendor. Green with a check is **Chosen** on that deal. Gray with an open ring is **Introduced**.

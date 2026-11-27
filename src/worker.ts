@@ -98,6 +98,7 @@ import { requireSession } from "./session.ts";
 import { type SignInFixtureEnv, signInFixtures } from "./sign-in-fixtures.ts";
 import { updateReads, updates } from "./updates.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
+import { vendorRelationships } from "./vendors/relationships.ts";
 import { vendorSummary } from "./vendors/summary.ts";
 import { changes } from "./who-did-what.ts";
 
@@ -163,7 +164,8 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", changes)
 	.route("/", preferences)
 	.route("/", vendorMeetings)
-	.route("/", vendorSummary);
+	.route("/", vendorSummary)
+	.route("/", vendorRelationships);
 
 const partnerApi = new Hono<WorkerEnv>();
 partnerApi.use("/api/engine/*", userStamp);
