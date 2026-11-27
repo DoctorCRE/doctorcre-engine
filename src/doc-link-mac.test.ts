@@ -169,11 +169,17 @@ test("Doc link runs a private Claude print session and submits only the final an
 		await unlink(authArgsPath);
 		await rmdir(directory);
 	});
-	const inheritedKey = process.env.ANTHROPIC_API_KEY;
+	const inherited = ["ANTHROPIC_API_KEY", "USER", "LOGNAME"].map(
+		(name) => [name, process.env[name]] as const,
+	);
 	process.env.ANTHROPIC_API_KEY = "unused test key";
+	process.env.USER = "partner";
+	process.env.LOGNAME = "partner";
 	t.after(() => {
-		if (inheritedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
-		else process.env.ANTHROPIC_API_KEY = inheritedKey;
+		for (const [name, value] of inherited) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
 	});
 	const [claim, completion, next] = await runLink(
 		[claimed("Inspect"), status(204)],
@@ -248,6 +254,8 @@ test("Doc link runs a private Claude print session and submits only the final an
 	});
 	assert.equal(observed.credential, credential);
 	assert.equal(observed.inheritedKey, undefined);
+	assert.equal(observed.user, "partner");
+	assert.equal(observed.logname, "partner");
 });
 
 test("Doc link refuses a shared credential file and reads a private one", async (t) => {
