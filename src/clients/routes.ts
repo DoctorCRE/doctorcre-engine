@@ -13,12 +13,14 @@ import {
 } from "../vendors/read.ts";
 import {
 	BusinessRefusal,
+	CLIENT_SORTS,
 	type ClientQuery,
 	CONTRACTS,
 	type Contract,
 	type Dataset,
 	invalid,
 	type ListQuery,
+	NO_DEAL_YET,
 	PAGE_SIZE,
 	PARTNERS,
 	PIPELINES,
@@ -27,7 +29,6 @@ import {
 	readNextClient,
 	readNextClientList,
 	refusalOf,
-	SORTS,
 	type Stamp,
 } from "./read.ts";
 
@@ -174,7 +175,7 @@ function nationalAccount(params: URLSearchParams) {
 
 // Absent unless asked, so an unfiltered list keeps its old echo.
 const clientQuery = (params: URLSearchParams, viewer: string): ClientQuery => ({
-	...listQuery("clients", params, viewer, SORTS),
+	...listQuery("clients", params, viewer, CLIENT_SORTS),
 	status: slug(params, "status"),
 	type: slug(params, "type"),
 	pipeline: oneOf(params, "pipeline", PIPELINES, "any"),
@@ -259,6 +260,8 @@ directory.get("/clients", (c) =>
 		for (const parameter of ["practice_type", "national_account", "tiles"])
 			if (parameter in query)
 				throw invalid({ parameter, reason: "unsupported" });
+		if (query.status === NO_DEAL_YET)
+			throw invalid({ parameter: "status", reason: "unsupported" });
 		return (db, stamp) => readClientList(db, viewer, query, stamp);
 	}),
 );
