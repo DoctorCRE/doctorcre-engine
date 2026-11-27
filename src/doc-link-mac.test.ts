@@ -4,8 +4,11 @@ import {
 	copyFile,
 	mkdir,
 	mkdtemp,
+	mkdtempDisposable,
 	readFile,
+	rename,
 	rmdir,
+	symlink,
 	unlink,
 	writeFile,
 } from "node:fs/promises";
@@ -13,7 +16,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { readDocLinkConfig, runDocLink } from "../scripts/doc-link.ts";
+import {
+	hasManagedPolicy,
+	readDocLinkConfig,
+	runDocLink,
+} from "../scripts/doc-link.ts";
 
 beforeEach(() => mock.timers.enable({ apis: ["setInterval"] }));
 afterEach(() => mock.timers.reset());
@@ -337,6 +344,146 @@ test("Doc link allows an empty or missing managed directory", async (t) => {
 		[poll("ready")],
 	);
 });
+
+const denyOnly = JSON.stringify({
+	permissions: { deny: ["Bash(curl:*)", "WebFetch"] },
+});
+
+test("Doc link polls with the deny-only managed settings file", async () => {
+	await using scratch = await mkdtempDisposable(
+		join(process.cwd(), ".scratch."),
+	);
+	await writeFile(join(scratch.path, "managed-settings.json"), denyOnly);
+	assert.deepEqual(await runLink([status(401)], claude, scratch.path), [
+		poll("ready"),
+	]);
+});
+
+const denyOnlyCases: [string, boolean, (directory: string) => Promise<void>][] =
+	[
+		["deny-only settings", false, async () => {}],
+		[
+			"an empty deny list",
+			false,
+			(directory) =>
+				writeFile(
+					join(directory, "managed-settings.json"),
+					'{"permissions":{"deny":[]}}',
+				),
+		],
+		[
+			"another top-level key",
+			true,
+			(directory) =>
+				writeFile(
+					join(directory, "managed-settings.json"),
+					'{"permissions":{"deny":[]},"env":{}}',
+				),
+		],
+		[
+			"another permissions key",
+			true,
+			(directory) =>
+				writeFile(
+					join(directory, "managed-settings.json"),
+					'{"permissions":{"deny":[],"allow":["Bash"]}}',
+				),
+		],
+		[
+			"a rule that is not a string",
+			true,
+			(directory) =>
+				writeFile(
+					join(directory, "managed-settings.json"),
+					'{"permissions":{"deny":[{"tool":"Bash"}]}}',
+				),
+		],
+		[
+			"unparsable JSON",
+			true,
+			(directory) =>
+				writeFile(
+					join(directory, "managed-settings.json"),
+					'{"permissions":{"deny":[]}',
+				),
+		],
+		[
+			"a second file",
+			true,
+			(directory) =>
+				writeFile(join(directory, "managed-mcp.json"), '{"mcpServers":{}}'),
+		],
+		[
+			"a subdirectory with a file",
+			true,
+			async (directory) => {
+				await mkdir(join(directory, ".claude/agents"), { recursive: true });
+				await writeFile(join(directory, ".claude/agents/agent.md"), "agent");
+			},
+		],
+		[
+			"an empty subdirectory",
+			true,
+			(directory) => mkdir(join(directory, "empty")),
+		],
+		[
+			"a directory named like the settings file",
+			true,
+			async (directory) => {
+				await unlink(join(directory, "managed-settings.json"));
+				await mkdir(join(directory, "managed-settings.json"));
+			},
+		],
+		[
+			"a linked settings file",
+			true,
+			async (directory) => {
+				await rename(
+					join(directory, "managed-settings.json"),
+					join(directory, "..", "linked.json"),
+				);
+				await symlink(
+					join(directory, "..", "linked.json"),
+					join(directory, "managed-settings.json"),
+				);
+			},
+		],
+		[
+			"a configuration profile",
+			true,
+			(directory) =>
+				writeFile(
+					join(directory, "..", "com.anthropic.claudecode.plist"),
+					'<plist version="1.0"><dict/></plist>',
+				),
+		],
+		[
+			"a server policy cache",
+			true,
+			(directory) =>
+				writeFile(join(directory, "..", "remote-settings.json"), "{}"),
+		],
+	];
+
+for (const [source, policy, arrange] of denyOnlyCases) {
+	test(`managed settings beside the deny-only file: ${source} ${policy ? "pauses" : "passes"}`, async () => {
+		await using scratch = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const directory = join(scratch.path, "ClaudeCode");
+		await mkdir(directory);
+		await writeFile(join(directory, "managed-settings.json"), denyOnly);
+		await arrange(directory);
+		assert.equal(
+			await hasManagedPolicy({
+				directory,
+				preferences: [join(scratch.path, "com.anthropic.claudecode.plist")],
+				cache: join(scratch.path, "remote-settings.json"),
+			}),
+			policy,
+		);
+	});
+}
 
 test("Doc link refuses a turn when policy appears after a poll and resumes once it is removed", async (t) => {
 	const directory = await mkdtemp(join(process.cwd(), ".scratch."));

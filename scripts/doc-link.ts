@@ -101,6 +101,22 @@ function isMissingFile(error: unknown) {
 	return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
+// Decision 217: deny rules only take tools away, so this one file is allowed.
+const denyOnlySettings = "managed-settings.json";
+const denyOnlySettingsSchema = z.strictObject({
+	permissions: z.strictObject({ deny: z.array(z.string()) }),
+});
+
+async function isDenyOnlySettings(path: string) {
+	await using file = await open(
+		path,
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
+	if (!(await file.stat()).isFile()) return false;
+	return denyOnlySettingsSchema.safeParse(readJson(await file.readFile("utf8")))
+		.success;
+}
+
 export async function hasManagedPolicy(
 	{
 		directory,
@@ -113,11 +129,13 @@ export async function hasManagedPolicy(
 	} = macManagedSettingsPaths(),
 ) {
 	try {
-		const entries = await readdir(directory, {
-			recursive: true,
-			withFileTypes: true,
-		});
-		if (entries.some((entry) => !entry.isDirectory())) return true;
+		const names = await readdir(directory);
+		if (names.some((name) => name !== denyOnlySettings)) return true;
+		if (
+			names.length > 0 &&
+			!(await isDenyOnlySettings(join(directory, denyOnlySettings)))
+		)
+			return true;
 	} catch (error) {
 		if (!isMissingFile(error)) return true;
 	}
