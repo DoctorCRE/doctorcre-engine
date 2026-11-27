@@ -11,6 +11,7 @@ import { attachmentFiles, attachments, dealDocuments } from "./attachments.ts";
 import { cadence } from "./cadence.ts";
 import { calendarDismissal, nextAgenda } from "./calendar/next-agenda.ts";
 import { calendarMeetings } from "./calendar/range.ts";
+import { clientDeals } from "./clients/deals.ts";
 import { directory } from "./clients/routes.ts";
 import {
 	accessDoor,
@@ -178,6 +179,7 @@ partnerApi.route("/api/engine", partyLinks);
 partnerApi.route("/api/engine", introductions);
 partnerApi.route("/api/engine", propertySearch);
 partnerApi.route("/api/engine", clientLeases);
+partnerApi.route("/api/engine", clientDeals);
 partnerApi.route("/api/engine", marketTerms);
 partnerApi.route("/api/engine", closingAnniversaries);
 partnerApi.route("/api/engine", prospectReads);

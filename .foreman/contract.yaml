@@ -1,5 +1,37 @@
 check: bash .foreman/check.sh
 test_report: out/junit.xml
+image: node:26.12.1-bookworm@sha256:3b764117159bda01d2396391e7789b6a9106af9729cfd001ef55e98557868310
+# The check and start bring PostgreSQL 18 up themselves (a no-op when it already runs) at the default TEST_DATABASE_URL, postgres://postgres@127.0.0.1:5432/postgres. Setup leaves no server running.
 setup:
+  - >-
+    apt-get update && apt-get install -y --no-install-recommends locales postgresql-common &&
+    sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-gen &&
+    echo 'create_main_cluster = false' >> /etc/postgresql-common/createcluster.conf &&
+    /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y && apt-get install -y --no-install-recommends postgresql-18
+  # Tests compare sorted text, so the server sorts in en_US.UTF-8 like CI's postgres:18 image.
+  - pg_createcluster 18 main --locale en_US.UTF-8 -o max_locks_per_transaction=256 -- --auth=trust
   - npm ci
+  # The database start serves: the engine schema and the partner sign-in tables, as production applies them. The server runs only while this command does.
+  - >-
+    pg_ctlcluster 18 main start &&
+    psql -X -v ON_ERROR_STOP=1 -U postgres -h 127.0.0.1 -c 'create database engine_verify' &&
+    psql -X -v ON_ERROR_STOP=1 -U postgres -h 127.0.0.1 -d engine_verify -f schema/business.sql &&
+    PGOPTIONS='-c search_path=next' psql -X -v ON_ERROR_STOP=1 -U postgres -h 127.0.0.1 -d engine_verify
+    -c 'alter default privileges revoke execute on functions from public' -c 'create schema next'
+    -f schema/next.sql -f schema/copy-attribution.sql &&
+    psql -X -v ON_ERROR_STOP=1 -U postgres -h 127.0.0.1 -d engine_verify -f schema/partner-auth.sql &&
+    pg_ctlcluster 18 main stop
+start:
+  command: >-
+    (pg_ctlcluster 18 main status || pg_ctlcluster 18 main start) &&
+    CLOUDFLARE_INCLUDE_PROCESS_ENV=true
+    CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DATABASE=postgres://postgres:trust@127.0.0.1:5432/engine_verify
+    CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DATABASE_WRITER=postgres://postgres:trust@127.0.0.1:5432/engine_verify
+    CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_PARTNER_AUTH_DATABASE=postgres://postgres:trust@127.0.0.1:5432/engine_verify
+    node_modules/.bin/wrangler dev --local --ip 127.0.0.1 --port 8787 --local-protocol https
+    --var PARTNER_APP_ORIGIN:https://127.0.0.1:8787
+  health: curl -fsSk https://127.0.0.1:8787/health
+  timeout_seconds: 120
+# Each value comes from FOREMAN_TEST_<NAME> on the Foreman host (FOREMAN_TEST_PARTNER_AUTH_SECRET here), a generated local value set there; production's is never used.
+secrets: [PARTNER_AUTH_SECRET]
 verify_skill: .claude/skills/verify-engine/SKILL.md
