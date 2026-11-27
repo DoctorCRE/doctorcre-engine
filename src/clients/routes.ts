@@ -48,6 +48,7 @@ const LIST_FIELDS = {
 		"pipeline",
 		"practice_type",
 		"national_account",
+		"tiles",
 	],
 	vendors: [
 		...SHARED_FIELDS,
@@ -178,6 +179,7 @@ const clientQuery = (params: URLSearchParams, viewer: string): ClientQuery => ({
 	pipeline: oneOf(params, "pipeline", PIPELINES, "any"),
 	...practiceType(params),
 	...nationalAccount(params),
+	...(oneOf(params, "tiles", ["true"], null) && { tiles: true }),
 });
 
 const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
@@ -245,7 +247,7 @@ directory.get("/clients", (c) =>
 			return {
 				next: (db, stamp) => readNextClientList(db, viewer, query, stamp),
 			};
-		for (const parameter of ["practice_type", "national_account"])
+		for (const parameter of ["practice_type", "national_account", "tiles"])
 			if (parameter in query)
 				throw invalid({ parameter, reason: "unsupported" });
 		return (db, stamp) => readClientList(db, viewer, query, stamp);

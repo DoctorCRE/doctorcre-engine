@@ -49,6 +49,7 @@ export type ClientQuery = ListQuery<"clients", (typeof SORTS)[number]> & {
 	practice_type?: string;
 	// "any", or one account's party id.
 	national_account?: string;
+	tiles?: true;
 };
 export type Stamp = { observedAt: Date; correlationId: string };
 
@@ -664,7 +665,7 @@ export async function readNextClientList(
 		{
 			rows: rows.map((row) => shaped(row, query.contract)),
 			facets: { statuses: nextStatuses, types },
-			tiles: await readTiles(db, matching),
+			...(query.tiles && { tiles: await readTiles(db, matching) }),
 			partial: null,
 		},
 		stamp,

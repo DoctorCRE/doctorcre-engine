@@ -79,7 +79,7 @@ const read = async (query: string) => {
 };
 
 test("Clients counts a tile per practice type, most clients first, with Not set apart", async () => {
-	const { tiles } = await read("");
+	const { tiles } = await read("tiles=true");
 	assert.deepEqual(tiles, {
 		all: mix(6, 1, 1),
 		national_accounts: { accounts: 1, ...mix(2, 1) },
@@ -92,13 +92,17 @@ test("Clients counts a tile per practice type, most clients first, with Not set 
 });
 
 test("Joe or Dell recounts every tile", async () => {
-	const { tiles } = await read("owner=dell");
+	const { tiles } = await read("owner=dell&tiles=true");
 	assert.deepEqual(tiles, {
 		all: mix(1),
 		national_accounts: { accounts: 1, ...mix(1) },
 		practice_types: [{ practice_type: "Veterinary", ...mix(1) }],
 		not_set: mix(0),
 	});
+});
+
+test("Tiles come only when asked, so today's list keeps its shape", async () => {
+	assert.equal("tiles" in (await read("")), false);
 });
 
 test("A tile's filter lists its clients", async () => {
