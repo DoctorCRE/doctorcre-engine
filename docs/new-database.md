@@ -2117,9 +2117,10 @@ The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) star
 
 The partner signs in through Claude Code and keeps plan usage credits off. Setup and the link use `claude auth status` to confirm a personal Pro, Max, or Ultra subscription. Team, Enterprise, and unrecognized plans stop setup or pause the link. The check uses the same settings sources and isolation flags as the model session so a key in personal settings cannot mask the subscription. The link checks every 30 seconds and before starting a turn or job. It reports an expired sign-in from a failed session. On a reported plan limit, the work returns to the queue and the Mac waits until the reported reset before claiming again. If Claude Code gives no reset time, the link checks again after five minutes.
 
-A Doc Mac has no managed Claude Code configuration of any kind. The runner checks these roots before polling and before launching Claude Code.
+A Doc Mac has no managed Claude Code configuration except one deny-only settings file (decision 217). The runner checks these roots before polling and before launching Claude Code.
 
-- Any file under `/Library/Application Support/ClaudeCode/`, including managed settings, MCP configuration, instructions, agents and skills. An empty directory is allowed. [Managed settings locations](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
+- Any entry in `/Library/Application Support/ClaudeCode/` other than `managed-settings.json`, including MCP configuration, instructions, agents, skills and subdirectories. An empty or missing directory is allowed. [Managed settings locations](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
+- A `managed-settings.json` there that is not a regular file holding a JSON object whose only key is `permissions`, whose only key is `deny`, a list of rule strings. A deny rule can only take a tool away. A symbolic link, another key, a rule that is not a string, or text that does not parse pauses the link.
 - The `com.anthropic.claudecode` configuration profile or managed preference domain under `/Library/Managed Preferences/`. [macOS managed preferences](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
 - A `policyHelper` configured in managed settings or the profile. [Settings reference](https://code.claude.com/docs/en/settings-reference#policyhelper)
 - The server policy cache at `~/.claude/remote-settings.json`. [Server-managed settings](https://code.claude.com/docs/en/server-managed-settings)
@@ -2171,8 +2172,6 @@ The claim request may carry a JSON body `{ providers: [{ provider, readiness, re
 The runner skips a saved model or effort the tool no longer lists and runs the tool's default. A first choice that reports `plan_limited` or `signed_out` during a turn posts `{ claim_id, kind, provider, resets_at }` to the result door. The engine records that provider's readiness and returns the turn to the queue, so the next claim runs the second choice. An answered result adds `provider`. `doc_turn.answered_by` becomes one of the four providers or `backup`, and the migration changes `'mac'` to `'claude'`. History stays plain questions and answers, so a chat continues on whichever provider answers. A new choice applies from the next claim. Mail judgment jobs always run on `claude`.
 
 Each driver runs its tool unattended with the Doc MCP server only. The Claude driver keeps today's flags. The Codex driver uses `codex app-server` and the Grok and Gemini drivers use the Agent Client Protocol, each refusing every command, file and permission request, under the separate account in decision 219. A plan limit is its own outcome with the tool's reset time, never a generic failure. The runner stops a tool only after the tool says its turn started. Completion, stop, error and process exit each end the claim.
-
-The managed-source check in [Doc link on macOS](#doc-link-on-macos) allows the Studio's one file from decision 217. Any other managed source still pauses polling.
 
 #### Live answer and Stop
 
