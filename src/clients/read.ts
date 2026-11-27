@@ -20,6 +20,9 @@ export const SORTS = [
 	"last_deal_desc",
 	"last_deal_asc",
 ] as const;
+export const CLIENT_SORTS = [...SORTS, "status", "owner", "territory"] as const;
+// The tiles' third count, as a status filter: every client without an open deal or a closed one.
+export const NO_DEAL_YET = "no_deal_yet";
 export const PIPELINES = ["any", "active", "other", "unknown"] as const;
 export const CONTRACTS = [
 	"vendor-directory.v1",
@@ -41,7 +44,10 @@ export type ListQuery<D extends Dataset, Sort extends string> = {
 	page: number;
 	page_size: typeof PAGE_SIZE;
 };
-export type ClientQuery = ListQuery<"clients", (typeof SORTS)[number]> & {
+export type ClientQuery = ListQuery<
+	"clients",
+	(typeof CLIENT_SORTS)[number]
+> & {
 	status: string | null;
 	type: string | null;
 	pipeline: (typeof PIPELINES)[number];
@@ -170,6 +176,9 @@ const ORDER = {
 	deal_type: sql`lower(c.deal_type_label) asc nulls last, lower(p.name), c.id`,
 	last_deal_desc: sql`${lastDealAt} desc nulls last, lower(p.name), c.id`,
 	last_deal_asc: sql`${lastDealAt} asc nulls last, lower(p.name), c.id`,
+	status: sql`cs.sort, lower(p.name), c.id`,
+	owner: sql`lower(c.owner_label) nulls last, lower(p.name), c.id`,
+	territory: sql`lower(p.city) nulls last, lower(p.name), c.id`,
 };
 
 const nextClientDataset = {
@@ -447,6 +456,10 @@ const nextOrder = {
 	deal_type: sql`lower(p.name), client.party_id`,
 	last_deal_desc: sql`last_deal_at desc nulls last, lower(p.name), client.party_id`,
 	last_deal_asc: sql`last_deal_at asc nulls last, lower(p.name), client.party_id`,
+	// The tile chips' order: Open deal, Past client, then the rest.
+	status: sql`array_position(array['active_deal', 'past_client', 'engaged', 'roster', 'cold', 'paused'], cs.status), lower(p.name), client.party_id`,
+	owner: sql`lower(owner.name) nulls last, lower(p.name), client.party_id`,
+	territory: sql`lower(p.city) nulls last, lower(p.name), client.party_id`,
 };
 
 const nextClients = (db: Transaction<NextDB>) =>
@@ -539,7 +552,12 @@ function matchingNextClients(
 			eb.or([eb("p.name", "ilike", term), eb(clientRef, "ilike", term)]),
 		);
 	}
-	if (status !== null) clients = clients.where("cs.status", "=", status);
+	if (status === NO_DEAL_YET)
+		clients = clients.where("cs.status", "not in", [
+			"active_deal",
+			"past_client",
+		]);
+	else if (status !== null) clients = clients.where("cs.status", "=", status);
 	if (type !== null) clients = clients.where(nextClientType, "=", type);
 	if (pipeline !== "any")
 		clients = clients.where(nextPipeline, "is", PIPELINE[pipeline]);

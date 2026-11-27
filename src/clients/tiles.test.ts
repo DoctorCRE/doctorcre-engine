@@ -33,7 +33,7 @@ before(async () => {
 	await setup();
 	const clients = [open, past, roster, lower, vet, unset];
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into phase values ('negotiation', 'Negotiation'), ('closed', 'Closed');
+		insert into phase values ('negotiation', 'Negotiation'), ('closed', 'Closed'), ('dead', 'Dead');
 		insert into role values ('client', 'Client'), ('national_account', 'National account');
 		insert into how_found values ('referral', 'Referral');
 		insert into party (id, kind, name) values
@@ -54,11 +54,16 @@ before(async () => {
 		insert into client_brand (location_id, brand_id, started_on) values
 			('${open}', '${brand}', '2020-01-01'), ('${vet}', '${brand}', '2020-01-01');
 		insert into deal (id, name, owner_user_id) values
-			('${open}', 'Example Open Deal', '${joe}'), ('${past}', 'Example Closed Deal', '${joe}');
+			('${open}', 'Example Open Deal', '${joe}'), ('${past}', 'Example Closed Deal', '${joe}'),
+			('${roster}', 'Example Dead Deal', '${joe}');
 		insert into deal_party (deal_id, party_id, role) values
-			('${open}', '${open}', 'client'), ('${past}', '${past}', 'client');
+			('${open}', '${open}', 'client'), ('${past}', '${past}', 'client'), ('${roster}', '${roster}', 'client');
 		insert into deal_phase_change (deal_id, happened_at, phase) values
 			('${open}', '2026-01-01', 'negotiation'), ('${past}', '2026-01-01', 'closed');
+		insert into deal_phase_change (deal_id, happened_at, phase, reason) values
+			('${roster}', '2026-01-01', 'dead', 'Example reason');
+		update party set city = 'Example Bay' where id = '${lower}';
+		update party set city = 'Example Acres' where id = '${past}';
 		commit;`);
 });
 after(cleanup);
@@ -121,6 +126,29 @@ test("A tile's filter lists its clients", async () => {
 	assert.deepEqual(await ids(`national_account=${randomUUID()}`), []);
 });
 
+test("No deal yet lists the clients the tiles count there, a dead-only deal included", async () => {
+	const { rows, total } = await read(
+		"practice_type=Dental&status=no_deal_yet&tiles=true",
+	);
+	assert.deepEqual(rows.map(({ id }) => id).sort(), [roster, lower].sort());
+	assert.equal(
+		total,
+		(await read("practice_type=Dental&tiles=true")).tiles.all.no_deal_yet,
+	);
+});
+
+test("Clients sort by status, owner and territory", async () => {
+	const order = async (sort: string) =>
+		(await read(`sort=${sort}`)).rows.map(({ id }) => id);
+	assert.deepEqual((await order("status")).slice(0, 2), [open, past]);
+	assert.deepEqual(
+		(await order("owner")).slice(0, 5).sort(),
+		[open, past, roster, lower, unset].sort(),
+	);
+	assert.equal((await order("owner")).at(-1), vet);
+	assert.deepEqual((await order("territory")).slice(0, 2), [past, lower]);
+});
+
 test("The old-table read refuses the tile filters", async () => {
 	const response = await request(
 		{ user: "joe" },
@@ -131,5 +159,18 @@ test("The old-table read refuses the tile filters", async () => {
 	assert.equal(response.status, 400);
 	assert.partialDeepStrictEqual(await response.json(), {
 		detail: { parameter: "practice_type", reason: "unsupported" },
+	});
+});
+
+test("The old-table read refuses No deal yet", async () => {
+	const response = await request(
+		{ user: "joe" },
+		"clients?status=no_deal_yet",
+		{ method: "GET" },
+		{ DIRECTORY_READ_SCHEMA: "" },
+	);
+	assert.equal(response.status, 400);
+	assert.partialDeepStrictEqual(await response.json(), {
+		detail: { parameter: "status", reason: "unsupported" },
 	});
 });

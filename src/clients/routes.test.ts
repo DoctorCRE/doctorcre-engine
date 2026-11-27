@@ -71,7 +71,7 @@ test("the client list refuses bad inputs with the old bodies, in the old order",
 			invalid({ parameter: "owner", reason: "unsupported_value" }),
 		],
 		[
-			"?sort=territory",
+			"?sort=relationship",
 			400,
 			invalid({ parameter: "sort", reason: "unsupported_value" }),
 		],
