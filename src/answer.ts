@@ -347,6 +347,7 @@ export type Verb =
 	| "read-typical-lengths"
 	| "read-updates"
 	| "read-vendor-meetings"
+	| "read-vendor-relationships"
 	| "read-vendor-summary"
 	| "resolve-action-link"
 	| "search-parties-v1"

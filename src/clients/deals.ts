@@ -41,11 +41,12 @@ export type ClientDeal = {
 	introductions: Introduction[];
 };
 
-const onDealAsVendor = (
-	party: ReturnType<typeof sql.ref>,
-) => sql<boolean>`exists (
+type Ref = ReturnType<typeof sql.ref>;
+
+// Chosen is derived, never stored: the party is on the deal in a vendor role.
+export const onDealAsVendor = (deal: Ref, party: Ref) => sql<boolean>`exists (
 	select from deal_party dp join role r on r.slug = dp.role
-	where dp.deal_id = deals.id and dp.party_id = ${party} and ${isVendorRole})`;
+	where dp.deal_id = ${deal} and dp.party_id = ${party} and ${isVendorRole})`;
 
 const vendors = sql<
 	Vendor[]
@@ -64,7 +65,7 @@ const introductions = sql<
 		'id', i.id, 'vendor_id', i.vendor_id, 'vendor_name', vp.name, 'made_by', i.made_by,
 		'introduced_by', u.slug, 'introduced_party_id', i.introduced_party_id,
 		'introduced_party_name', ip.name, 'introduced_on', i.introduced_on, 'note', i.note,
-		'chosen', ${onDealAsVendor(sql.ref("i.vendor_id"))}
+		'chosen', ${onDealAsVendor(sql.ref("deals.id"), sql.ref("i.vendor_id"))}
 	) order by i.introduced_on nulls last, i.created_at, i.id), '[]')
 	from introduction i
 	join party vp on vp.id = i.vendor_id

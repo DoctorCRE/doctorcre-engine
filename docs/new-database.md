@@ -1969,6 +1969,15 @@ The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 need
 
 **Vendor summary.** `GET /api/engine/vendors/summary`, optional `owner`, `all` when absent, answers the category tiles in one read: `{ all, no_category, categories: [{ slug, label, ...counts }] }`. Each `counts` is `{ count, relationship: { core, established, building, prospective, not_rated, parked, avoid }, quiet }`. `categories` lists every vendor category in label order, with zeros for one no vendor holds. A vendor counts once in each category it holds, so the categories can add up to more than `all`. `no_category` counts vendors that hold only the vendor role. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
 
+**A vendor's relationships.** `GET /api/engine/vendors/{id}/relationships`, a signed-in read of the new schema that takes no query parameters, answers the card's Relationships diagram. `{id}` is the vendor's party ID; a malformed ID, or a party with no vendor role, answers `404 not_found`. A partner is answered by sign-in name, `joe` or `dell`, and any other user, or none, is null, never guessed. It answers:
+
+- `relationship_partner`: the vendor role's relationship partner, or null.
+- `sent_us`: each introduction the vendor made, newest first by date, undated last: `introduction_id`, `client` (`{ party_id, name }`, whom it introduced), `deal` (`{ id, name, open }` by the Deals board's open-deal rule, or null) and `introduced_on`.
+- `we_sent_them`: each introduction the team made to the vendor, in the same order and shape, with `introduced_by`, the partner who made it, and `chosen`, the client deals read's rule: the vendor is on that deal in a vendor role. One with no deal is listed with `deal: null` and is not chosen.
+- `worked_with`: the deals the vendor is on in a vendor role, by the track record's rule, that no introduction with the vendor names, open first, then by name: `{ id, name, open, client }`, the client `{ party_id, name }` or null.
+- `knows`: the parties in the vendor's current knows links, either way round; `can_introduce`: the parties its current can-introduce links say it can introduce the team to. Both `{ party_id, name }` by name. A link is current while it has no end date.
+- `counts`: `{ sent_us, we_sent_them, chosen, knows }`, the lengths of those lists and the chosen introductions.
+
 **The list read.** `GET /api/engine/vendors` changes in these ways:
 
 - `no_category=true` narrows the list to the vendors the summary counts under `no_category`. It combines with the other filters, is echoed in `query` only when asked for, and is refused with `category` and on the legacy list.
