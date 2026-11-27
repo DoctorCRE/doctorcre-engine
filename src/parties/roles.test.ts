@@ -253,6 +253,11 @@ test("a vendor edit moves its stage, categories and ruling, and the database kee
 		is_target: true,
 		categories: ["contractor", "lender"],
 	});
+	const [cleared, untargeted] = await edit({
+		is_target: { from: true, to: false },
+	});
+	assert.equal(cleared, 200, JSON.stringify(untargeted));
+	assert.equal(untargeted.is_target, false);
 	const [noReason, refusal] = await edit({
 		disposition: { from: null, to: "parked" },
 	});

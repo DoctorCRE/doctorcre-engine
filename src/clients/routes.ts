@@ -131,6 +131,7 @@ function listQuery<D extends Dataset, Sort extends string>(
 	params: URLSearchParams,
 	viewer: string,
 	sorts: readonly ("name" | Sort)[],
+	defaultSort: "name" | Sort = "name",
 ): ListQuery<D, "name" | Sort> {
 	checkFields(params, LIST_FIELDS[dataset], viewer);
 	const contract = oneOf(params, "contract", CONTRACTS, null);
@@ -141,7 +142,7 @@ function listQuery<D extends Dataset, Sort extends string>(
 		q: search(params),
 		owner: oneOf(params, "owner", OWNERS, "all"),
 		territory: territory(params),
-		sort: oneOf(params, "sort", sorts, "name"),
+		sort: oneOf(params, "sort", sorts, defaultSort),
 		page: page(params),
 		page_size: PAGE_SIZE,
 	};
@@ -154,8 +155,12 @@ const clientQuery = (params: URLSearchParams, viewer: string): ClientQuery => ({
 	pipeline: oneOf(params, "pipeline", PIPELINES, "any"),
 });
 
-const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
-	...listQuery("vendors", params, viewer, VENDOR_SORTS),
+const vendorQuery = (
+	params: URLSearchParams,
+	viewer: string,
+	defaultSort: VendorQuery["sort"],
+): VendorQuery => ({
+	...listQuery("vendors", params, viewer, VENDOR_SORTS, defaultSort),
 	category: slug(params, "category"),
 	stage: slug(params, "stage"),
 	disposition: slug(params, "disposition"),
@@ -264,8 +269,10 @@ directory.get(`/clients/:id{(?:${UUID_SEGMENT}|C-[^/]+)}`, (c) =>
 );
 directory.get("/vendors", (c) =>
 	answer(c, (params, viewer) => {
-		const query = vendorQuery(params, viewer);
-		if (c.env.DIRECTORY_READ_SCHEMA === "next")
+		const next = c.env.DIRECTORY_READ_SCHEMA === "next";
+		// The old list keeps its old default and echo.
+		const query = vendorQuery(params, viewer, next ? "relationship" : "name");
+		if (next)
 			return {
 				next: (db, stamp) => readNextVendorList(db, viewer, query, stamp),
 			};
