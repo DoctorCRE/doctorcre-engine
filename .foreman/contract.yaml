@@ -33,6 +33,6 @@ start:
     --var PARTNER_APP_ORIGIN:https://127.0.0.1:8787
   health: curl -fsSk https://127.0.0.1:8787/health
   timeout_seconds: 120
-# Each value is generated for the run; production's are never used.
+# Each value comes from FOREMAN_TEST_<NAME> on the Foreman host (FOREMAN_TEST_PARTNER_AUTH_SECRET here), a generated local value set there; production's is never used.
 secrets: [PARTNER_AUTH_SECRET]
 verify_skill: .claude/skills/verify-engine/SKILL.md
