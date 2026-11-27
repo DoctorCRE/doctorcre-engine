@@ -1,14 +1,53 @@
 # Clients
 
-- [ ] On a computer, Search, Status, Client type, Pipeline, Sort, refresh and Clear share one toolbar row that stays in place. The client count and the All, Joe and Dell chips sit in the top bar beside the title. The list fills the page below and scrolls inside itself, and the page does not scroll.
-- [ ] Filters apply as they change, so there is no Apply. Clear shows only when a search, filter, sort or owner is set, and undoes them all. Active-filter chips show only on a phone, with Clear all. On a phone, filters fold under Filters and sort so the first client shows at the top of the screen.
-- [ ] The list and drawer show each of the client's deals from Open on the Deals board. Each name opens that deal at `/deals?deal=<id>`.
-- [ ] A client with no active deal has no deal link. The list shows recorded facts without an alarm badge for inactive clients or a list of blank fields. The list and drawer use Territory.
-- [ ] The drawer uses the glossary’s How found labels, including Not recorded. It shows clean North American phone numbers as `(202) 555-0100` and preserves other numbers and extensions. The drawer labels the owner.
+The owner approved this design on 2026-11-25. Check each line on a signed-in app against the practice copy, at 1280x640 and 1440x900 on a computer and at 390px on a phone, with made-up data, with Color assist on and off.
+
+## Opening tiles
+
+- [ ] Clients opens on tiles. The top bar has the title, the client count, **Find a client**, the **All**, **Joe** and **Dell** chips, and **New client**.
+- [ ] The tiles are **All clients**, then **National Accounts**, then one tile for each practice type that has at least one client, ordered from most clients to fewest, then **Other** and **Not set**. A practice type with no clients has no tile.
+- [ ] **Other** holds clients who are not healthcare. It waits on the practice type list that marks which types are healthcare.
+- [ ] **Not set** holds clients with no practice type. Inside it, **Set practice types** starts Doc. Doc proposes a practice type for each of those clients from its records and its doctors' specialties, and the partner approves the list.
+- [ ] Each tile shows its total and three smaller counts: Open deal, Past client, and No deal yet. **All**, **Joe**, and **Dell** recount every tile.
+- [ ] Clicking **All clients** opens the full table. Clicking a practice type tile, **Other**, or **Not set** opens that tile's table. Clicking **National Accounts** opens the National Accounts tiles.
+
+## Inside a tile
+
+- [ ] The top bar reads `Clients / ` and the tile name and its count, such as `Clients / Dental 64`. **Clients** goes back to the tiles. **Find in** and the tile name, such as "Find in Dental", narrows the table as the partner types.
+- [ ] A row of chips with counts filters by status: Open deal, Past client, Engaged, Roster, Cold, and Paused.
+- [ ] The columns are Name, Status, Open deal, Client type, Territory, Owner, and Updated. **All clients** also has a Practice type column. The header row stays in place while the table scrolls. Screen readers skip it, and each row still reads its own labels. Each client is one line. Clicking a column heading sorts by that column.
+- [ ] A client with an open deal shows the deal's name in Open deal, and the name opens the deal at `/deals?deal=<id>`. A client with no active deal has no deal link. The table and the card use Territory. The list shows recorded facts without an alarm badge for inactive clients or a list of blank fields.
+- [ ] Filters apply as they change, so there is no Apply. When nothing matches, the table shows one line, such as "No clients match these filters", with **Clear all filters** when filters are on.
+- [ ] On a computer the page does not scroll. The table scrolls inside itself under its header row. A row opens the client's card beside the table.
+
+## National Accounts
+
+- [ ] **National Accounts** opens a tile for each account, with its location count and its owner, plus an **All locations** tile.
+- [ ] An account's tile opens the table of its locations. **All locations** opens the table of every location. Those locations are ordinary clients, so each also counts in its practice type or in Other.
+
+## A client's card
+
+- [ ] Clicking a row opens the client's card beside the table. The table stays, so the next client is one click away. The x closes the card. On a phone the card opens full screen.
+- [ ] Under **Deals**, each of the client's deals has its own diagram, open deals first. A client with no deals has no Deals section. The deal's name above a diagram opens the deal.
+- [ ] The card uses the glossary’s How found labels, including Not recorded. It shows clean North American phone numbers as `(202) 555-0100` and preserves other numbers and extensions. The card labels the owner.
 - [ ] Notes expand with More when there is more to read. The view omits file citations. Details opens the record reference. An old record code in a note, such as `C-013`, reads as that record's name and opens it; one that matches no record reads "an old record".
 - [ ] Recent activity starts with the newest few entries and expands with Show all. Each entry uses plain words without email addresses. An old record code such as `C-013` reads as that record's name. A recorded deal opens from the entry, and a saved email can be read from the entry.
 - [ ] Recent activity shows, once each, the work filed to the client's deals and to a person's current companies or a company's current people. A person's coworkers at those companies are left out (coordinator, 2026-11-24). Current means as of the partners' Chicago day. An entry filed elsewhere names where: "on deal Example Suite Lease" for a deal, and just the name, such as "on Example Dental Group", for a company or person. A next step names its owner, such as "Joe’s step", so two partners' steps with the same words read as two steps (coordinator, 2026-11-24).
 - [ ] A person who is both a client and a lead has one Recent Activity history. Either role reference opens that history.
 - [ ] On engine sign-in, Closing anniversaries opens from More. It shows every closed-won deal whose closing anniversary falls within the next 30 Chicago days, with the client, deal, years and date. The client and deal names open those records. Blank names show Unnamed client or Unnamed deal. With no matches, it shows an empty state and the next anniversary date, if any. It offers retry on failure.
-- [ ] On a computer a header row under the toolbar names the columns: Name, Status, Practice type, Deal type, Client type, Territory, Owner, Updated. It stays in place while the list scrolls. Screen readers skip it, and each row still reads its own labels. Each client row is one line.
-- [ ] An empty list shows one line, such as "No clients match these filters", with Clear all filters when filters are on.
+- [ ] **Edit** and **Link to someone** work as before.
+
+## The deal diagram
+
+- [ ] The top box is the client. The partner who owns the deal hangs off the client and says Deal owner. A vendor a partner introduced hangs off that partner. A vendor the client brought in hangs off the client, beside the partner.
+- [ ] **Chosen** is green with a check. **Introduced** is gray with an open ring. A vendor turns green when it is added to the deal. Until then it stays gray. Each vendor shows its role first, such as "Lender · Chosen". Names on diagrams stay plain. The green is on the box and its check.
+- [ ] Two or more introduced vendors under one box sit stacked like a solitaire pile behind the top card, with the card edges beneath visible and a count. One click fans them out. One click stacks them again.
+- [ ] A vendor nobody recorded a source for hangs from a dashed line under "Brought in by: not recorded". It is never assumed to be the client's own. **Set** asks once per vendor whether Dell introduced them, Joe introduced them, or the client brought them.
+- [ ] The diagram also shows a vendor who referred the client to us, and the other partner when he introduced someone on that deal.
+- [ ] Clicking a vendor box shows who introduced them, when, and the note, with **Mark chosen**, **Open**, and **Remove from this deal**. **Mark chosen** puts the vendor on the deal in that role and turns the box green. **Add vendor** asks for the vendor, the role, and who brought them in: Dell, Joe, or the client.
+- [ ] The open icon on a deal shows the same diagram large, in place of the table, with dates under each name. The x returns to the table. The large view is for a computer only.
+
+## On a phone
+
+- [ ] Tiles are two across, with the name and the number. The page scrolls.
+- [ ] A client's card opens full screen. The diagrams are the same trees at full width. Boxes are 44 px tall for a finger.
