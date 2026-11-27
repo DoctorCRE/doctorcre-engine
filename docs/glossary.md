@@ -104,6 +104,18 @@ A vendor with no relationship level and no ruling: nobody has judged it yet. It 
 _Avoid_: unrated, workable
 _Database_: no `party_role.relationship_level` and no `party_role.disposition` on the vendor role.
 
+**Chosen**:
+A vendor who got the work on a deal. On a relationship diagram the box is green with a check. The word is Chosen, not Won, because Won already means a deal the team closed. Chosen is read from the vendor being on the deal. It is not stored as its own fact.
+_Avoid_: won
+_Database_: `deal_vendor_assignment` today, when the vendor is on the deal.
+_New database_: `deal_party`, when the vendor is on the deal.
+
+**Introduced**:
+A vendor brought in for a deal who is not on the deal yet. On a relationship diagram the box is gray with an open ring.
+_Avoid_: intro
+_Database_: `party_link` and `party_link_deal` today, when the introduction is tied to the deal and the vendor is not in `deal_vendor_assignment`.
+_New database_: an `introduction` tied to the deal, when the vendor is not in `deal_party`.
+
 **Introduction**:
 A vendor introducing someone to the team, or the team introducing someone to a vendor, and the deal it led to. One the team made names the user who made it.
 _Avoid_: intro, link, referral (on its own)
