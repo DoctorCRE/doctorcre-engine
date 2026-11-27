@@ -40,6 +40,7 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 ## The deal diagram
 
 - [ ] The top box is the client. The partner who owns the deal hangs off the client and says Deal owner. A vendor a partner introduced hangs off that partner. A vendor the client brought in hangs off the client, beside the partner.
+- [ ] The diagrams come from the engine's one read of the client's deals, including deals of a person client's current companies and a company client's current people (`GET /api/engine/clients/{id}/deals`, [new-database.md](../new-database.md)).
 - [ ] **Chosen** is green with a check. **Introduced** is gray with an open ring. A vendor turns green when it is added to the deal. Until then it stays gray. Each vendor shows its role first, such as "Lender · Chosen". Names on diagrams stay plain. The green is on the box and its check.
 - [ ] Two or more introduced vendors under one box sit stacked like a solitaire pile behind the top card, with the card edges beneath visible and a count. One click fans them out. One click stacks them again.
 - [ ] A vendor nobody recorded a source for hangs from a dashed line under "Brought in by: not recorded". It is never assumed to be the client's own. **Set** asks once per vendor whether Dell introduced them, Joe introduced them, or the client brought them.

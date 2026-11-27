@@ -321,6 +321,7 @@ export type Verb =
 	| "read-calendar-meetings-v1"
 	| "read-call-outcomes"
 	| "read-changes"
+	| "read-client-deals"
 	| "read-client-leases"
 	| "read-closing-anniversaries"
 	| "read-deal-document-text"

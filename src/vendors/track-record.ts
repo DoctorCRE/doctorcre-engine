@@ -96,6 +96,9 @@ from (select case when bool_and(s.deal_history_verified_at is not null)
 	from vendor s where s.party_id = v.party_id and s.merged_into is null) c
 left join ${associations} e on e.party_id = v.party_id)`;
 
+// A deal_party role `r` puts its party on the deal as a vendor, in a category or none.
+export const isVendorRole = sql<boolean>`'vendor' in (r.slug, r.category_of)`;
+
 const nextVendorActivity = sql`(a.from_party_id = p.id or exists (
 	select from activity_about aa where aa.activity_id = a.id and aa.party_id = p.id))`;
 
@@ -149,7 +152,7 @@ export const nextTrackRecordFacts = sql<{
 	) as facts
 from (select min(dp.created_at) as first_worked_at, max(dp.created_at) as last_worked_at
 	from deal_party dp join role r on r.slug = dp.role
-	where dp.party_id = p.id and 'vendor' in (r.slug, r.category_of)
+	where dp.party_id = p.id and ${isVendorRole}
 		and exists (select from change c where c.table_name = 'deal_party' and c.action = 'insert'
 			and c.record = jsonb_build_object('deal_id', dp.deal_id, 'party_id', dp.party_id, 'role', dp.role)
 			and c.changed_by_job is distinct from 'old_system' and (c.new_value->>'created_at')::timestamptz = dp.created_at)

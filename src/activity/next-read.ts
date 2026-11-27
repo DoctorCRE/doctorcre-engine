@@ -1,4 +1,4 @@
-import { sql, type Transaction } from "kysely";
+import { type RawBuilder, sql, type Transaction } from "kysely";
 import { hasToolCallMarkup, isoMillis } from "../answer.ts";
 import { checkInWording, homeDayAt } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
@@ -28,13 +28,24 @@ async function activityCandidates(
 
 type FiledOn = { kind: "deal" | "company" | "person"; name: string };
 
-// Rank 0 is the record; a client adds its deals, then a person's current companies (not coworkers) or a company's current people.
+// A person client's current companies (not coworkers), or a company client's current people, on the partners' day.
+export function clientLinkedParties(client: string, today: RawBuilder<string>) {
+	const current = sql`(pc.started_on is null or pc.started_on <= ${today})
+		and (pc.ended_on is null or pc.ended_on > ${today})`;
+	return sql<{ party_id: string }>`
+		select pc.company_id as party_id
+		from client c join party_company pc on pc.person_id = c.party_id and ${current}
+		where c.party_id = ${client}
+		union
+		select pc.person_id
+		from client c join party_company pc on pc.company_id = c.party_id and ${current}
+		where c.party_id = ${client}`;
+}
+
+// Rank 0 is the record; a client adds its deals, then its linked companies (2) or people (3).
 function filedTo(kind: string, id: string, now: string) {
 	if (kind === "deal")
 		return sql`select ${id}::uuid as deal_id, null::uuid as party_id, 0 as rank, null::text as kind, null::text as name`;
-	const today = homeDayAt(sql`${now}::timestamptz`);
-	const current = sql`(pc.started_on is null or pc.started_on <= ${today})
-		and (pc.ended_on is null or pc.ended_on > ${today})`;
 	return sql`
 		select null::uuid as deal_id, ${id}::uuid as party_id, 0 as rank, null::text as kind, null::text as name
 		union all
@@ -42,13 +53,9 @@ function filedTo(kind: string, id: string, now: string) {
 		from client c join deal_party dp on dp.party_id = c.party_id and dp.role = 'client'
 		join deal d on d.id = dp.deal_id where c.party_id = ${id}
 		union
-		select null::uuid, p.id, 2, p.kind, p.name
-		from client c join party_company pc on pc.person_id = c.party_id and ${current}
-		join party p on p.id = pc.company_id where c.party_id = ${id}
-		union
-		select null::uuid, p.id, 3, p.kind, p.name
-		from client c join party_company pc on pc.company_id = c.party_id and ${current}
-		join party p on p.id = pc.person_id where c.party_id = ${id}`;
+		select null::uuid, p.id, case p.kind when 'company' then 2 else 3 end, p.kind, p.name
+		from (${clientLinkedParties(id, homeDayAt(sql`${now}::timestamptz`))}) linked
+		join party p on p.id = linked.party_id`;
 }
 
 const filedOn = (row: ReturnType<typeof sql.ref>) =>
