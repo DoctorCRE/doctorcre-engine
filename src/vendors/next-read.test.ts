@@ -90,7 +90,14 @@ async function drawer(ref: string) {
 }
 
 test("vendor lists keep two vendors, current owners, refs, and live counts", async () => {
-	assert.partialDeepStrictEqual(await list("q=Example"), {
+	const listed = await list("q=Example");
+	assert.ok(listed && typeof listed === "object" && "rows" in listed);
+	assert.ok(Array.isArray(listed.rows));
+	for (const row of listed.rows) {
+		assert.ok(row && typeof row === "object");
+		assert.equal("recorded_disposition_workable" in row, false);
+	}
+	assert.partialDeepStrictEqual(listed, {
 		total: 2,
 		rows: [
 			{
@@ -217,11 +224,13 @@ test("a vendor's details show the ruling and owner of its vendor role, not of it
 			values ('${builder}', 'vendor', 'avoid', 'Made-up reason', '${dell}');
 		insert into outside_id (source, value, party_id) values ('old_system', '${builder}', '${builder}');
 		commit;`);
-	assert.partialDeepStrictEqual(await drawer(builder), {
+	const record = await drawer(builder);
+	assert.ok(record && typeof record === "object");
+	assert.equal("recorded_disposition_workable" in record, false);
+	assert.partialDeepStrictEqual(record, {
 		recorded_category: "contractor",
 		recorded_disposition: "avoid",
 		recorded_disposition_label: "Avoid",
-		recorded_disposition_workable: false,
 		owner_label: "Example Dell",
 	});
 });
