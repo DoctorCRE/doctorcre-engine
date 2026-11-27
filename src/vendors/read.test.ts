@@ -137,7 +137,6 @@ const row = (n: number, name: string, fields: object) => ({
 	recorded_stage_label: null,
 	recorded_disposition: "active",
 	recorded_disposition_label: "Example active",
-	recorded_disposition_workable: true,
 	relationship_level: null,
 	relationship_level_label: null,
 	referral_active: null,
@@ -170,6 +169,9 @@ test("the vendor list answers the old JSON for its rows, facets, filters and leg
 			);
 
 		const { text, json } = await ask("?contract=vendor-directory.v1");
+		for (const listed of json.rows) {
+			assert.equal("recorded_disposition_workable" in listed, false);
+		}
 		assert.equal(
 			text,
 			JSON.stringify({
@@ -322,10 +324,10 @@ insert into record_flag (id, subject_type, subject_id, kind, value, source, obse
 `;
 
 const OLD_KEYS =
-	"id ref name party_kind city state county title phone cell email contact_state contact_state_reason contact_state_until contact_state_cadence recorded_category recorded_category_label recorded_stage recorded_stage_label recorded_disposition recorded_disposition_label recorded_disposition_workable relationship_level relationship_level_label relationship_level_note verticals territory offers seeking rivalry_group originated referral_active is_target out_of_market last_touch relationship loan_programs intro_notes links_label owner_label owned_by_viewer record_version created_at updated_at";
+	"id ref name party_kind city state county title phone cell email contact_state contact_state_reason contact_state_until contact_state_cadence recorded_category recorded_category_label recorded_stage recorded_stage_label recorded_disposition recorded_disposition_label relationship_level relationship_level_label relationship_level_note verticals territory offers seeking rivalry_group originated referral_active is_target out_of_market last_touch relationship loan_programs intro_notes links_label owner_label owned_by_viewer record_version created_at updated_at";
 // The same keys, and people, in the order PostgreSQL's jsonb keeps them.
 const JSONB_KEYS =
-	"id ref cell city name email phone state title county offers people seeking is_target territory verticals created_at last_touch originated party_kind updated_at intro_notes links_label owner_label relationship contact_state loan_programs out_of_market rivalry_group record_version recorded_stage owned_by_viewer referral_active recorded_category relationship_level contact_state_until contact_state_reason recorded_disposition recorded_stage_label contact_state_cadence recorded_category_label relationship_level_note relationship_level_label recorded_disposition_label recorded_disposition_workable";
+	"id ref cell city name email phone state title county offers people seeking is_target territory verticals created_at last_touch originated party_kind updated_at intro_notes links_label owner_label relationship contact_state loan_programs out_of_market rivalry_group record_version recorded_stage owned_by_viewer referral_active recorded_category relationship_level contact_state_until contact_state_reason recorded_disposition recorded_stage_label contact_state_cadence recorded_category_label relationship_level_note relationship_level_label recorded_disposition_label";
 
 // A person and its research, in jsonb's key order.
 const finding = (status: string, n?: number) => ({
@@ -365,6 +367,7 @@ test("a vendor's details answer the old JSON, and v2 adds its people in jsonb's 
 		const v1 = await ask(
 			`/${id(1).toUpperCase()}?contract=vendor-directory.v1`,
 		);
+		assert.equal("recorded_disposition_workable" in v1.record, false);
 		// Every key in the old order, then the ones this vendor fills.
 		const record: Record<string, unknown> = {
 			...Object.fromEntries(OLD_KEYS.split(" ").map((key) => [key, null])),
@@ -379,7 +382,6 @@ test("a vendor's details answer the old JSON, and v2 adds its people in jsonb's 
 			recorded_stage_label: "Example warm",
 			recorded_disposition: "active",
 			recorded_disposition_label: "Example active",
-			recorded_disposition_workable: true,
 			relationship_level: 1,
 			relationship_level_label: "Example one",
 			relationship_level_note: "Example note",
