@@ -45,6 +45,11 @@ export type ClientQuery = ListQuery<"clients", (typeof SORTS)[number]> & {
 	status: string | null;
 	type: string | null;
 	pipeline: (typeof PIPELINES)[number];
+	// "" asks for clients with no practice type.
+	practice_type?: string;
+	// "any", or one account's party id.
+	national_account?: string;
+	tiles?: true;
 };
 export type Stamp = { observedAt: Date; correlationId: string };
 
@@ -499,6 +504,15 @@ const nextClientRows = (
 const nextPartnerId = (db: Transaction<NextDB>, slug: string) =>
 	db.selectFrom("app_user").select("id").where("slug", "=", slug);
 
+const currentAccountLocations = (db: Transaction<NextDB>) =>
+	db
+		.selectFrom("client_brand as b")
+		.innerJoin("national_account as na", "na.party_id", "b.brand_id")
+		.select(["b.location_id", "b.brand_id"])
+		.where(
+			sql<boolean>`daterange(b.started_on, b.ended_on) @> (now() at time zone 'America/Chicago')::date`,
+		);
+
 function matchingNextClients(
 	db: Transaction<NextDB>,
 	query: ClientQuery,
@@ -528,7 +542,86 @@ function matchingNextClients(
 	if (type !== null) clients = clients.where(nextClientType, "=", type);
 	if (pipeline !== "any")
 		clients = clients.where(nextPipeline, "is", PIPELINE[pipeline]);
+	const { practice_type, national_account } = query;
+	if (practice_type === "") clients = clients.where("v.vertical", "is", null);
+	else if (practice_type !== undefined)
+		clients = clients.where(
+			sql`lower(v.vertical)`,
+			"=",
+			practice_type.toLowerCase(),
+		);
+	if (national_account !== undefined)
+		clients = clients.where(({ exists }) =>
+			exists(
+				currentAccountLocations(db)
+					.whereRef("b.location_id", "=", sql.ref("client.party_id"))
+					.$if(national_account !== "any", (q) =>
+						q.where("b.brand_id", "=", national_account),
+					),
+			),
+		);
 	return clients;
+}
+
+// The three small counts under a tile; the rest of a tile's clients have no deal yet.
+const mix = [
+	sql<number>`count(*)::int`.as("total"),
+	sql<number>`(count(*) filter (where cs.status = 'active_deal'))::int`.as(
+		"open_deal",
+	),
+	sql<number>`(count(*) filter (where cs.status = 'past_client'))::int`.as(
+		"past_client",
+	),
+];
+type Mix = { total: number; open_deal: number; past_client: number };
+const NONE: Mix = { total: 0, open_deal: 0, past_client: 0 };
+const tile = ({ total, open_deal, past_client }: Mix) => ({
+	total,
+	open_deal,
+	past_client,
+	no_deal_yet: total - open_deal - past_client,
+});
+
+// Practice types are free text, so spellings that differ only in case share a tile.
+async function readTiles(db: Transaction<NextDB>, clients: NextClients) {
+	const types = await clients
+		.select([
+			sql<string | null>`mode() within group (order by v.vertical)`.as(
+				"practice_type",
+			),
+			...mix,
+		])
+		.groupBy(sql`lower(v.vertical)`)
+		.orderBy("total", "desc")
+		.orderBy(sql`lower(v.vertical)`)
+		.execute();
+	const accounts = await clients
+		.innerJoin(
+			currentAccountLocations(db).as("a"),
+			"a.location_id",
+			"client.party_id",
+		)
+		.select([
+			sql<number>`count(distinct a.brand_id)::int`.as("accounts"),
+			...mix,
+		])
+		.executeTakeFirstOrThrow();
+	const all = types.reduce(
+		(sum, row) => ({
+			total: sum.total + row.total,
+			open_deal: sum.open_deal + row.open_deal,
+			past_client: sum.past_client + row.past_client,
+		}),
+		NONE,
+	);
+	return {
+		all: tile(all),
+		national_accounts: { accounts: accounts.accounts, ...tile(accounts) },
+		practice_types: types.flatMap(({ practice_type, ...counts }) =>
+			practice_type === null ? [] : [{ practice_type, ...tile(counts) }],
+		),
+		not_set: tile(types.find((row) => row.practice_type === null) ?? NONE),
+	};
 }
 
 export async function readNextClientList(
@@ -572,6 +665,7 @@ export async function readNextClientList(
 		{
 			rows: rows.map((row) => shaped(row, query.contract)),
 			facets: { statuses: nextStatuses, types },
+			...(query.tiles && { tiles: await readTiles(db, matching) }),
 			partial: null,
 		},
 		stamp,

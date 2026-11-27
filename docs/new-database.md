@@ -377,6 +377,8 @@ The directory uses the computed client status, the client type and vertical, and
 
 Clients list and drawer requests with `contract=vendor-directory.v2` include `active_deals: [{ id, name }]`, ordered by name and ID. The next read uses the same open-deal rule as the Deals board, including the invoice date. The public read uses the open deal’s phase, outcome and dates. Earlier requests keep their response shape.
 
+Asked with `tiles=true`, the next list also answers `tiles` for the opening tiles, counted over the clients the request matches, so `owner` recounts them: `all`, `national_accounts`, `practice_types` and `not_set`. Each has `total`, `open_deal` (status active deal), `past_client` and `no_deal_yet` (every other status). `national_accounts` counts current locations of a national account and adds `accounts`, the accounts among them. `practice_types` lists `{ practice_type, ... }` from most clients to fewest, then by name. Practice types are free text, so spellings that differ only in case share one entry, named by the most common spelling. `practice_type=<name>` lists one tile's clients, ignoring case, and an empty `practice_type=` lists those with none. `national_account=any` lists every current location and `national_account=<id>` one account's. The public-schema read refuses `tiles` and both filters.
+
 The next recent activity read includes a deal ID when an entry names one deal, and the saved email subject when present. The Clients drawer uses the deal ID for navigation and can open the saved email text inline.
 
 #### National account saves
