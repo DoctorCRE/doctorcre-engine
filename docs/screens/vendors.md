@@ -71,7 +71,14 @@ Vendors opens on a tile for each vendor category.
 - [ ] The relationship is a button, such as "Building ▾". It lists the four levels and Not rated, then **Park** and **Avoid**, then **Want to meet**, which turns on and off. Park and Avoid ask for a reason before they save. The reason shows beside the button from then on.
 - [ ] **Edit** and **Link to someone** work as before.
 - [ ] Then the next step, Contacts & offices, Conversations, Relationships, Partnership (deals worked and referred, offers, seeking) and Where.
-- [ ] **Relationships** keeps the place for the relationship diagram, which is designed with Clients.
+- [ ] **Relationships** starts with four counts: **Sent us**, **We sent them**, **Chosen**, and **Knows**.
+- [ ] The vendor is the top box. Named groups hang under it: **Relationship partner** (Joe or Dell), **Sent us**, **We sent them**, **On deals, source not recorded** as a dashed line, **Knows** with a diamond, and **Can introduce us to** with a dashed ring.
+- [ ] **Sent us** shows each client the vendor referred. Green with a check names the deal the referral became, such as "Voss Dental, first office · Deal closed". Gray with an open ring says "No deal yet".
+- [ ] **We sent them** shows each client a partner introduced to this vendor. Green with a check is **Chosen** on that deal. Gray with an open ring is **Introduced**.
+- [ ] **On deals, source not recorded** shows deals the vendor worked where nobody wrote down who brought them. Those hang from a dashed line.
+- [ ] **Knows** shows people and companies the vendor knows, each with a diamond. **Can introduce us to** shows an offer that has not happened yet, each with a dashed ring.
+- [ ] Names on diagrams stay plain. The green is on the box and its check.
+- [ ] The large view shows the same groups with **Sent us** on the left and **We sent them** on the right. The partner sits above and who they know sits below. That view is for a computer only.
 - [ ] A vendor's Territory shows once, under Where.
 - [ ] A person vendor is listed under Contacts & offices with their own phone, mobile and email. The card does not repeat Phone, Mobile or Email elsewhere. A contact shows Phone and Mobile as separate fields. A company vendor keeps its own company line.
 - [ ] Contact status shows only when it is not Active, and reads "Nurture", "Paused" or "Do not contact", never the stored code.

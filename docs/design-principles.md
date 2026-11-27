@@ -58,7 +58,7 @@ A detail page may add back/title, the facts line its screen file requires and a 
 
 **Seen.** Gr8r Studio shows tasks as rows in its list and table, and as cards only on its board, where each card is dragged between columns. Its Home panels hold plain rows. Linear's inbox and T3 Code's thread list are rows.
 
-**Rule.** Records that a partner scans or compares in a list are rows. Cards belong in every board lane, whether or not a partner drags them, in Home tiles, and where a screen file names cards, such as Closed deals, Lost deals and National Accounts. A deal card in a phase column shows the deal's name, its owner and one small badge when the deal needs attention. No card sits inside another card.
+**Rule.** Records that a partner scans or compares in a list are rows. Cards belong in every board lane, whether or not a partner drags them, in Home tiles, and where a screen file names cards, such as Closed deals, Lost deals and National Accounts. A deal card in a phase column shows the deal's name, its owner and one small badge when the deal needs attention. No card sits inside another card. Boxes inside a relationship diagram on a client or vendor card are marks on a drawing, not nested cards.
 
 **Test.** Each card in the screenshot sits in a board lane, in a Home tile, or where its screen file names cards. A deal card in a phase column shows no next step, due date, late count or automatic-move notice. No bordered or shadowed box holds another one.
 
