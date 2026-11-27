@@ -49,6 +49,7 @@ const LIST_FIELDS = {
 		"disposition",
 		"territory",
 		"quiet",
+		"no_category",
 	],
 };
 const RECORD_FIELDS = ["viewer", "contract"];
@@ -160,7 +161,15 @@ const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
 	disposition: slug(params, "disposition"),
 	// Absent unless asked, so an unfiltered list keeps its old echo.
 	...(oneOf(params, "quiet", ["true"], null) && { quiet: true }),
+	...(noCategory(params) && { no_category: true }),
 });
+
+function noCategory(params: URLSearchParams) {
+	const asked = oneOf(params, "no_category", ["true"], null) !== null;
+	if (asked && params.has("category"))
+		throw invalid({ parameter: "no_category", reason: "unsupported" });
+	return asked;
+}
 
 // The old door's correlation id: the caller's own, if it is a UUID.
 function stampOf(c: Context<DirectoryEnv>): Stamp {
@@ -262,6 +271,8 @@ directory.get("/vendors", (c) =>
 			};
 		if (query.quiet)
 			throw invalid({ parameter: "quiet", reason: "unsupported" });
+		if (query.no_category)
+			throw invalid({ parameter: "no_category", reason: "unsupported" });
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
 );

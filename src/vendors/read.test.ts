@@ -56,6 +56,11 @@ test("the vendor list refuses client keys and bad vendor filters with the old bo
 			invalid({ parameter: "quiet", reason: "unsupported" }),
 		],
 		[
+			"?no_category=true",
+			400,
+			invalid({ parameter: "no_category", reason: "unsupported" }),
+		],
+		[
 			`?sort=territory&territory=${" x".repeat(40)}`,
 			503,
 			{ error: "DEPENDENCY_UNAVAILABLE" },
