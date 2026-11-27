@@ -85,6 +85,8 @@ if (args.includes("auth")) {
 							input,
 							credential: process.env.DOC_LINK_CREDENTIAL,
 							inheritedKey: process.env.ANTHROPIC_API_KEY,
+							user: process.env.USER,
+							logname: process.env.LOGNAME,
 						})
 					: "The requested record is open.",
 			sources: ["deal:example"],
