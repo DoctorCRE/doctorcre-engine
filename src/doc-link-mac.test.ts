@@ -422,6 +422,19 @@ const denyOnlyCases: [string, boolean, (directory: string) => Promise<void>][] =
 			},
 		],
 		[
+			"an empty subdirectory",
+			true,
+			(directory) => mkdir(join(directory, "empty")),
+		],
+		[
+			"a directory named like the settings file",
+			true,
+			async (directory) => {
+				await unlink(join(directory, "managed-settings.json"));
+				await mkdir(join(directory, "managed-settings.json"));
+			},
+		],
+		[
 			"a linked settings file",
 			true,
 			async (directory) => {

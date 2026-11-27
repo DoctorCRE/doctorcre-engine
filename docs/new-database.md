@@ -2154,7 +2154,7 @@ The confirmation locks the partner's turn and uses the existing `runNextSave` re
 
 ### Planned Doc changes
 
-Decisions 217 to 220 add these. None is built yet. The behavior above holds until each unit lands and moves its part into the sections above.
+Decisions 218 to 220 add these. None is built yet. The behavior above holds until each unit lands and moves its part into the sections above.
 
 #### Model choice
 
