@@ -37,7 +37,6 @@ export type ClientDeal = {
 	open: boolean;
 	closed_on: string | null;
 	owner: string;
-	owner_name: string;
 	vendors: Vendor[];
 	introductions: Introduction[];
 };
@@ -88,11 +87,9 @@ async function readClientDeals(db: Transaction<DB>, client: string) {
 		.as("deals");
 	const { rows } = await sql<ClientDeal>`
 		select deals.id, deals.name, deals.phase, ph.label as phase_label,
-			${isOpenBoardDeal} as open, deals.closed_on, deals.owner, partner.name as owner_name,
+			${isOpenBoardDeal} as open, deals.closed_on, deals.owner,
 			${vendors} as vendors, ${introductions} as introductions
 		from ${deals}
-		join app_user au on au.slug = deals.owner
-		join party partner on partner.id = au.id
 		left join phase ph on ph.slug = deals.phase
 		order by open desc, lower(deals.name), deals.id`.execute(db);
 	return { deals: rows };
