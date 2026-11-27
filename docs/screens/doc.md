@@ -33,7 +33,7 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 ## A new chat
 
 - [ ] **New chat** clears the typing box and starts an empty chat. The first send creates the conversation.
-- [ ] An empty chat shows one line in the middle of the page, "What do you need?", with the typing box under it. The box's placeholder reads "Ask about a deal, a lead, a client or your mail". After the first question the box moves to the bottom.
+- [ ] A new, empty chat shows the typing box centered under "What do you need?" with the hint "Ask about a deal, a lead, a client or your mail". After the first question the box docks at the bottom and its hint reads "Ask Doc". On a phone it sits just above the bottom menu.
 - [ ] A partner with no chats sees "No conversations yet" in the list and can send a first question.
 
 ## What each control does
@@ -53,7 +53,8 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 | **Save note**, **Save next step**, **Save draft and open review**, **Save revision** | See [Confirm a save](#confirm-a-save)                                                                                              |
 | **Retry**                                                                            | See [Ask a question](#ask-a-question) and [Confirm a save](#confirm-a-save)                                                        |
 
-- [ ] **Send**, **New chat** and **Recent chats** are icons. Each keeps its name for screen readers and on hover.
+- [ ] **Send**, **New chat** and **Recent chats** are icon buttons with those names for screen readers and on hover: a round up-arrow for **Send**, a pencil-on-square for **New chat**, and the chats list toggle for **Recent chats**.
+- [ ] The character count is hidden until the question reaches 3,500 characters, and turns red past the 4,000 limit.
 
 ## Ask a question
 
