@@ -1,0 +1,341 @@
+er:
+  format: mermaid
+  showColumnTypes:
+    related: true
+    primary: true
+viewpoints:
+  - id: people
+    name: People
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.deal
+      - next.do_not_contact # area
+      - next.email
+      - next.how_found
+      - next.job
+      - next.merged_party # area
+      - next.outside_id # area
+      - next.party # area
+      - next.party_company # area
+      - next.party_email # area
+      - next.party_phone # area
+  - id: relationships
+    name: Relationships
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.claim_type # area
+      - next.client
+      - next.deal
+      - next.how_found # area
+      - next.introduction # area
+      - next.job
+      - next.lead_lane
+      - next.party
+      - next.party_link # area
+      - next.party_role # area
+      - next.party_specialty # area
+      - next.relationship_level # area
+      - next.role # area
+      - next.specialty # area
+      - next.stage
+  - id: clients
+    name: Clients
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.client # area
+      - next.client_brand # area
+      - next.client_research # area
+      - next.client_research_fact # area
+      - next.client_type # area
+      - next.client_vertical # area
+      - next.job
+      - next.national_account # area
+      - next.national_account_owner # area
+      - next.party
+      - next.party_role
+  - id: vendors-territories
+    name: Vendors Territories
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.job
+      - next.market # area
+      - next.market_city # area
+      - next.market_county # area
+      - next.party
+      - next.party_role
+      - next.party_territory # area
+      - next.party_territory_review # area
+      - next.territory # area
+      - next.territory_piece # area
+      - next.vendor_loan_program # area
+      - next.vendor_vertical # area
+  - id: deals
+    name: Deals
+    desc: Tables and their referenced records.
+    tables:
+      - next.activity
+      - next.activity_about
+      - next.app_user
+      - next.deal # area
+      - next.deal_kind # area
+      - next.deal_open_name # area
+      - next.deal_party # area
+      - next.deal_phase_change # area
+      - next.deal_reason # area
+      - next.deal_star # area
+      - next.job
+      - next.lease
+      - next.market
+      - next.party
+      - next.party_role
+      - next.phase # area
+      - next.role
+      - next.stage # area
+      - next.typical_length # area
+  - id: imported-deals
+    name: Imported Deals
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.deal
+      - next.deal_phase_change
+      - next.imported_automatic_phase_move # area
+      - next.imported_deal_board # area
+      - next.imported_deal_history # area
+      - next.imported_deal_invoiced # area
+      - next.imported_deal_owner # area
+      - next.imported_deal_party # area
+      - next.job
+      - next.party
+      - next.phase
+      - next.role
+  - id: property
+    name: Property
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.building_ownership # area
+      - next.deal
+      - next.deal_property # area
+      - next.job
+      - next.market
+      - next.measurement # area
+      - next.party
+      - next.party_role
+      - next.platform_metric
+      - next.post
+      - next.property # area
+      - next.space_need # area
+      - next.suite # area
+  - id: leases
+    name: Leases
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.critical_date # area
+      - next.deal
+      - next.deal_party
+      - next.deal_property
+      - next.document
+      - next.job
+      - next.lease # area
+      - next.lease_option # area
+      - next.lease_suite # area
+      - next.lease_version # area
+      - next.offer
+      - next.party
+      - next.property
+      - next.suite
+  - id: offers
+    name: Offers
+    desc: Tables and their referenced records.
+    tables:
+      - next.activity
+      - next.activity_about
+      - next.app_user
+      - next.candidate
+      - next.claim_type
+      - next.deal
+      - next.deal_party
+      - next.deal_property
+      - next.document
+      - next.how_found
+      - next.job
+      - next.next_step
+      - next.offer # area
+      - next.offer_claim # area
+      - next.offer_document # area
+      - next.party
+      - next.phase
+      - next.property
+      - next.proposal # area
+      - next.stage
+  - id: commissions
+    name: Commissions
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.commission # area
+      - next.commission_payment # area
+      - next.commission_share # area
+      - next.commission_tier # area
+      - next.deal
+      - next.job
+      - next.party
+  - id: documents
+    name: Documents
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.deal
+      - next.document # area
+      - next.document_extraction # area
+      - next.document_kind # area
+      - next.job
+      - next.party
+      - next.party_document # area
+  - id: email
+    name: Email
+    desc: Tables and their referenced records.
+    tables:
+      - next.activity
+      - next.app_user
+      - next.doc_turn
+      - next.document
+      - next.email # area
+      - next.email_document # area
+      - next.email_mailbox # area
+      - next.email_recipient # area
+      - next.email_summary # area
+      - next.job
+      - next.reply_draft # area
+      - next.reply_draft_document # area
+  - id: leads
+    name: Leads
+    desc: Tables and their referenced records.
+    tables:
+      - next.activity
+      - next.activity_about
+      - next.app_user
+      - next.candidate # area
+      - next.email_mailbox
+      - next.job
+      - next.lead_contact_draft # area
+      - next.lead_email_attention # area
+      - next.lead_email_evidence # area
+      - next.lead_email_source # area
+      - next.lead_lane # area
+      - next.lead_source_sender # area
+      - next.lead_stage_move # area
+      - next.party
+      - next.party_role
+      - next.stage
+  - id: activity
+    name: Activity
+    desc: Tables and their referenced records.
+    tables:
+      - next.activity # area
+      - next.activity_about # area
+      - next.app_user
+      - next.deal
+      - next.deal_attention_alert # area
+      - next.job
+      - next.next_step # area
+      - next.party
+      - next.property
+  - id: home-calendar
+    name: Home Calendar
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.calendar_agenda # area
+      - next.calendar_review_dismissal # area
+      - next.deal
+      - next.home_mark # area
+      - next.home_update # area
+      - next.job
+      - next.next_step
+      - next.party
+      - next.party_role
+      - next.property
+      - next.proposal
+      - next.reply_draft
+      - next.weekly_review # area
+  - id: doc
+    name: Doc
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.deal
+      - next.doc_conversation # area
+      - next.doc_judgment_destination # area
+      - next.doc_judgment_job # area
+      - next.doc_link # area
+      - next.doc_turn # area
+      - next.email_mailbox
+      - next.party
+      - next.party_role
+      - next.save_receipt
+  - id: invoices
+    name: Invoices
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.change
+      - next.commission_payment
+      - next.deal
+      - next.deal_phase_change
+      - next.invoice_email # area
+      - next.invoice_mailbox # area
+      - next.job
+  - id: marketing
+    name: Marketing
+    desc: Tables and their referenced records.
+    tables:
+      - next.activity
+      - next.activity_about
+      - next.app_user
+      - next.deal
+      - next.design_template # area
+      - next.document
+      - next.idea # area
+      - next.job
+      - next.party
+      - next.platform_format # area
+      - next.platform_metric # area
+      - next.post # area
+      - next.post_media # area
+      - next.post_review # area
+      - next.post_text # area
+      - next.property
+      - next.social_account # area
+      - next.social_sign_in # area
+      - next.tour_plan # area
+      - next.tour_stop # area
+  - id: website
+    name: Website
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user
+      - next.deal
+      - next.deal_client_website # area
+      - next.deal_client_website_attempt # area
+      - next.deal_client_website_grant # area
+      - next.job
+      - next.party
+  - id: system
+    name: System
+    desc: Tables and their referenced records.
+    tables:
+      - next.app_user # area
+      - next.change # area
+      - next.imported_change # area
+      - next.job # area
+      - next.merged_party
+      - next.party
+      - next.save_receipt # area
+      - next.user_preference # area
