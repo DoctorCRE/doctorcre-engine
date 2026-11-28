@@ -101,7 +101,7 @@
 | [next.imported_deal_invoiced](next.imported_deal_invoiced.md)                               | 6       |         | BASE TABLE |
 | [next.imported_deal_owner](next.imported_deal_owner.md)                                     | 9       |         | BASE TABLE |
 | [next.imported_deal_party](next.imported_deal_party.md)                                     | 10      |         | BASE TABLE |
-| [next.introduction](next.introduction.md)                                                   | 14      |         | BASE TABLE |
+| [next.introduction](next.introduction.md)                                                   | 17      |         | BASE TABLE |
 | [next.invoice_email](next.invoice_email.md)                                                 | 22      |         | BASE TABLE |
 | [next.invoice_mailbox](next.invoice_mailbox.md)                                             | 5       |         | BASE TABLE |
 | [next.job](next.job.md)                                                                     | 2       |         | BASE TABLE |
@@ -423,6 +423,7 @@
 | next.invoice_name                             | text          | value text                                                                                                                                                   | FUNCTION |
 | next.is_time_zone                             | bool          | zone text                                                                                                                                                    | FUNCTION |
 | next.keep_call_recorder                       | trigger       |                                                                                                                                                              | FUNCTION |
+| next.keep_recorded_introduction               | trigger       |                                                                                                                                                              | FUNCTION |
 | next.lead_contact_draft_review                | trigger       |                                                                                                                                                              | FUNCTION |
 | next.lead_email_attention_change              | trigger       |                                                                                                                                                              | FUNCTION |
 | next.lead_flagged_by_a_user                   | trigger       |                                                                                                                                                              | FUNCTION |
@@ -455,6 +456,7 @@
 | next.queue_email_filing                       | void          | email_id uuid                                                                                                                                                | FUNCTION |
 | next.queue_email_split                        | void          | email_id uuid                                                                                                                                                | FUNCTION |
 | next.queue_email_summary                      | void          | email_id uuid                                                                                                                                                | FUNCTION |
+| next.queue_introduction                       | void          | email_id uuid                                                                                                                                                | FUNCTION |
 | next.record_change                            | trigger       |                                                                                                                                                              | FUNCTION |
 | next.record_email_summary                     | email_summary | email_id uuid, captured_hash text, writer_version text, result_status text, summary_text text, result_provenance jsonb, result_time timestamp with time zone | FUNCTION |
 | next.reply_draft_delivery                     | trigger       |                                                                                                                                                              | FUNCTION |
