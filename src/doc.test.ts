@@ -1060,7 +1060,7 @@ test("a Mac poll records only its own partner's link even without the row policy
 	try {
 		await admin.transaction().execute(async (tx) => {
 			await sql`set local search_path = next`.execute(tx);
-			await recordDocPoll(tx, owner, "ready");
+			await recordDocPoll(tx, owner, { chat: "ready", mail: "ready" });
 		});
 	} finally {
 		await admin.destroy();

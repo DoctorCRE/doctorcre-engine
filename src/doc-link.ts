@@ -1,5 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { type RawBuilder, sql, type Transaction } from "kysely";
+import { z } from "zod";
+import type { Json } from "./database.d.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { asText } from "./reader.ts";
@@ -10,6 +12,13 @@ export const docLinkReadiness = [
 	"plan_limited",
 ] as const;
 export type DocLinkReadiness = (typeof docLinkReadiness)[number];
+const readinessValue = z.enum(docLinkReadiness);
+export const docWorkReadiness = z.strictObject({
+	chat: readinessValue.nullable(),
+	mail: readinessValue.nullable(),
+});
+export type DocWorkReadiness = z.infer<typeof docWorkReadiness>;
+export type DocWorkKind = keyof DocWorkReadiness;
 
 type DocLinkStatus = DocLinkReadiness | "not_set_up" | "mac_off";
 
@@ -28,7 +37,10 @@ type DocLinkState = {
 	readiness_code: DocReadinessCode;
 };
 
-export function docLinkState(owner: string | RawBuilder<string>) {
+export function docLinkState(
+	owner: string | RawBuilder<string>,
+	kind: DocWorkKind = "chat",
+) {
 	return sql<DocLinkState>`(select link.*, case status
 		when 'not_set_up' then 'doc_not_set_up'
 		when 'mac_off' then 'doc_mac_off'
@@ -40,6 +52,7 @@ export function docLinkState(owner: string | RawBuilder<string>) {
 		case
 			when owner_user_id is null then 'not_set_up'
 			when last_seen_at is null or last_seen_at < statement_timestamp() - interval '30 seconds' then 'mac_off'
+			when readiness_by_kind is not null then coalesce(readiness_by_kind ->> ${kind}::text, 'mac_off')
 			else coalesce(readiness, 'ready')
 		end as status
 		from (select ${owner}::uuid as id) partner
@@ -79,6 +92,7 @@ export async function issueDocLink(tx: Transaction<DB>, owner: string) {
 				issued_at: sql`now()`,
 				last_seen_at: null,
 				readiness: null,
+				readiness_by_kind: null,
 				backend: null,
 			}),
 		)
@@ -143,14 +157,23 @@ export function withDocLink<T>(
 export async function recordDocPoll(
 	tx: Transaction<DB>,
 	owner: string,
-	readiness?: DocLinkReadiness,
+	readiness?: Partial<DocWorkReadiness>,
 	backend?: DocLinkBackend,
 ) {
 	// A backend-only Codex poll reports a failed startup. Headerless legacy polls still refresh presence.
 	const unavailable = backend === "codex" && readiness === undefined;
 	const nextReadiness = unavailable
 		? null
-		: sql<DocLinkReadiness | null>`coalesce(${readiness ?? null}, readiness)`;
+		: readiness
+			? sql<Json>`coalesce(readiness_by_kind, jsonb_build_object(
+				'chat', coalesce(readiness, 'ready'), 'mail', coalesce(readiness, 'ready')
+			)) || ${JSON.stringify(readiness)}::jsonb`
+			: sql<Json | null>`readiness_by_kind`;
+	const chatReadiness = unavailable
+		? null
+		: readiness?.chat === undefined
+			? sql<DocLinkReadiness | null>`readiness`
+			: readiness.chat;
 	const presenceChanged = unavailable
 		? sql<boolean>`last_seen_at is not null`
 		: presenceDue;
@@ -161,12 +184,13 @@ export async function recordDocPoll(
 			last_seen_at: unavailable
 				? null
 				: sql`case when ${presenceDue} then clock_timestamp() else last_seen_at end`,
-			readiness: nextReadiness,
+			readiness: chatReadiness,
+			readiness_by_kind: nextReadiness,
 			backend: nextBackend,
 		})
 		.where("owner_user_id", "=", owner)
 		.where(
-			sql<boolean>`(${presenceChanged} or readiness is distinct from ${nextReadiness}
+			sql<boolean>`(${presenceChanged} or readiness_by_kind is distinct from ${nextReadiness}
 				or backend is distinct from ${nextBackend})`,
 		)
 		.execute();
