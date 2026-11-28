@@ -760,6 +760,11 @@ async function exerciseDocLink(
 											sources: [],
 										},
 									};
+								assert.deepEqual(input, {
+									subject: "Tour",
+									body: `${quote}\n${instruction}`,
+									...("destinations" in input ? { destinations: [deal] } : {}),
+								});
 								assert.match(task.prompt, /untrusted data/);
 								assert.ok(!task.prompt.includes(instruction));
 								return {
