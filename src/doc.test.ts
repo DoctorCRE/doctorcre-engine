@@ -77,6 +77,8 @@ type Turn = {
 	context: unknown;
 	draft_review: unknown;
 	waiting_reason: string | null;
+	waiting_reason_code: string | null;
+	backend: "claude" | "codex" | null;
 	confirmation: unknown;
 };
 type Body<Path> = { error?: string } & (Path extends "/turns"
@@ -147,6 +149,7 @@ const poll = async (
 	credential: string,
 	readiness: string | null = "ready",
 	work?: "judgment",
+	backend?: "claude" | "codex",
 ) =>
 	mac.request(
 		"/claim",
@@ -156,6 +159,7 @@ const poll = async (
 				Authorization: `Bearer ${credential}`,
 				...(readiness === null ? {} : { "Doc-Link-Readiness": readiness }),
 				...(work && { "Doc-Link-Work": work }),
+				...(backend && { "Doc-Link-Backend": backend }),
 			},
 		},
 		{ DATABASE_WRITER: { connectionString } },
@@ -640,6 +644,26 @@ test("backup answers an unready partner's turn using Doc's read tools", async (t
 	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
 });
 
+test("a backend-only Codex poll clears stale presence so backup can take fresh work", async (t) => {
+	const credential = await issue(owner);
+	assert.equal((await poll(credential)).status, 204);
+	const { conversation_id } = await askDoc();
+	assert.equal(
+		(await chatTurn(conversation_id))?.waiting_reason_code,
+		"doc_ready",
+	);
+
+	assert.equal((await poll(credential, null, undefined, "codex")).status, 204);
+	const waiting = await chatTurn(conversation_id);
+	assert.equal(waiting?.waiting_reason_code, "doc_mac_off");
+	assert.equal(waiting?.backend, "codex");
+
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
+});
+
 test("backup waits for the ready Mac and a Mac takeover retains its answer", async (t) => {
 	const { conversation_id, turn } = await askDoc();
 	const credential = await issue(owner);
@@ -1027,12 +1051,21 @@ test("reports why a question waits and claims it when ready", async () => {
 		(await current())?.waiting_reason,
 		"Doc answers when your Mac is on.",
 	);
-	assert.equal((await poll(credential, "signed_out")).status, 204);
+	assert.equal((await current())?.backend, null);
+	assert.equal((await current())?.waiting_reason_code, "doc_mac_off");
+	assert.equal(
+		(await poll(credential, "signed_out", undefined, "codex")).status,
+		204,
+	);
+	assert.equal((await current())?.backend, "codex");
+	assert.equal((await current())?.waiting_reason_code, "doc_signed_out");
 	assert.equal(
 		(await current())?.waiting_reason,
 		"Sign in to Claude Code on your Mac.",
 	);
 	assert.equal((await poll(credential, "plan_limited")).status, 204);
+	assert.equal((await current())?.backend, "codex");
+	assert.equal((await current())?.waiting_reason_code, "doc_plan_limit");
 	assert.equal(
 		(await current())?.waiting_reason,
 		"Doc is paused until your Claude plan resets.",
@@ -1048,6 +1081,8 @@ test("reports why a question waits and claims it when ready", async () => {
 	const picked = await claim(credential);
 	assert.equal(picked.turn.id, turn.id);
 	assert.equal((await current())?.waiting_reason, null);
+	assert.equal((await current())?.waiting_reason_code, null);
+	assert.equal((await current())?.backend, "codex");
 });
 
 const complete = (credential: string, body: object) =>

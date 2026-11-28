@@ -4388,6 +4388,7 @@ create table doc_link (
 	issued_at timestamptz not null default now(),
 	last_seen_at timestamptz,
 	readiness text constraint doc_link_readiness check (readiness in ('ready', 'signed_out', 'plan_limited')),
+	backend text constraint doc_link_backend check (backend in ('claude', 'codex')),
 	foreign key (owner_user_id, is_account_partner) references app_user (id, is_account_partner)
 );
 
@@ -4403,7 +4404,7 @@ create policy doc_link_credential on doc_link for select to engine using (
 );
 revoke all on doc_link from public, engine_reader;
 grant select, insert, delete on doc_link to engine;
-grant update (credential_hash, issued_at, last_seen_at, readiness) on doc_link to engine;
+grant update (credential_hash, issued_at, last_seen_at, readiness, backend) on doc_link to engine;
 
 alter table reply_draft
 	add column confirmed_doc_turn_id uuid,

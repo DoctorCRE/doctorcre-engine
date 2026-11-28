@@ -78,7 +78,7 @@
 | [next.doc_conversation](next.doc_conversation.md)                                           | 4       |         | BASE TABLE |
 | [next.doc_judgment_destination](next.doc_judgment_destination.md)                           | 6       |         | BASE TABLE |
 | [next.doc_judgment_job](next.doc_judgment_job.md)                                           | 13      |         | BASE TABLE |
-| [next.doc_link](next.doc_link.md)                                                           | 6       |         | BASE TABLE |
+| [next.doc_link](next.doc_link.md)                                                           | 7       |         | BASE TABLE |
 | [next.doc_turn](next.doc_turn.md)                                                           | 17      |         | BASE TABLE |
 | [next.document](next.document.md)                                                           | 18      |         | BASE TABLE |
 | [next.document_extraction](next.document_extraction.md)                                     | 16      |         | BASE TABLE |
