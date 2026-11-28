@@ -2195,17 +2195,17 @@ The confirmation locks the partner's turn and uses the existing `runNextSave` re
 
 ### Planned Doc changes
 
+On approval, the [Doc harness drawing](doc-harness/README.md) governs the first build's model picker, chat approvals and reuse of the current chat and mail readiness probes. The details below record the earlier plans.
+
 Decisions 218 to 220 add these. None is built yet. The behavior above holds until each unit lands and moves its part into the sections above.
 
 #### Model choice
-
-On owner approval, the [Doc harness drawing](doc-harness/README.md) supersedes the earlier planned Settings picker, the shared chat and mail readiness plan, and the earlier chat restrictions. The [current Mac contract](#doc-link-on-macos) applies until its replacement ships.
 
 `next.doc_model_choice` keeps at most one row per account partner: `owner_user_id`, `first_provider`, nullable `first_model` and `first_effort`, nullable `second_provider`, `second_model` and `second_effort`, and `updated_at`. A provider is `claude`, `codex`, `grok` or `gemini`. A model is nonblank text of at most 100 characters and never `default` in any case. A null model runs the tool's own default. An effort is `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, or null. The second provider differs from the first, and its model and effort are null without it. No row means `claude` with its defaults. The partner's stamped writer manages the row, with the same row security as `next.doc_link`. Replacing or revoking the link credential keeps the choice.
 
 `next.doc_link_provider` keeps one row per partner and provider the link reports: `readiness` of `ready`, `signed_out` or `plan_limited`, nullable `resets_at`, present only with `plan_limited`, `checked_at`, and `models`, the JSON list the tool reported, each entry `{ id, label, efforts }`. Issuing a replacement credential removes the partner's rows.
 
-The claim request may carry a JSON body `{ providers: [{ provider, readiness, resets_at, models }] }`. The engine replaces the partner's rows with it. A poll with only `Doc-Link-Readiness` reports `claude`, so older runners keep working. Chat readiness counts as `ready` when its first or second choice is ready. Otherwise it is `plan_limited` with the earliest reset among the limited choices, or else `signed_out`. In the drawing, backup eligibility in decision 204 uses chat readiness for chat and the configured Mac backend's per-kind readiness for mail. A claim answer adds `choice: { first, second }`, each `{ provider, model, effort }` or null for the second. [Picker and readiness](doc-harness/setup.md#ask-doc-picker)
+The claim request may carry a JSON body `{ providers: [{ provider, readiness, resets_at, models }] }`. The engine replaces the partner's rows with it. A poll with only `Doc-Link-Readiness` reports `claude`, so older runners keep working. The link counts as `ready` when its first or second choice is ready. Otherwise it is `plan_limited` with the earliest reset among the limited choices, or else `signed_out`. Backup eligibility in decision 204 uses that combined readiness. A claim answer adds `choice: { first, second }`, each `{ provider, model, effort }` or null for the second.
 
 | App request                        | Answer                                                                                                                                                                                                                                                                                       |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2214,7 +2214,7 @@ The claim request may carry a JSON body `{ providers: [{ provider, readiness, re
 
 The runner skips a saved model or effort the tool no longer lists and runs the tool's default. A first choice that reports `plan_limited` or `signed_out` during a turn posts `{ claim_id, kind, provider, resets_at }` to the result door. The engine records that provider's readiness and returns the turn to the queue, so the next claim runs the second choice. An answered result adds `provider`. `doc_turn.answered_by` becomes one of the four providers or `backup`, and the migration changes `'mac'` to `'claude'`. History stays plain questions and answers, so a chat continues on whichever provider answers. A new choice applies from the next claim. Mail judgment jobs use the backend selected in the Mac runner config (decision 218).
 
-The drawing puts chat action approval in [Ask Doc](doc-harness/flows.md#f6-approve-an-action) under the partner's normal Mac login. The separate-account restriction remains part of the current Codex contract until the replacement ships. Keep unattended mail on its [current tool-less path](#mail-judgment-jobs) pending [the owner question](doc-harness/questions.md#q2-unattended-mail). A plan limit is its own outcome with the tool's reset time. The runner stops a tool only after the tool says its turn started. Completion, stop, error and process exit each end the claim.
+Each driver runs its tool unattended with the Doc MCP server only. The Claude driver keeps today's flags. The Codex driver uses the app-server-backed CLI. The planned Grok and Gemini drivers use the Agent Client Protocol. Decision 219 requires the separate macOS account and refusal of every command, file and permission request. A plan limit is its own outcome with the tool's reset time, never a generic failure. The runner stops a tool only after the tool says its turn started. Completion, stop, error and process exit each end the claim.
 
 #### Live answer and Stop
 
@@ -2232,7 +2232,7 @@ An `answer` or `clarification` may carry `suggestions`, at most three plain-text
 
 #### Attachments
 
-Attaching a PDF or photo gets its own design here before any build: storage for the file, a table tying it to its turn, and a `read_attachment` Doc tool that returns the PDF's text or the image after checking access to that turn.
+Attaching a PDF or photo gets its own design here before any build: storage for the file, a table tying it to its turn, and a `read_attachment` Doc tool that returns the PDF's text or the image, since Doc's own file tools stay off.
 
 #### Visual answers
 
