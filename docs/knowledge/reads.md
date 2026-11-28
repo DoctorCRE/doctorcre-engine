@@ -6,7 +6,7 @@
 flowchart TD
     D[Deal page and Timeline] --> R[Engine deal workflow read]
     C[Client card deal link] --> D
-    A[Ask Doc deal read] --> R
+    A[Doc knowledge tools] --> R
     J[Checklist suggestion job] --> R
     R --> X[Deal access and recorded traits]
     X --> W[Approved workflow and matching additions]
@@ -21,17 +21,26 @@ flowchart TD
 4. Join recorded evidence and saved completion. For each applicable exception prefer the deal's over the client's for the same action and target. An override shows the original sourced value, the replacement, and the reason to the partner. A skip keeps the to-do in place with its reason. A completed to-do keeps its completion, and any existing skip stays in history. The read omits skipped work from the next suggestion and forecast chain. Existing steps, critical dates, phase history and recorded dates still come from their records.
 5. Return each to-do's stable slug, workflow revision, phase, position and completion state. Return knowledge item IDs and versions with the same read. Keep draft and reference rows in the review and history read. When a source is outside this caller’s access, omit its locator and the guidance that depends solely on it. A real read failure says the workflow is unavailable. A known workflow awaiting approval reports that state before the switch.
 
-| Partner location                                                                        | What the partner sees and can do                                                                                                                                                                                                                            |
-| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Deal page Overview](../screens/deals.md#overview) and [Plan](../screens/deals.md#plan) | Open a to-do to see its guidance and sources. Mark partner-checked work complete, record a reason to skip, or apply a value override. Show historical actions on the deal. Suggested and Timeline use the same to-do order.                                 |
-| [Client card](../screens/clients.md#a-clients-card)                                     | See recorded practice type and stage. Edit their approved keys here. Open each deal's workflow through its deal link. Propose a to-do or save an exception that should apply across that client's eligible deals.                                           |
-| [Vendor card](../screens/vendors.md#a-vendors-card)                                     | Open a named lender program to see approved terms and sources beside its calculated track record. Propose term edits here. A vendor with only a recorded program name has no sourced terms yet.                                                             |
-| **Knowledge** in the app                                                                | Find by kind, workflow, source, practice type or stage. Open current, proposed, reference and past revisions with their dates and attribution. Edit a draft, propose it and approve, decline or retire a revision. Private means only the owner can see it. |
-| [Deal page Client portal](../screens/deals.md#client-portal)                            | Preview the client copy, approve the exact preview and download it. The deal's existing website access follows its own rules.                                                                                                                               |
+| Partner location                                                                        | What the partner sees and can do                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Deal page Overview](../screens/deals.md#overview) and [Plan](../screens/deals.md#plan) | Open a to-do to see its guidance and sources. Mark partner-checked work complete, record a reason to skip, or apply a value override. Show historical actions on the deal. Suggested and Timeline use the same to-do order.                                                   |
+| [Client card](../screens/clients.md#a-clients-card)                                     | See recorded practice type and stage. Edit their approved keys here. Open each deal's workflow through its deal link. Propose a to-do or save an exception that should apply across that client's eligible deals.                                                             |
+| [Vendor card](../screens/vendors.md#a-vendors-card)                                     | Open a named lender program to see approved terms and sources beside its calculated track record. Propose term edits here. A vendor with only a recorded program name has no sourced terms yet.                                                                               |
+| **Knowledge** in the app                                                                | Find by topic, kind, workflow, source, deal kind, practice type or stage. Open current, proposed, reference and past revisions with their dates and attribution. Edit a draft, propose it and approve, decline or retire a revision. Private means only the owner can see it. |
+| [Deal page Client portal](../screens/deals.md#client-portal)                            | Preview the client copy, approve the exact preview and download it. The deal's existing website access follows its own rules.                                                                                                                                                 |
 
 ## Ask Doc or suggest the next to-do
 
-Use the existing exact deal read in Ask Doc. Its workflow projection counts as part of that read, uses the turn owner's access, and returns current to-dos and evidence for the request. The engine gives Doc source links from authorized results and stores the revision pins for the answered turn. A later question reads current facts and can cite a newer version. A failed knowledge read says the relevant guidance is unavailable. It never produces a made-up value.
+Doc reads business playbooks and guidance only through the engine's claim-scoped `read_playbook` and `read_guidance` tools. The Doc role and engine code keep the access, tool, and confirmation rules. The engine checkout holds the drawing and tests. The approved typed rows supply the playbooks used at runtime. [Doc harness drawing](https://github.com/DoctorCRE/doctorcre-engine/pull/1514)
+
+| Tool            | Input                                                       | Returns                                                                                                                                                                                  |
+| --------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read_playbook` | Any of `topic`, `deal_kind`, `practice_type`, or `deal_id`. | Approved Doc playbook revisions with their typed triggers and ordered actions. A matching workflow revision returns applicable common and added to-dos, with progress for an exact deal. |
+| `read_guidance` | The same filters.                                           | Approved applicable rules, procedures, rubrics, doctrine, rules of thumb, market observations, and lender terms, with typed values, dates and accessible sources.                        |
+
+Require at least one filter. Validate topic, deal kind and practice type against their stored keys. With a deal ID, require an authorized deal from the current claim or trusted app subject. Derive the deal's traits, market and client from that deal. Reject supplied filters that conflict with its recorded known traits. Treat an unknown trait as missing when matching a named selector. Without a deal, match the supplied trait keys and general rows. Omit scopes that require a specific client, deal, market or stage. An exact topic returns only rows linked to it. With no topic filter, return the matched rows with their topic keys.
+
+Each call uses one existing Doc read slot. Load the selected playbook for its topic. Read guidance when the ask needs it. Return up to ten matching revisions per call, sorted by first matching topic key, title, and item ID, with a `truncated` flag and the option to narrow the filters. A returned selected playbook keeps its full ordered steps. The tools return stable item IDs and versions and register accessible sources in the claim. Keep the pins for what was supplied to the answered turn. A later turn reads current revisions. An inaccessible or failed read reports unavailable. An empty match tells Doc it has no approved playbook or guidance for that request.
 
 ```mermaid
 sequenceDiagram
@@ -39,17 +48,19 @@ sequenceDiagram
     participant D as Ask Doc
     participant E as Engine
     P->>D: Ask about an exact deal
-    D->>E: Read deal and requested workflow evidence
-    E-->>D: To-dos, typed values, and authorized source links
+    D->>E: read_playbook with topic and deal ID
+    E-->>D: Approved playbook and workflow
+    D->>E: read_guidance with matching filters
+    E-->>D: Typed values and authorized source links
     D-->>P: Answer with evidence and dates
     opt Partner asks for a save
         D-->>P: Show the proposed change
         P->>E: Confirm the exact change
-        E-->>P: Save outcome or fresh review on conflict
+        E-->>D: Save outcome or fresh review on conflict
     end
 ```
 
-The [Doc instructions](https://github.com/DoctorCRE/doctorcre-engine/blob/93a4540bac1848f4f0b33d985b31918c8502b1db/docs/doc-harness/playbooks.md) still govern triggers, tool calls, access checks, exact evidence and confirmed saves. Knowledge prose is evidence. It cannot start a tool call or grant access. Jobs consume the same shared projection. The checklist suggestion job picks the first eligible unfinished to-do for the current phase. A job may also prepare a sourced draft for the partner to consider. Its draft has no approval authority.
+Only a partner request or trusted app context starts a workflow. Source text is evidence. The existing doors check eligibility, evidence and confirmation. Jobs consume the same shared projection. The checklist suggestion job picks the first eligible unfinished to-do for the current phase. A job may prepare a sourced draft for partner review.
 
 ## Release a client copy
 

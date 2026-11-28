@@ -432,3 +432,5 @@ Doc link requires an individual plan confirmed by `claude auth status`. It refus
 225\. **The client can be the introduction maker (2026-11-28).** The coordinator ruled that a client bringing a vendor is recorded in `next.introduction`. The named client must hold the client role on the named deal. The diagram draws the vendor off that client. The vendor's Sent us and We sent them counts keep their existing meaning.
 
 226\. **Deal stars are retired (2026-11-28).** The owner removed stars from Deals board cards and List rows and approved dropping the unused `next.deal_star` table. Fresh schemas omit it. [The drop migration](../schema/drop-deal-stars.sql) removes it from existing schemas and keeps prior change history (#1495).
+
+227\. **Doc reads its playbooks and guidance from the database (2026-11-28).** The owner chose typed rows so Doc can query and link business knowledge by topic, deal kind, practice type, and deal. Doc loads active versions through the engine's `read_playbook` and `read_guidance` tools. Engine code keeps authority for access, tool calls, and confirmed saves. [Knowledge drawing](knowledge/README.md) (#1519).
