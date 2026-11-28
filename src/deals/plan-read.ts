@@ -1,9 +1,10 @@
 import { type Expression, sql, type Transaction } from "kysely";
+import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
 import { checklistOf, checklistType, criticalDateLabel } from "./checklist.ts";
-import { forecastAttention, planOf } from "./plan.ts";
+import { forecastAttention, forecastDateKinds, planOf } from "./plan.ts";
 
 const chicagoDay = (instant: Expression<unknown>) =>
 	asText(sql`(${instant} at time zone 'America/Chicago')::date`);
@@ -137,6 +138,24 @@ export const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.orderBy("s.created_at")
 		.orderBy("s.id");
 
+export const planFactsOf = (
+	db: Transaction<DB>,
+	deal: Expression<string>,
+	kind: Expression<string | null>,
+) => ({
+	today: chicagoDay(sql`now()`).$notNull(),
+	lease: jsonObjectFrom(currentLeaseOf(db, deal)),
+	commissions: jsonArrayFrom(commissionsOf(db, deal)),
+	critical_dates: jsonArrayFrom(criticalDatesOf(db, deal)),
+	phase_spans: phaseSpansOf(deal),
+	lengths: typicalLengthsOf(kind),
+	own_dates: ownDatesOf(deal),
+});
+
+export const hasForecastDate = (deal: Expression<string>) =>
+	sql<boolean>`exists (select from critical_date cd where cd.deal_id = ${deal}
+		and cd.status in ('open', 'proposed') and cd.kind in (${sql.join(forecastDateKinds)}))`;
+
 type ChecklistFacts = Parameters<typeof checklistType>[0] & {
 	id: string;
 	owner: Parameters<typeof checklistOf>[0]["deal"]["owner"];
@@ -148,7 +167,7 @@ type ChecklistFacts = Parameters<typeof checklistType>[0] & {
 	today: string;
 };
 
-export const planChecklist = (facts: ChecklistFacts) =>
+const planChecklist = (facts: ChecklistFacts) =>
 	checklistOf({
 		deal: {
 			id: facts.id,
@@ -164,41 +183,42 @@ export const planChecklist = (facts: ChecklistFacts) =>
 		today: facts.today,
 	});
 
-export function boardTimeline({
-	phase,
-	outcome,
-	phase_spans,
-	steps,
-	lengths,
-	own_dates,
-	attention,
-	...facts
-}: ChecklistFacts &
+type PlanReadFacts = ChecklistFacts &
 	Pick<
 		Parameters<typeof planOf>[0],
-		"phase" | "outcome" | "phase_spans" | "lengths" | "own_dates"
+		"phase" | "outcome" | "phase_spans" | "lengths" | "own_dates" | "steps"
 	> & {
 		attention: Parameters<typeof forecastAttention>[0];
+	};
+
+export function planForRead(facts: PlanReadFacts, active = true) {
+	const checklist = planChecklist(facts);
+	const critical_dates = facts.critical_dates.map((date) => ({
+		...date,
+		label: criticalDateLabel(date.kind),
+	}));
+	const input = { ...facts, checklist, critical_dates };
+	const plan = planOf(input);
+	return {
+		checklist,
+		critical_dates,
+		plan,
+		attention: active
+			? forecastAttention(facts.attention, input, plan)
+			: facts.attention,
+	};
+}
+
+export function boardTimeline(
+	facts: Omit<PlanReadFacts, "steps"> & {
 		steps: (Parameters<typeof planOf>[0]["steps"][number] & {
 			label: string;
 			change_id: number | null;
 		})[];
-	}) {
-	const input = {
-		phase,
-		outcome,
-		phase_spans,
-		steps,
-		lengths,
-		own_dates: own_dates ?? {},
-		today: facts.today,
-		checklist: planChecklist(facts),
-		critical_dates: facts.critical_dates.map((date) => ({
-			...date,
-			label: criticalDateLabel(date.kind),
-		})),
-	};
-	const plan = planOf(input);
+	},
+) {
+	const { phase, steps } = facts;
+	const { plan, attention } = planForRead(facts);
 	const sourceSteps = new Map(steps.map((step) => [`step:${step.id}`, step]));
 	const dates = plan.rows
 		.filter((row) => row.kind === "critical_date")
@@ -217,7 +237,7 @@ export function boardTimeline({
 		});
 	const ids = new Set(rows.map((row) => row.id));
 	return {
-		attention: forecastAttention(attention, input, plan),
+		attention,
 		timeline: {
 			phase_spans: plan.phases,
 			expected_signing_on: plan.expected_signing_on,

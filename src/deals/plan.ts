@@ -22,6 +22,7 @@ const FOLLOWS = new Map([
 	["loi_expiry", "loi_grid"],
 	["lease_commencement", "commencement_letter"],
 ]);
+export const forecastDateKinds = [...FOLLOWS.keys()];
 // Prospective Client has no to-dos; its typical stay leads the chain without a row.
 const BEFORE_RESEARCH = "before_research";
 const OFF_CHAIN = new Set(["move_in", "check_in_90_day"]);

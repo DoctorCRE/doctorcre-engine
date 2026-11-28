@@ -25,7 +25,7 @@ import {
 	recordLinks,
 } from "../old-record-names.ts";
 import { asText } from "../reader.ts";
-import { checklistType, criticalDateLabel } from "./checklist.ts";
+import { checklistType } from "./checklist.ts";
 import { invoiceOf } from "./invoice.ts";
 import {
 	checkInNextStep,
@@ -33,19 +33,19 @@ import {
 	parkingNoteForDisplay,
 	selectNextDealsWithFacts,
 } from "./next-board.ts";
-import { forecastAttention, planOf } from "./plan.ts";
 import {
 	commissionsOf,
 	criticalDatesOf,
 	currentLeaseOf,
 	ownDatesOf,
 	phaseSpansOf,
-	planChecklist,
+	planForRead,
 	planVersionOf,
 	seededWithoutMove,
 	stepsOf,
 	typicalLengthsOf,
 } from "./plan-read.ts";
+import { ENDED_PHASES } from "./shared.ts";
 
 const HISTORY_CAP = 500;
 
@@ -277,12 +277,27 @@ export async function readNextDealDetail(
 		plan_version,
 		...detail
 	} = record;
-	const checklist = planChecklist({
-		...detail,
-		commissions,
-		critical_dates,
-		today,
-	});
+	const {
+		plan,
+		attention,
+		checklist,
+		critical_dates: labeledDates,
+	} = planForRead(
+		{
+			...detail,
+			commissions,
+			critical_dates,
+			steps: detail.next_actions,
+			lengths: typical_lengths,
+			own_dates,
+			today,
+		},
+		detail.operating_state === "active" &&
+			!detail.closed_on &&
+			!detail.invoiced_on &&
+			!detail.outcome &&
+			!ENDED_PHASES.includes(detail.phase ?? ""),
+	);
 	const emailActivityIds = [
 		...new Set(email_follow_ups.map(({ email }) => email.activity_id)),
 	];
@@ -310,30 +325,6 @@ export async function readNextDealDetail(
 		]),
 	]);
 	const named = (text: string | null) => text && nameOldRecords(text, names);
-	const labeledDates = critical_dates.map((date) => ({
-		...date,
-		label: criticalDateLabel(date.kind),
-	}));
-	const planFacts = {
-		phase: detail.phase,
-		outcome: detail.outcome,
-		checklist,
-		phase_spans: detail.phase_spans,
-		steps: detail.next_actions,
-		critical_dates: labeledDates,
-		lengths: typical_lengths,
-		own_dates,
-		today,
-	};
-	const plan = planOf(planFacts);
-	const attention =
-		detail.operating_state === "active" &&
-		!detail.closed_on &&
-		!detail.invoiced_on &&
-		!detail.outcome &&
-		detail.phase !== "closed"
-			? forecastAttention(detail.attention, planFacts, plan)
-			: detail.attention;
 	return {
 		...checkInNextStep(names)(detail),
 		attention,

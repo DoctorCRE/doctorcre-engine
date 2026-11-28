@@ -49,24 +49,32 @@ async function save(tx: Transaction<DB>, request: Request) {
 				current_version: plan.base_version,
 			}),
 		);
-	const today = await sql<{
-		today: string;
-	}>`select ((now() at time zone 'America/Chicago')::date)::text as today`.execute(
-		tx,
-	);
 	const previous_on =
 		todo && Object.hasOwn(plan.own_dates, todo)
 			? (plan.own_dates[todo] ?? null)
 			: null;
 	if (todo && target_on) {
+		const { today, undo } = await tx
+			.selectNoFrom([
+				sql<string>`(now() at time zone 'America/Chicago')::date::text`.as(
+					"today",
+				),
+				// Undo may restore the exact value replaced by the version being edited.
+				sql<boolean>`exists (select from change where id = ${base_version}
+					and table_name = 'deal_plan_date' and action = 'update'
+					and record = jsonb_build_object('deal_id', ${deal_id}::uuid, 'todo', ${todo}::text)
+					and old_value ->> 'target_on' = ${target_on})`.as("undo"),
+			])
+			.executeTakeFirstOrThrow();
 		const row = plan.rows.find((item) => item.id === todo);
 		if (
-			target_on < (today.rows[0]?.today ?? target_on) ||
-			row?.kind !== "todo" ||
-			row.state !== "expected" ||
-			!row.expected_from_on ||
-			target_on < row.expected_from_on ||
-			!row.expected_to_on
+			!undo &&
+			(target_on < today ||
+				row?.kind !== "todo" ||
+				row.state !== "expected" ||
+				!row.expected_from_on ||
+				target_on < row.expected_from_on ||
+				!row.expected_to_on)
 		)
 			throw new SaveRefusal(bad("target_on"));
 	}

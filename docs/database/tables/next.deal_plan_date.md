@@ -20,19 +20,19 @@
 
 ## Constraints
 
-| Name                                      | Type        | Definition                                                                                                                           |
-| ----------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| deal_plan_date_changed_at_not_null        | n           | NOT NULL changed_at                                                                                                                  |
-| deal_plan_date_changed_by_a_user_or_a_job | CHECK       | CHECK (((num_nonnulls(changed_by_user_id, changed_by_job) = 1) AND ((changed_by_job IS NOT NULL) OR (changed_for_user_id IS NULL)))) |
-| deal_plan_date_changed_by_job_fkey        | FOREIGN KEY | FOREIGN KEY (changed_by_job) REFERENCES job(slug)                                                                                    |
-| deal_plan_date_changed_by_user_id_fkey    | FOREIGN KEY | FOREIGN KEY (changed_by_user_id) REFERENCES app_user(id)                                                                             |
-| deal_plan_date_changed_for_user_id_fkey   | FOREIGN KEY | FOREIGN KEY (changed_for_user_id) REFERENCES app_user(id)                                                                            |
-| deal_plan_date_deal_id_fkey               | FOREIGN KEY | FOREIGN KEY (deal_id) REFERENCES deal(id)                                                                                            |
-| deal_plan_date_deal_id_not_null           | n           | NOT NULL deal_id                                                                                                                     |
-| deal_plan_date_pkey                       | PRIMARY KEY | PRIMARY KEY (deal_id, todo)                                                                                                          |
-| deal_plan_date_target_on_check            | CHECK       | CHECK (isfinite(target_on))                                                                                                          |
-| deal_plan_date_todo_check                 | CHECK       | CHECK ((todo ~ '^[a-z][a-z0-9_]*$'::text))                                                                                           |
-| deal_plan_date_todo_not_null              | n           | NOT NULL todo                                                                                                                        |
+| Name                                      | Type        | Definition                                                                                                                                                                                   |
+| ----------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| deal_plan_date_changed_at_not_null        | n           | NOT NULL changed_at                                                                                                                                                                          |
+| deal_plan_date_changed_by_a_user_or_a_job | CHECK       | CHECK (((num_nonnulls(changed_by_user_id, changed_by_job) = 1) AND ((changed_by_job IS NOT NULL) OR (changed_for_user_id IS NULL))))                                                         |
+| deal_plan_date_changed_by_job_fkey        | FOREIGN KEY | FOREIGN KEY (changed_by_job) REFERENCES job(slug)                                                                                                                                            |
+| deal_plan_date_changed_by_user_id_fkey    | FOREIGN KEY | FOREIGN KEY (changed_by_user_id) REFERENCES app_user(id)                                                                                                                                     |
+| deal_plan_date_changed_for_user_id_fkey   | FOREIGN KEY | FOREIGN KEY (changed_for_user_id) REFERENCES app_user(id)                                                                                                                                    |
+| deal_plan_date_deal_id_fkey               | FOREIGN KEY | FOREIGN KEY (deal_id) REFERENCES deal(id)                                                                                                                                                    |
+| deal_plan_date_deal_id_not_null           | n           | NOT NULL deal_id                                                                                                                                                                             |
+| deal_plan_date_pkey                       | PRIMARY KEY | PRIMARY KEY (deal_id, todo)                                                                                                                                                                  |
+| deal_plan_date_target_on_check            | CHECK       | CHECK (isfinite(target_on))                                                                                                                                                                  |
+| deal_plan_date_todo_not_null              | n           | NOT NULL todo                                                                                                                                                                                |
+| deal_plan_date_workflow_todo              | TRIGGER     | CREATE CONSTRAINT TRIGGER deal_plan_date_workflow_todo AFTER INSERT OR UPDATE ON next.deal_plan_date NOT DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION check_deal_plan_todo() |
 
 ## Indexes
 
@@ -42,10 +42,11 @@
 
 ## Triggers
 
-| Name          | Definition                                                                                                                                          |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| record_change | CREATE TRIGGER record_change AFTER INSERT OR DELETE OR UPDATE ON next.deal_plan_date FOR EACH ROW EXECUTE FUNCTION record_change('deal_id', 'todo') |
-| stamp_change  | CREATE TRIGGER stamp_change BEFORE INSERT OR UPDATE ON next.deal_plan_date FOR EACH ROW EXECUTE FUNCTION stamp_change()                             |
+| Name                         | Definition                                                                                                                                                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| deal_plan_date_workflow_todo | CREATE CONSTRAINT TRIGGER deal_plan_date_workflow_todo AFTER INSERT OR UPDATE ON next.deal_plan_date NOT DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION check_deal_plan_todo() |
+| record_change                | CREATE TRIGGER record_change AFTER INSERT OR DELETE OR UPDATE ON next.deal_plan_date FOR EACH ROW EXECUTE FUNCTION record_change('deal_id', 'todo')                                          |
+| stamp_change                 | CREATE TRIGGER stamp_change BEFORE INSERT OR UPDATE ON next.deal_plan_date FOR EACH ROW EXECUTE FUNCTION stamp_change()                                                                      |
 
 ---
 

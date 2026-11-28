@@ -340,7 +340,7 @@ for (const migrated of [false, true]) {
 	);
 }
 
-test("partners save, undo and reset their own to-do dates from the plan they saw", async (t) => {
+async function planDateFixture(t: TestContext) {
 	const { db, save, request } = await freshDoor(t);
 	const deal = randomUUID();
 	await db.query(`begin; set local engine.job = 'old_system';
@@ -369,13 +369,22 @@ test("partners save, undo and reset their own to-do dates from the plan they saw
 			base_version,
 			...fields,
 		});
-	const {
-		rows: [date],
-	} = await db.query<{ target: string }>(
-		`select ((now() at time zone 'America/Chicago')::date + 40)::text as target`,
-	);
-	assert.ok(date);
-	const { target } = date;
+	const day = async (offset: number) => {
+		const {
+			rows: [date],
+		} = await db.query<{ target: string }>(
+			`select ((now() at time zone 'America/Chicago')::date + $1::int)::text as target`,
+			[offset],
+		);
+		assert.ok(date);
+		return date.target;
+	};
+	return { db, deal, read, submit, day };
+}
+
+test("partners save, undo and reset their own to-do dates from the plan they saw", async (t) => {
+	const { read, submit, day } = await planDateFixture(t);
+	const target = await day(40);
 	const before = await read();
 	const [status, updated] = await submit(before.base_version, {
 		todo: "representation",
@@ -417,4 +426,89 @@ test("partners save, undo and reset their own to-do dates from the plan they saw
 	);
 	assert.equal((await submit((await read()).base_version, {}))[0], 200);
 	assert.equal((await read()).expected_signing_on, before.expected_signing_on);
+});
+
+test("Undo restores the saved date after an upstream override moves the bar start", async (t) => {
+	const { read, submit, day } = await planDateFixture(t);
+	const original = await day(40);
+	const upstream = await day(50);
+	const later = await day(60);
+	const edit = async (todo: string, target_on: string) =>
+		submit((await read()).base_version, { todo, target_on });
+
+	assert.equal((await edit("requirements", original))[0], 200);
+	assert.equal((await edit("representation", upstream))[0], 200);
+	const [status, saved] = await edit("requirements", later);
+	assert.equal(status, 200);
+	assert.equal(saved.previous_on, original);
+	assert.equal((await edit("requirements", await day(41)))[0], 400);
+	assert.ok(typeof saved.base_version === "number");
+	assert.equal(
+		(
+			await submit(saved.base_version, {
+				todo: "requirements",
+				target_on: saved.previous_on,
+			})
+		)[0],
+		200,
+	);
+	assert.deepEqual((await read()).own_dates, {
+		requirements: original,
+		representation: upstream,
+	});
+});
+
+test("concurrent plan edits accept one writer per base version", async (t) => {
+	const { read, submit, day } = await planDateFixture(t);
+	const { base_version } = await read();
+	const first = await day(40);
+	const second = await day(50);
+	const results = await Promise.all([
+		submit(base_version, { todo: "representation", target_on: first }),
+		submit(base_version, { todo: "representation", target_on: second }),
+	]);
+	assert.deepEqual(results.map(([status]) => status).sort(), [200, 409]);
+	const winner = results[0]?.[0] === 200 ? 0 : 1;
+	const saved = await read();
+	assert.equal(saved.base_version, results[winner]?.[1].base_version);
+	assert.equal(saved.own_dates.representation, winner === 0 ? first : second);
+});
+
+test("the database accepts only to-dos from the deal's workflow", async (t) => {
+	const { db, deal } = await planDateFixture(t);
+	for (const ddl of [null, await readSchema("add-deal-plan-dates.sql")]) {
+		if (ddl) {
+			await db.query("drop table deal_plan_date");
+			await db.query(ddl);
+			await db.query(ddl);
+		}
+		await db.query("begin");
+		try {
+			await db.query("set local role engine");
+			await db.query("select set_config('engine.user_id', $1, true)", [alex]);
+			const insert = (todo: string) =>
+				db.query(
+					"insert into deal_plan_date (deal_id, todo, target_on) values ($1, $2, current_date + 40)",
+					[deal, todo],
+				);
+			await insert("commencement_letter");
+			for (const todo of ["invented_todo", "purchase_close"]) {
+				await db.query("savepoint invalid_todo");
+				await assert.rejects(insert(todo), { code: "23514" });
+				await db.query("rollback to savepoint invalid_todo");
+			}
+			const reclassify = () =>
+				db.query("update deal set kind = 'purchase' where id = $1", [deal]);
+			await db.query("savepoint change_workflow");
+			await assert.rejects(reclassify(), { code: "23514" });
+			await db.query("rollback to savepoint change_workflow");
+			await db.query(
+				"update deal_plan_date set target_on = null where deal_id = $1",
+				[deal],
+			);
+			await reclassify();
+		} finally {
+			await db.query("rollback");
+		}
+	}
 });
