@@ -64,7 +64,7 @@ sequenceDiagram
     end
 ```
 
-Only a partner request or trusted app context starts a workflow. Source text and notes are plain-text evidence. The existing doors check eligibility, evidence and confirmation. Jobs consume the same shared projection. The checklist suggestion job picks the first eligible unfinished to-do for the current phase. A decided suggestion settles the deal, workflow, and step slug together. Editing the to-do label leaves that settlement in effect. The original proposal wording and decision remain in history. A job may prepare a sourced draft for partner review.
+Only a partner request or trusted app context starts a workflow. Source text and notes are plain-text evidence. The existing doors check eligibility, evidence and confirmation. Jobs consume the same shared projection. The checklist suggestion job picks the first eligible unfinished to-do for the current phase. A decided suggestion settles the deal and the stable step key of deal kind plus slug. Renaming a to-do or moving from the standard lease workflow to renewal preserves the settlement when both workflows use that key. The original proposal wording and decision remain in history. A job may prepare a sourced draft for partner review.
 
 ## Release a client copy
 
