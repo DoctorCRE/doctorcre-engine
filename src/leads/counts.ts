@@ -1,16 +1,10 @@
 import { sql, type Transaction } from "kysely";
 import type { DB } from "../next-database.d.ts";
+import { STAGE_ORDER } from "./board.ts";
 import { DEFAULT_CADENCE, quietProposals } from "./quiet-follow-ups.ts";
 
 // The Leads board's stages before any filter; Archived shows only when chosen.
-const BOARD_STAGES = [
-	"new",
-	"qualified",
-	"outreach_active",
-	"engaged",
-	"nurture",
-	"opportunity",
-];
+const BOARD_STAGES = STAGE_ORDER.filter((stage) => stage !== "archived");
 
 // The board's New from email and Follow-up late badges, counted over the
 // leads it shows unfiltered, as the app's leadBadgeCounts did.
