@@ -365,7 +365,7 @@ test("the deal page shares the card's copied phase, outcome and close date", asy
 
 test("copied ended renewals show the unrecorded lease and copied parking names automation", async () => {
 	await nextTransaction(connectionString, "read", async (tx) => {
-		const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+		const board = await readNextBoard(tx, { partner: "partner_one" });
 		const closed = board.closed_deals.find((deal) => deal.id === id(39));
 		const renewal = {
 			kind: null,
@@ -450,7 +450,7 @@ test("Deals reads show separate kind and reason and the earliest confirmed open 
 			await sql`update critical_date set status = 'done', resolution_reason = 'Example completed'
 				where id = ${id(503)}`.execute(tx);
 
-			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const board = await readNextBoard(tx, { partner: "partner_one" });
 			const facts = {
 				kind: "purchase",
 				reason: "renewal",
@@ -515,7 +515,7 @@ test("National counts a late open step once and skips retained completion and ch
 				tx,
 			);
 
-			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const board = await readNextBoard(tx, { partner: "partner_one" });
 			assert.partialDeepStrictEqual(
 				board.deals.find((deal) => deal.id === id(31)),
 				{
@@ -558,7 +558,7 @@ test("a call follow-up on the board has the item id Home gives it", async () => 
 				values (${id(531)}, ${id(37)}, ${id(1)}, 'Example send the call notes', '2000-03-02', ${id(530)}, 'Example quote')`.execute(
 				tx,
 			);
-			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const board = await readNextBoard(tx, { partner: "partner_one" });
 			assert.deepEqual(
 				board.deals.find((deal) => deal.id === id(37))?.open_actions,
 				[
@@ -582,14 +582,14 @@ test("the board never lists a cancelled step", async () => {
 	await assert.rejects(
 		nextTransaction(connectionString, "save", async (tx) => {
 			await stampNextSave(tx, { user: "partner_one" });
-			const before = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const before = await readNextBoard(tx, { partner: "partner_one" });
 			const client = before.deals.find((row) => row.id === id(34))?.client_id;
 			await sql`insert into next_step (id, deal_id, party_id, owner_party_id, what, resolution, resolution_reason) values
 				(${id(524)}, ${id(37)}, null, ${id(1)}, 'Example check the old record', 'cancelled', 'Example replaced'),
 				(${id(525)}, null, ${client}, ${id(1)}, 'Example check the old client', 'cancelled', 'Example replaced')`.execute(
 				tx,
 			);
-			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const board = await readNextBoard(tx, { partner: "partner_one" });
 			const ids = board.deals.flatMap((deal) =>
 				deal.open_actions.map((action) => action.id),
 			);
@@ -605,7 +605,7 @@ test("a deal with no step of its own shows its client's step, check-ins named, w
 	await assert.rejects(
 		nextTransaction(connectionString, "save", async (tx) => {
 			await stampNextSave(tx, { user: "partner_one" });
-			const before = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const before = await readNextBoard(tx, { partner: "partner_one" });
 			const clientOf = (deal: number) =>
 				before.deals.find((row) => row.id === id(deal))?.client_id;
 			await sql`insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on) values
@@ -615,7 +615,7 @@ test("a deal with no step of its own shows its client's step, check-ins named, w
 				(${id(523)}, null, ${clientOf(30)}, ${id(2)}, 'Example call the clinic', null)`.execute(
 				tx,
 			);
-			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const board = await readNextBoard(tx, { partner: "partner_one" });
 			const actions = (deal: number) =>
 				board.deals.find((row) => row.id === id(deal))?.open_actions;
 			assert.deepEqual(actions(34), [
@@ -660,7 +660,7 @@ test("the board and deal page name an old record code in a deal's check-in", asy
 	await assert.rejects(
 		nextTransaction(connectionString, "save", async (tx) => {
 			await stampNextSave(tx, { user: "partner_one" });
-			const before = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const before = await readNextBoard(tx, { partner: "partner_one" });
 			const client = before.deals.find((row) => row.id === id(34));
 			assert.ok(client?.client_id);
 			await sql`insert into outside_id (source, value, party_id)
@@ -670,7 +670,7 @@ test("the board and deal page name an old record code in a deal's check-in", asy
 				tx,
 			);
 			const checkIn = `Check in with ${client.client_name} (client)`;
-			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const board = await readNextBoard(tx, { partner: "partner_one" });
 			const deal = board.deals.find((row) => row.id === id(34));
 			assert.equal(deal?.next_step, checkIn);
 			assert.deepEqual(
