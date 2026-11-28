@@ -4,23 +4,23 @@ Steps describe the stored outcome as well as what the partner sees. All app read
 
 ## F1 Ask
 
-Retries and replacement claims use the same saved turn. The partner sees its current state.
+The [completion](#f3-answer-or-fail) and [save](#f4-propose-and-confirm) diagrams continue after a runner claims the turn.
 
 ```mermaid
 flowchart TD
-    Ask["Partner sends a question"] --> Queue["Save the queued turn"]
-    Queue -->|Mac ready| Run["Claim and read current facts"]
-    Queue -->|Backup eligible| Run
-    Queue -->|Neither can run| Wait["Show why the turn waits"]
+    Ask["Send a question or retry the saved question"] --> Check["Check session, request key, and context"]
+    Check -->|Ask refused or needs attention| AskExit["Session expired: sign in<br/>Invalid input or write proofs: refuse<br/>Unknown or foreign draft: 404<br/>Changed or finished draft: fresh review<br/>Key reused with changes: key_reuse<br/>New key in busy chat: turn_in_progress"]
+    Check -->|Same request and key| Saved["Read the saved turn"]
+    Saved -->|Answered or still in progress| Replay["Return the saved state"]
+    Check -->|New eligible request| Queue["Save a queued turn"]
+    Saved -->|Latest eligible failed turn| Retry["Requeue the same turn"]
+    Saved -->|Superseded failed turn| History["Return turn_superseded and keep the turn in history"]
+    Retry --> Queue
+    Queue -->|Ready Mac and free slot, or eligible backup| Claim["Start a fresh claim and read current facts"]
+    Queue -->|No eligible runner or slot occupied| Wait["Keep queued and show why<br/>Setup, Mac off, free-slot wait,<br/>sign-out, or plan limit"]
     Wait --> Queue
-    Run -->|Sign-out, limit, or expired lease| Queue
-    Run -->|Failure| Failed["Keep the failed turn visible"]
-    Failed -->|Eligible retry| Queue
-    Run -->|Ambiguous or missing evidence| Clarify["Save clarification and show choices"]
-    Clarify -->|Partner replies| Ask
-    Run -->|Validated answer or refusal| Answer["Save the answer"]
-    Answer -->|Has a proposal| Card["Show the editable save card"]
-    Card -->|Partner confirms| Save["Recheck the target and save the receipt"]
+    Read["Reload chat or switch partner"] --> Current["Show the current partner's saved state"]
+    Read -->|Read cannot show the chat| ReadExit["Read failed: offer retry<br/>Unknown chat: Conversation unavailable<br/>Discarded old history: offer New chat<br/>Session expired: sign in"]
 ```
 
 1. The partner sends a nonblank question up to 4,000 characters with a new ask key. A deal, lead, client or exact mail activity can be supplied as context. A draft review supplies its exact draft ID and version. The engine checks access and saves the validated draft binding with its email activity and mailbox IDs. An unknown or foreign draft returns 404. A changed version or finished draft needs a fresh review.
@@ -35,11 +35,55 @@ flowchart TD
 
 ## F3 Answer or fail
 
+This continues the [ask flow](#f1-ask). A stored proposal opens the [save flow](#f4-propose-and-confirm).
+
+```mermaid
+flowchart TD
+    Claim["Runner has a live claim"] --> Result["Post completion for this claim"]
+    Claim -->|Lease expires| Queue["Return the turn to the queue"]
+    Claim -->|Backup credits exhausted| Queue
+    Result -->|Sign-out or plan limit| Queue
+    Queue -->|Second choice ready| Second["Claim with the second provider"]
+    Result -->|Claim or credential rejected| Stale["Missing, foreign, expired, or completed claim: 404<br/>Revoked credential: stop polling and completion"]
+    Result -->|Lost response, lease still live| Result
+    Result -->|Invalid answer| Invalid["Return 422 and keep the claim open"]
+    Invalid -->|Endpoint accepts correction within lease| Result
+    Invalid -->|Current Mac posts failed| Failed["Keep the failed turn visible"]
+    Result -->|Failure, including a failed read| Failed
+    Failed -->|Eligible retry| Ask["Return to F1 with the original request and key"]
+    Failed -->|Retry unavailable| History["Superseded: keep in history<br/>Draft changed or gone: open fresh review"]
+    Result -->|Clarification| Clarify["Save question with any authorized choices"]
+    Clarify -->|Partner answers| AskAgain["Return to F1 with a new question"]
+    Result -->|Validated answer, refusal, or unavailable answer| Answer["Save and show the answer"]
+    Answer -->|Proposal present| Save["Continue to F4"]
+```
+
 1. Read current engine facts for DoctorCRE claims. Use history to resolve references. If the evidence is insufficient, clarify or say what is unavailable. Unsupported app changes get a plain refusal. The engine resolves source keys for this claim into its own labels and links. It checks the result again at completion. A general or local result can have zero DoctorCRE sources when the claim has no Doc sources and the answer has no proposal. A refusal has no proposal or sources. In P1 plain text, quote only numbers and dates in the returned facts. The engine checks source IDs and proposal targets. Staging checks whether the text matches the evidence. For example, if a read returns 10 and the prose says 11, that fails the staging comparison. Automated numeric checking applies to structured chart points under decision 220. Label any computed dates as expected. [Visual answers](../new-database.md#visual-answers)
-2. An accepted completion saves one `answered` turn with plain text, sources, provider and optional proposal. The app shows exact chips and the provider label for Codex, later providers, or backup. A read failure fails the turn. An invalid answer returns 422 while the claim can still correct it. A missing, foreign, expired or completed claim returns 404. A lost completion is retried with the same claim inside the lease. A runner that cannot complete leaves the lease to expire.
+2. An accepted completion saves one `answered` turn with plain text, sources, provider and optional proposal. The app shows exact chips and the provider label for Codex, later providers, or backup. A read failure fails the turn. An invalid answer returns 422 and leaves the claim open. The endpoint accepts a corrected answer within the lease. The current Mac runner instead posts a failed completion on its next attempt within the lease. A missing, foreign, expired or completed claim returns 404. A lost completion is retried with the same claim inside the lease. A runner that cannot complete leaves the lease to expire.
 3. A failed question stays visible. **Retry** for the latest eligible failure sends the original request and key, including the original omission of the conversation ID for the first question. It requeues the same turn. A superseded failure stays in history. For a changed or gone draft, open fresh review. A failed read of the chat list or conversation offers a read retry. The app shows the last saved state after reconnecting.
 
 ## F4 Propose and confirm
+
+```mermaid
+flowchart TD
+    Card["Show the editable proposal"] -->|Partner leaves it| Pending["Keep pending"]
+    Card -->|Partner confirms| Check["Check save key and recheck target"]
+    Check -->|Lost response or temporary database failure| Check
+    Check -->|Save refused| Refuse["Session expired: sign in<br/>Invalid edits or write proofs: refuse<br/>Changed edits with same key: key_reuse<br/>Different key after confirmation: already_confirmed<br/>No proposal: no_proposal"]
+    Check -->|Same key and edits| Receipt["Return the existing receipt"]
+    Check -->|Target or version unavailable| Record["Keep edits<br/>Stale target or open step: link to record<br/>Draft stale or finished: fresh review"]
+    Check -->|Note or next step succeeds| Save["Commit the save and receipt"]
+    Check -->|New draft or revision succeeds| Review["Commit the save and receipt, open exact review"]
+    Check -->|Existing draft| Existing["Save receipt and link to unchanged draft"]
+    Existing --> ReviewExisting["Partner can open the exact review"]
+    Review -->|Partner chooses Send reply| Send["Submit separately through door 22"]
+    ReviewExisting -->|Partner chooses Send reply| Send
+    Send -->|Submission rejected| Rejected["Show the review refusal under door 22"]
+    Send -->|Accepted| Outbox["Outbox handles delivery"]
+    Outbox -->|Before dispatch failed| Retryable["Use the review's retry action"]
+    Outbox -->|Delivery attempt unconfirmed| Uncertain["Check delivery status under door 22"]
+    Outbox -->|Confirmed sent| Sent["Review shows the sent reply"]
+```
 
 1. Doc uses `propose_save` with an authorized exact source. The proposal is stored in the answered turn when the engine accepts the answer. This step saves no business record. Ask Doc shows one editable card. A partner can leave it pending.
 2. On **Save note**, **Save next step**, **Save draft and open review**, or **Save revision**, the app sends the turn ID, a separate save key, and edits. The engine locks the turn and rechecks the current target, owner, permission and applicable version. It commits the record or unchanged-draft result, save receipt and turn confirmation together. A note goes to Activity. The confirming partner owns a new step. An existing open step blocks the insert and links to that record.
@@ -60,17 +104,29 @@ An approval card belongs to its original claim. A standing grant can apply to la
 flowchart TD
     Check["Doc checks the proposed action"] -->|Policy permits or grant matches| Run["Dispatch under a live Mac claim"]
     Check -->|Approval required| Card["Show an approval card for this claim"]
-    Card -->|Deny| Deny["Close card without a grant"]
-    Card -->|Approve while current| Grant["Save one standing grant"]
+    Card --> Decision["Partner submits a decision"]
+    Decision -->|First denial| Deny["Close card without a grant"]
+    Decision -->|First approval while current| Grant["Save one standing grant"]
     Grant -->|Original claim and model window live| Run
     Grant -->|Original run ended| NoRun["Keep grant without dispatch"]
     Grant -->|Later action| Check
     Grant -->|Partner revokes in Settings| Revoked["Grant unavailable to later actions"]
     Card -->|Lease expires| Expired["Old action loses dispatch permission"]
     Expired -->|Q1 recommendation, approve before reclaim| Grant
-    Expired -->|Mac reclaims first| Mac["Close old card and check the new action"]
+    Expired -->|Mac reclaims| Mac["Supersede any pending card and check the new action"]
     Mac --> Check
-    Expired -->|Backup takes over first| Backup["Close old card and use Doc tools only"]
+    Expired -->|Backup reclaims| Backup["Supersede any pending card and use Doc tools only"]
+```
+
+Check the decision receipt before treating a retry as a new decision. A reclaim supersedes a pending request and leaves an existing receipt readable.
+
+```mermaid
+flowchart TD
+    Decision["Submit or retry an approval decision"] --> Check["Check partner, request, and decision key"]
+    Check -->|Unauthorized, conflicting, or superseded without a receipt| Reject["Refuse without grant or dispatch"]
+    Check -->|Same saved decision, including after Mac or backup reclaim| Replay["Return the saved receipt<br/>No new grant or dispatch"]
+    Check -->|First authorized decision on current request| Apply["Apply the decision in the lifecycle above"]
+    Apply -->|Lost response| Decision
 ```
 
 1. The driver gives Doc the proposed action before dispatch. Doc checks its action type and scope against the signed-in partner's standing grants. A grant is a typed row with the partner's ID, action kind, scope and time granted. Run without a prompt if Doc's policy permits the action or an active grant covers it. The base CLI runs with its own restriction and approval layer off. A driver that cannot get a decision from Doc before dispatch cannot offer approval-controlled chat actions. The action types and interception mechanism need [Q1](questions.md#q1-standing-grant-scope).
@@ -92,13 +148,25 @@ flowchart TD
     Claim --> Judge["Run the job without tools"]
     Judge -->|Mac sign-out or limit| Queue
     Judge -->|Backup credits exhausted| Queue
-    Judge -->|Valid result and current claim| Save["Save summary, filing, split, or introduction finding"]
-    Judge -->|Failed, invalid, or empty filing result| Review["Leave a Home filing review when available"]
-    Judge -->|Expired claim or changed input| Stale["Refuse the old result"]
+    Judge -->|Expired claim without completion| Queue
+    Result -->|Expired claim or changed input on result| Stale["Return 404 for the submitted result"]
+    Judge --> Result["Post the result for this claim"]
+    Result -->|Lost response, lease still live| Result
+    Result -->|Invalid result| Invalid["Return 422 with claim still open"]
+    Invalid -->|Endpoint accepts correction within lease| Result
+    Invalid -->|Current Mac posts failed| Failed["End the job as failed"]
+    Invalid -.->|Invalid filing with a destination may also| Review["Leave a Home filing review"]
+    Result -->|Runner failure| Failed
+    Failed -->|Filing with an eligible review destination| Review
+    Result -->|Valid result, current claim| Apply["Apply each job's existing save rules"]
+    Apply -->|Result can be saved| Save["Save summary, filing, split, or introduction finding"]
+    Apply -->|Existing record or decision wins| Keep["Keep existing summary, split,<br/>filing decision, or introduction"]
+    Apply -->|Empty or newly unverified filing with a destination| Review
+    Apply -->|No applicable change or review destination| Done["End job without a record change"]
 ```
 
 1. Intake queues a job for the mailbox partner when an existing rule asks for judgment. It stores the job kind, exact email, owner and idempotency key, plus allowed destinations for filing. A Mac ready for that kind of mail job takes it after waiting chats, using the configured mail backend. It claims the current input and its hash. A job never appears in chat history.
-2. Pass the job instructions separately from subject, body and any candidate destinations or introductions. The current mail runner gives mail no tools or link credential. The drawing keeps this behavior pending [Q2](questions.md#q2-unattended-mail). If the configured backend fails its mail checks, leave the job queued for an eligible runner. A ready chat provider does not make mail ready. A provider sign-out or limit requeues and records readiness. A changed input or expired claim cannot save. An invalid result returns 422 within the lease. A failure ends the job under its existing rules.
+2. Pass the job instructions separately from subject, body and any candidate destinations or introductions. The current mail runner gives mail no tools or link credential. The drawing keeps this behavior pending [Q2](questions.md#q2-unattended-mail). If the configured backend fails its mail checks, leave the job queued for an eligible runner. A ready chat provider does not make mail ready. A provider sign-out or limit requeues and records readiness. A changed input or expired claim cannot save. An invalid result returns 422 and leaves the claim open. The endpoint accepts a corrected result within the lease. An invalid filing can also create its Home review in the same attempt. The current Mac runner instead posts a failed completion on its next attempt within the lease. A failed completion ends the job under its existing rules.
 3. Summary checks its quote and saves the first available summary of up to 300 characters, with an optional Home action title of up to 90 characters. Filing checks the exact quote, claimed destinations, sent-date vendor affiliation and prior filing decision before saving links and notes. Failed, invalid, empty or newly unverified filing leaves a Home review when there is a destination. Split stores the verified message and earlier text only while both fields are empty. Introduction checks an exact quote and the named parties against the claim. Accepted findings save as unconfirmed **Found in email** introductions. A matching recorded introduction wins. Lists and counts use confirmed introductions. Confirmation is later work under decision 224. [Mail jobs](../new-database.md#mail-judgment-jobs) · [Decision 224](../decisions.md)
 
 ## F8 Prepaid backup
