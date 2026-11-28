@@ -19,6 +19,7 @@ type Vendor = {
 };
 type Introduction = {
 	id: string;
+	version: string;
 	vendor_id: string;
 	vendor_name: string;
 	made_by: "vendor" | "team" | "client";
@@ -65,7 +66,7 @@ const vendors = sql<
 const introductions = sql<
 	Introduction[]
 >`(select coalesce(jsonb_agg(jsonb_build_object(
-		'id', i.id, 'vendor_id', i.vendor_id, 'vendor_name', vp.name, 'made_by', i.made_by,
+		'id', i.id, 'version', i.xmin::text, 'vendor_id', i.vendor_id, 'vendor_name', vp.name, 'made_by', i.made_by,
 		'introduced_by', u.slug, 'introduced_party_id', i.introduced_party_id,
 		'introduced_party_name', ip.name, 'introduced_on', i.introduced_on, 'note', i.note,
 		'removable', i.source_job_id is null,

@@ -55,7 +55,9 @@ test("an introduction the team made names the signed-in partner, and one the ven
 	};
 	const [status, added] = await save(joe, "introductions", args);
 	assert.equal(status, 201, JSON.stringify(added));
+	assert.match(String(added.version), /^\d+$/);
 	assert.deepEqual(added, {
+		version: added.version,
 		introduction_id: added.introduction_id,
 		vendor_id: vendor,
 		made_by: "team",
@@ -216,7 +218,7 @@ test("setting the source twice keeps the recorded introduction", async () => {
 
 test("removing an introduction is replayable and keeps deal participation", async () => {
 	const [, added] = await introduce({ deal_id: deal });
-	const args = key();
+	const args = { ...key(), version: added.version };
 	const path = `introductions/${added.introduction_id}/remove`;
 	assert.deepEqual(await save(joe, path, args), [
 		200,
@@ -226,7 +228,10 @@ test("removing an introduction is replayable and keeps deal participation", asyn
 		200,
 		{ introduction_id: added.introduction_id, replayed: true },
 	]);
-	assert.equal((await save(joe, path, key()))[0], 404);
+	assert.equal(
+		(await save(joe, path, { ...key(), version: added.version }))[0],
+		404,
+	);
 	const { rows } = await db.query(
 		`select exists (select from deal_party where deal_id = $1 and party_id = $2) as on_deal,
 			exists (select from change where table_name = 'introduction' and action = 'delete' and record ->> 'id' = $3) as in_history`,
@@ -249,18 +254,21 @@ test("a changed choice replaces only the named introduction, in the same save", 
 	const conflict = await introduce({
 		...fields,
 		replaces: randomUUID(),
+		replace_version: original.version,
 		introduced_by: "dell",
 	});
 	assert.equal(conflict[0], 409);
 	const refused = await introduce({
 		...fields,
 		replaces: original.introduction_id,
+		replace_version: original.version,
 		made_by: "client",
 	});
 	assert.equal(refused[0], 422);
 	const [status, replaced] = await introduce({
 		...fields,
 		replaces: original.introduction_id,
+		replace_version: original.version,
 		introduced_by: "dell",
 	});
 	assert.equal(status, 201);
@@ -269,4 +277,60 @@ test("a changed choice replaces only the named introduction, in the same save", 
 		[replacementDeal],
 	);
 	assert.deepEqual(rows, [{ id: replaced.introduction_id }]);
+});
+
+test("a stale removal leaves an introduction that moved to another deal", async () => {
+	const [, added] = await introduce({ deal_id: deal });
+	const path = `introductions/${added.introduction_id}`;
+	const [moved] = await save(joe, path, {
+		...key(),
+		deal_id: { from: deal, to: freshDeal },
+	});
+	assert.equal(moved, 200);
+	const [status, refused] = await save(joe, `${path}/remove`, {
+		...key(),
+		version: added.version,
+	});
+	assert.equal(status, 409);
+	assert.equal(refused.error, "version_conflict");
+	const { rows } = await db.query(
+		"select deal_id from introduction where id = $1",
+		[added.introduction_id],
+	);
+	assert.deepEqual(rows, [{ deal_id: freshDeal }]);
+});
+
+test("a replacement using an earlier receipt preserves the newer note", async () => {
+	const replacementDeal = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into deal (id, name, owner_user_id) values ('${replacementDeal}', 'Example Revised Introduction', '${joeId}');
+		commit;`);
+	const fields = {
+		made_by: "team",
+		deal_id: replacementDeal,
+		unrecorded_only: true,
+	};
+	const [, original] = await introduce({ ...fields, introduced_by: "joe" });
+	const [edited] = await save(
+		joe,
+		`introductions/${original.introduction_id}`,
+		{
+			...key(),
+			note: { from: "Example referral", to: "Example revised note" },
+		},
+	);
+	assert.equal(edited, 200);
+	const [status, refused] = await introduce({
+		...fields,
+		replaces: original.introduction_id,
+		replace_version: original.version,
+		introduced_by: "dell",
+	});
+	assert.equal(status, 409);
+	assert.equal(refused.error, "version_conflict");
+	const { rows } = await db.query(
+		"select note from introduction where deal_id = $1",
+		[replacementDeal],
+	);
+	assert.deepEqual(rows, [{ note: "Example revised note" }]);
 });

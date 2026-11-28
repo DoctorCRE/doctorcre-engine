@@ -86,6 +86,13 @@ test("a client's deals, its linked people's too, carry their vendors and the int
 	const response = await read(practice);
 	assert.equal(response.status, 200, await response.clone().text());
 	const { deals } = (await response.json()) as { deals: ClientDeal[] };
+	const withVersions = deals.map((entry) => ({
+		...entry,
+		introductions: entry.introductions.map(({ version, ...intro }) => {
+			assert.match(version, /^\d+$/);
+			return intro;
+		}),
+	}));
 	const deal = (id: string, name: string, owner: string) => ({
 		id,
 		name,
@@ -93,7 +100,7 @@ test("a client's deals, its linked people's too, carry their vendors and the int
 		client_id: id === doctorDeal ? doctor : practice,
 		client_name: id === doctorDeal ? "Example Reed" : "Example Birch Dental",
 	});
-	assert.deepEqual(deals, [
+	assert.deepEqual(withVersions, [
 		{
 			...deal(openDeal, "Example Open Suite", "joe"),
 			phase: "negotiation",

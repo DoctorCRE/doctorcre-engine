@@ -19,6 +19,8 @@ import {
 import { SaveRefusal } from "../save.ts";
 import { changing, edit, unchangedSince } from "./edit.ts";
 
+const isVersion = (value: unknown): value is string =>
+	typeof value === "string" && /^\d{1,10}$/.test(value);
 const MAKERS = ["vendor", "team", "client"] as const;
 
 const NEW_INTRODUCTION = {
@@ -27,6 +29,7 @@ const NEW_INTRODUCTION = {
 	made_by: (value: unknown) => isOneOf(MAKERS, value),
 	unrecorded_only: optional(isBoolean),
 	replaces: optional(isUuid),
+	replace_version: optional(isVersion),
 	introduced_party_id: isUuid,
 	introduced_on: isCalendarDate,
 	note: optional(isStoredText),
@@ -49,6 +52,7 @@ const introductionRead = (tx: Transaction<DB>, id: string) =>
 		.leftJoin("app_user as u", "u.id", "i.introduced_by_user_id")
 		.select([
 			"i.id as introduction_id",
+			sql<string>`i.xmin::text`.as("version"),
 			"i.vendor_id",
 			"i.made_by",
 			"u.slug as introduced_by",
@@ -82,6 +86,8 @@ function parseIntroduction(body: JsonObject) {
 	)
 		return invalid("introduced_party_id");
 	if (request.replaces && !request.unrecorded_only) return invalid("replaces");
+	if (Boolean(request.replaces) !== Boolean(request.replace_version))
+		return invalid("replace_version");
 	if (request.introduced_by && request.made_by !== "team")
 		return invalid("introduced_by");
 	return request;
@@ -134,10 +140,14 @@ async function addIntroduction(
 		const recorded = await record.limit(2).execute();
 		if (
 			request.replaces &&
+			request.replace_version &&
 			recorded.length === 1 &&
 			recorded[0]?.id === request.replaces
 		)
-			await removeIntroduction(tx, { introduction_id: request.replaces });
+			await removeIntroduction(tx, {
+				introduction_id: request.replaces,
+				version: request.replace_version,
+			});
 		else if (recorded.length || request.replaces)
 			throw new SaveRefusal(new Refusal(409, "introduction_already_recorded"));
 	}
@@ -202,22 +212,32 @@ async function editIntroduction(
 
 function parseRemove(introduction_id: string, body: JsonObject) {
 	if (!isUuid(introduction_id)) return new Refusal(404, "not_found");
-	const request = fit(body, { idempotency_key: isUuid }, ["idempotency_key"]);
+	const request = fit(body, { idempotency_key: isUuid, version: isVersion }, [
+		"idempotency_key",
+		"version",
+	]);
 	return request instanceof Refusal ? request : { ...request, introduction_id };
 }
 
 async function removeIntroduction(
 	tx: Transaction<DB>,
-	{ introduction_id }: { introduction_id: string },
+	{ introduction_id, version }: { introduction_id: string; version: string },
 ) {
-	const removed = await tx
-		.deleteFrom("introduction")
+	const current = await tx
+		.selectFrom("introduction")
 		.where("id", "=", introduction_id)
 		.where("confirmed", "=", true)
 		.where("source_job_id", "is", null)
-		.returning("id")
+		.select(sql<string>`xmin::text`.as("version"))
+		.forUpdate()
 		.executeTakeFirst();
-	if (!removed) throw notFound();
+	if (!current) throw notFound();
+	if (current.version !== version)
+		throw new SaveRefusal(new Refusal(409, "version_conflict"));
+	await tx
+		.deleteFrom("introduction")
+		.where("id", "=", introduction_id)
+		.execute();
 	return { introduction_id };
 }
 

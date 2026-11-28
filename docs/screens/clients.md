@@ -46,8 +46,8 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 - [ ] A vendor nobody recorded a source for hangs from a dashed line under "Brought in by: not recorded". It is never assumed to be the client's own. **Set** asks once per vendor whether Dell introduced them, Joe introduced them, or the client brought them.
 - [ ] The diagram also shows a vendor who referred the client to us, and the other partner when he introduced someone on that deal.
 - [ ] Clicking a vendor box shows who introduced them, when, and the note, with **Mark chosen**, **Open**, and **Remove from this deal**. **Mark chosen** puts the vendor on the deal in that role and turns the box green. **Add vendor** asks for the vendor, the role, and who brought them in: Dell, Joe, or the client. It needs no note, and the introduction is dated today in Chicago. **Not recorded** leaves the source unset.
-- [ ] **Remove introduction** asks "Remove the introduction for [vendor] on [deal]?" before removing a recorded introduction. The vendor stays on the deal in any chosen roles. Email findings keep their source.
-- [ ] When an Add vendor save has no answer, the form says it could not confirm the save. Retrying recovers the earlier receipt. If the earlier source was saved and differs from the new choice, the form names the source it saved and asks the partner to use the new choice explicitly.
+- [ ] **Remove introduction** asks "Remove the introduction for [vendor] on [deal]?" before removing a recorded introduction. If the introduction has changed, reopen the box to review it. The vendor stays on the deal in any chosen roles. Email findings keep their source.
+- [ ] When an **Add vendor** or **Set** save has no answer, the form says it could not confirm the save. Retrying recovers the earlier receipt. If the earlier source was saved and differs from the new choice, the form names the source it saved and asks the partner to use the new choice explicitly.
 - [ ] The open icon on a deal shows the same diagram large, in place of the table, with dates under each name. The x returns to the table. The large view is for a computer only.
 
 ## On a phone
