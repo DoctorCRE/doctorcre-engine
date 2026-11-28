@@ -27,6 +27,7 @@ import {
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
 import { checklistOf, checklistType, criticalDateLabel } from "./checklist.ts";
+import { invoiceOf } from "./invoice.ts";
 import {
 	checkInNextStep,
 	clientWebsiteOf,
@@ -114,9 +115,14 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 							.else("unpaid")
 							.end()
 							.as("status"),
+						"payment.id",
+						asText(eb.ref("payment.invoiced_on")).as("invoiced_on"),
 						asText(eb.ref("payment.received_on")).as("received_on"),
 					])
-					.whereRef("payment.deal_id", "=", "d.id"),
+					.whereRef("payment.deal_id", "=", "d.id")
+					.orderBy("payment.invoiced_on")
+					.orderBy("payment.created_at")
+					.orderBy("payment.id"),
 			).as("commissions"),
 			jsonArrayFrom(
 				eb
@@ -407,6 +413,12 @@ export async function readNextDealDetail(
 		),
 		critical_dates: labeledDates,
 		checklist,
+		invoice: invoiceOf({
+			type: checklistType(detail),
+			lease_executed_on: detail.lease?.executed_on ?? null,
+			closed_on: detail.closed_on,
+			payments: commissions,
+		}),
 		plan: planOf({
 			phase: detail.phase,
 			outcome: detail.outcome,
