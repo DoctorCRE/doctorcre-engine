@@ -45,7 +45,7 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 - [ ] Two or more introduced vendors under one box sit stacked like a solitaire pile behind the top card, with the card edges beneath visible and a count. One click fans them out. One click stacks them again.
 - [ ] A vendor nobody recorded a source for hangs from a dashed line under "Brought in by: not recorded". It is never assumed to be the client's own. **Set** asks once per vendor whether Dell introduced them, Joe introduced them, or the client brought them.
 - [ ] The diagram also shows a vendor who referred the client to us, and the other partner when he introduced someone on that deal.
-- [ ] Clicking a vendor box shows who introduced them, when, and the note, with **Mark chosen**, **Open**, and **Remove from this deal**. **Mark chosen** puts the vendor on the deal in that role and turns the box green. **Add vendor** asks for the vendor, the role, and who brought them in: Dell, Joe, or the client.
+- [ ] Clicking a vendor box shows who introduced them, when, and the note, with **Mark chosen**, **Open**, and **Remove from this deal**. **Mark chosen** puts the vendor on the deal in that role and turns the box green. **Add vendor** asks for the vendor, the role, and who brought them in: Dell, Joe, or the client. It needs no note, and the introduction is dated today in Chicago.
 - [ ] The open icon on a deal shows the same diagram large, in place of the table, with dates under each name. The x returns to the table. The large view is for a computer only.
 
 ## On a phone

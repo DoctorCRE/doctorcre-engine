@@ -2,12 +2,14 @@ import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { Refusal } from "../answer.ts";
 import { isCalendarDate } from "../calendar-date.ts";
+import { PARTNERS } from "../clients/read.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
-import { ACTING_USER } from "../next-save.ts";
+import { ACTING_USER, userId } from "../next-save.ts";
 import {
 	fit,
+	isOneOf,
 	isStoredText,
 	isUuid,
 	optional,
@@ -25,8 +27,10 @@ const NEW_INTRODUCTION = {
 	made_by: isMaker,
 	introduced_party_id: isUuid,
 	introduced_on: isCalendarDate,
-	note: isStoredText,
+	note: optional(isStoredText),
 	deal_id: optional(isUuid),
+	// The partner who made a team introduction, when not the one saving it.
+	introduced_by: optional((value: unknown) => isOneOf(PARTNERS, value)),
 };
 
 const EDIT_INTRODUCTION = {
@@ -61,16 +65,17 @@ function parseIntroduction(body: JsonObject) {
 		"made_by",
 		"introduced_party_id",
 		"introduced_on",
-		"note",
 	]);
 	if (request instanceof Refusal) return request;
+	const invalid = (field: string) =>
+		new Refusal(400, "invalid_field_value", { fields: [field] });
 	if (
 		request.vendor_id.toLowerCase() ===
 		request.introduced_party_id.toLowerCase()
 	)
-		return new Refusal(400, "invalid_field_value", {
-			fields: ["introduced_party_id"],
-		});
+		return invalid("introduced_party_id");
+	if (request.introduced_by && request.made_by !== "team")
+		return invalid("introduced_by");
 	return request;
 }
 
@@ -102,16 +107,19 @@ async function addIntroduction(
 		.execute();
 	if (parties.length !== 2) throw notFound();
 	await lockDeal(tx, request.deal_id ?? null);
+	const introducer = request.introduced_by
+		? await userId(tx, request.introduced_by)
+		: ACTING_USER;
 	const { id } = await tx
 		.insertInto("introduction")
 		.values({
 			vendor_id: request.vendor_id,
 			made_by: request.made_by,
-			introduced_by_user_id: request.made_by === "team" ? ACTING_USER : null,
+			introduced_by_user_id: request.made_by === "team" ? introducer : null,
 			introduced_party_id: request.introduced_party_id,
 			introduced_on: request.introduced_on,
 			deal_id: request.deal_id ?? null,
-			note: request.note.trim(),
+			note: request.note?.trim() ?? null,
 			changed_at: sql<string>`now()`,
 		})
 		.returning("id")
