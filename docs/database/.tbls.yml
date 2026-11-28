@@ -2,7 +2,7 @@ disableOutputSchema: true
 viewpoints:
   - id: people
     name: People
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.do_not_contact
@@ -14,7 +14,7 @@ viewpoints:
       - next.party_phone
   - id: relationships
     name: Relationships
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.claim_type
@@ -28,7 +28,7 @@ viewpoints:
       - next.specialty
   - id: clients
     name: Clients
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.client
@@ -41,7 +41,7 @@ viewpoints:
       - next.national_account_owner
   - id: vendors-territories
     name: Vendors and territories
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.market
@@ -55,7 +55,7 @@ viewpoints:
       - next.vendor_vertical
   - id: deals
     name: Deals
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.deal
@@ -70,7 +70,7 @@ viewpoints:
       - next.typical_length
   - id: imported-deals
     name: Imported deals
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.imported_automatic_phase_move
@@ -81,7 +81,7 @@ viewpoints:
       - next.imported_deal_party
   - id: property
     name: Property
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.building_ownership
@@ -92,7 +92,7 @@ viewpoints:
       - next.suite
   - id: leases
     name: Leases
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.critical_date
@@ -102,7 +102,7 @@ viewpoints:
       - next.lease_version
   - id: offers
     name: Offers
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.offer
@@ -111,7 +111,7 @@ viewpoints:
       - next.proposal
   - id: commissions
     name: Commissions
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.commission
@@ -120,7 +120,7 @@ viewpoints:
       - next.commission_tier
   - id: documents
     name: Documents
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.document
@@ -129,7 +129,7 @@ viewpoints:
       - next.party_document
   - id: email
     name: Email
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.email
@@ -141,7 +141,7 @@ viewpoints:
       - next.reply_draft_document
   - id: leads
     name: Leads
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.candidate
@@ -154,7 +154,7 @@ viewpoints:
       - next.lead_stage_move
   - id: activity
     name: Activity
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.activity
@@ -163,7 +163,7 @@ viewpoints:
       - next.next_step
   - id: home-calendar
     name: Home and calendar
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.calendar_agenda
@@ -173,7 +173,7 @@ viewpoints:
       - next.weekly_review
   - id: doc
     name: Doc
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.doc_conversation
@@ -183,21 +183,21 @@ viewpoints:
       - next.doc_turn
   - id: invoices
     name: Invoices
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.invoice_email
       - next.invoice_mailbox
   - id: marketing-posts
     name: Marketing posts
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.post
       - next.post_media
   - id: marketing-categories
     name: Marketing categories
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.design_template
@@ -205,7 +205,7 @@ viewpoints:
       - next.platform_format
   - id: marketing-review
     name: Marketing review
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.platform_metric
@@ -213,21 +213,21 @@ viewpoints:
       - next.post_text
   - id: social-accounts
     name: Social accounts
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.social_account
       - next.social_sign_in
   - id: tours
     name: Tours
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.tour_plan
       - next.tour_stop
   - id: website
     name: Client websites
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.deal_client_website
@@ -235,14 +235,14 @@ viewpoints:
       - next.deal_client_website_grant
   - id: users-jobs
     name: Users and jobs
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.app_user
       - next.job
   - id: changes-preferences
     name: Changes and preferences
-    desc: Tables in this area and the foreign keys between them.
+    desc: Tables in this area and their foreign keys, including links to other areas.
     distance: 0
     tables:
       - next.change

@@ -28,9 +28,9 @@
 
 ## Viewpoints
 
-| Name                          | Definition                                             |
-| ----------------------------- | ------------------------------------------------------ |
-| [Leases](viewpoint-leases.md) | Tables in this area and the foreign keys between them. |
+| Name                          | Definition                                                                  |
+| ----------------------------- | --------------------------------------------------------------------------- |
+| [Leases](viewpoint-leases.md) | Tables in this area and their foreign keys, including links to other areas. |
 
 ## Constraints
 

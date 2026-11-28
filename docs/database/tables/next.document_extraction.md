@@ -23,9 +23,9 @@
 
 ## Viewpoints
 
-| Name                                | Definition                                             |
-| ----------------------------------- | ------------------------------------------------------ |
-| [Documents](viewpoint-documents.md) | Tables in this area and the foreign keys between them. |
+| Name                                | Definition                                                                  |
+| ----------------------------------- | --------------------------------------------------------------------------- |
+| [Documents](viewpoint-documents.md) | Tables in this area and their foreign keys, including links to other areas. |
 
 ## Constraints
 
