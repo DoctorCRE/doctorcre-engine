@@ -6,7 +6,7 @@ set local search_path = next, pg_temp;
 create table if not exists deal_plan_date (
 	deal_id uuid not null references deal,
 	todo text not null,
-	target_on date check (isfinite(target_on)),
+	target_on date check (target_on between date '0001-01-01' and date '9998-12-31'),
 	primary key (deal_id, todo),
 	changed_by_user_id uuid references app_user,
 	changed_by_job text references job,
@@ -34,7 +34,10 @@ begin
 		if tg_op = 'UPDATE' and new.target_on is null and (new.deal_id, new.todo) = (old.deal_id, old.todo) then
 			return null;
 		end if;
-		select d.kind, d.reason into deal_kind, deal_reason from deal d where d.id = new.deal_id for no key update;
+		-- A row lock alone lets a workflow edit use an older snapshot of its dates.
+		-- This no-op write creates a new row version without restamping the deal.
+		update deal d set kind = d.kind where d.id = new.deal_id
+			returning d.kind, d.reason into deal_kind, deal_reason;
 		todos := array[new.todo];
 	end if;
 	workflow := case when deal_reason = 'renewal' then 'renewal'

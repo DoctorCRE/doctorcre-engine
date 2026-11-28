@@ -30,7 +30,7 @@
 | deal_plan_date_deal_id_fkey               | FOREIGN KEY | FOREIGN KEY (deal_id) REFERENCES deal(id)                                                                                                                                                    |
 | deal_plan_date_deal_id_not_null           | n           | NOT NULL deal_id                                                                                                                                                                             |
 | deal_plan_date_pkey                       | PRIMARY KEY | PRIMARY KEY (deal_id, todo)                                                                                                                                                                  |
-| deal_plan_date_target_on_check            | CHECK       | CHECK (isfinite(target_on))                                                                                                                                                                  |
+| deal_plan_date_target_on_check            | CHECK       | CHECK (((target_on >= '0001-01-01'::date) AND (target_on <= '9998-12-31'::date)))                                                                                                            |
 | deal_plan_date_todo_not_null              | n           | NOT NULL todo                                                                                                                                                                                |
 | deal_plan_date_workflow_todo              | TRIGGER     | CREATE CONSTRAINT TRIGGER deal_plan_date_workflow_todo AFTER INSERT OR UPDATE ON next.deal_plan_date NOT DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION check_deal_plan_todo() |
 

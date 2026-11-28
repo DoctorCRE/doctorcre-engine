@@ -13,6 +13,8 @@ import { planVersionOf } from "./plan-read.ts";
 
 const todoSlug = (value: unknown): value is string =>
 	typeof value === "string" && /^[a-z][a-z0-9_]*$/.test(value);
+const isPlanTargetDate = (value: unknown): value is string =>
+	isCalendarDate(value) && value >= "0001-01-01" && value < "9999-01-01";
 const bad = (field: string) =>
 	new Refusal(400, "invalid_field_value", { fields: [field] });
 const parse = (body: JsonObject) =>
@@ -23,7 +25,7 @@ const parse = (body: JsonObject) =>
 			deal_id: isUuid,
 			base_version: isChangeId,
 			todo: optional(todoSlug),
-			target_on: clearable(isCalendarDate),
+			target_on: clearable(isPlanTargetDate),
 		},
 		["idempotency_key", "deal_id", "base_version"],
 	);

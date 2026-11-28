@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { type TestContext, test } from "node:test";
+import pg from "pg";
 import { copyTest, readSchema } from "../test-copy.ts";
 import { type Caller, doorTest } from "../test-door.ts";
 
@@ -35,7 +36,7 @@ type ListBody = { deal_kind: string; items: Item[] };
 
 // Each test gets its own database, so none depends on rows another left behind.
 async function freshDoor(t: TestContext) {
-	const { db, setup, cleanup, save, request } = doorTest();
+	const { db, setup, cleanup, save, request, connectionString } = doorTest();
 	await setup();
 	t.after(cleanup);
 	await db.query(`begin; set local engine.job = 'old_system';
@@ -55,7 +56,7 @@ async function freshDoor(t: TestContext) {
 	};
 	const post = (caller: Caller, body: object) =>
 		save(caller, "typical-lengths", body);
-	return { db, readLengths, post, save, request };
+	return { db, readLengths, post, save, request, connectionString };
 }
 
 test("the read returns seeded lease lengths in workflow order and handles other kinds", async (t) => {
@@ -341,7 +342,7 @@ for (const migrated of [false, true]) {
 }
 
 async function planDateFixture(t: TestContext) {
-	const { db, save, request } = await freshDoor(t);
+	const { db, save, request, connectionString } = await freshDoor(t);
 	const deal = randomUUID();
 	await db.query(`begin; set local engine.job = 'old_system';
 		insert into deal (id, name, kind, owner_user_id) values ('${deal}', 'Example lease', 'lease', '${alex}');
@@ -379,7 +380,7 @@ async function planDateFixture(t: TestContext) {
 		assert.ok(date);
 		return date.target;
 	};
-	return { db, deal, read, submit, day };
+	return { db, deal, read, submit, day, connectionString };
 }
 
 test("partners save, undo and reset their own to-do dates from the plan they saw", async (t) => {
@@ -474,6 +475,82 @@ test("concurrent plan edits accept one writer per base version", async (t) => {
 	assert.equal(saved.own_dates.representation, winner === 0 ? first : second);
 });
 
+test("a date that leaves no room for the forecast is rejected before saving", async (t) => {
+	const { read, submit } = await planDateFixture(t);
+	const before = await read();
+	const [status, refusal] = await submit(before.base_version, {
+		todo: "representation",
+		target_on: "9999-12-31",
+	});
+	assert.equal(status, 400);
+	assert.deepEqual(refusal.fields, ["target_on"]);
+	assert.deepEqual(await read(), before);
+	const [accepted] = await submit(before.base_version, {
+		todo: "representation",
+		target_on: "9998-12-31",
+	});
+	assert.equal(accepted, 200);
+	assert.match((await read()).expected_signing_on ?? "", /^9999-\d{2}-\d{2}$/);
+});
+
+test("workflow changes and incompatible plan dates cannot both commit across snapshots", async (t) => {
+	let writer: pg.Client | undefined;
+	t.after(async () => writer?.end());
+	const { connectionString, db, deal } = await planDateFixture(t);
+	writer = new pg.Client({
+		connectionString,
+		options: "-c search_path=next",
+	});
+	await writer.connect();
+	const changeWorkflow = "update deal set kind = 'purchase' where id = $1";
+	const saveDate = `insert into deal_plan_date (deal_id, todo, target_on)
+		values ($1, 'commencement_letter', current_date + 40) on conflict (deal_id, todo)
+		do update set target_on = excluded.target_on`;
+	const begin = (client: pg.Client, isolation: string) =>
+		client.query(
+			`begin isolation level ${isolation}; set local role engine; set local engine.user_id = '${alex}'`,
+		);
+	const stamp = (client: pg.Client) =>
+		client.query(
+			"select changed_at::text, changed_by_user_id, changed_by_job from deal where id = $1",
+			[deal],
+		);
+	for (const isolation of [
+		"repeatable read",
+		"serializable",
+		"read committed",
+	]) {
+		for (const [first, second] of [
+			[saveDate, changeWorkflow],
+			[changeWorkflow, saveDate],
+		] as const) {
+			await begin(db, isolation);
+			try {
+				const before = await stamp(db);
+				await begin(writer, isolation);
+				await writer.query(first, [deal]);
+				await writer.query("commit");
+				if (first === saveDate)
+					assert.deepEqual((await stamp(writer)).rows, before.rows);
+				await assert.rejects(db.query(second, [deal]), {
+					code: /^(23514|23503|40001)$/,
+				});
+			} finally {
+				await db.query("rollback");
+			}
+			await begin(writer, isolation);
+			await writer.query(
+				"update deal_plan_date set target_on = null where deal_id = $1",
+				[deal],
+			);
+			await writer.query("update deal set kind = 'lease' where id = $1", [
+				deal,
+			]);
+			await writer.query("commit");
+		}
+	}
+});
+
 test("the database accepts only to-dos from the deal's workflow", async (t) => {
 	const { db, deal } = await planDateFixture(t);
 	for (const ddl of [null, await readSchema("add-deal-plan-dates.sql")]) {
@@ -492,6 +569,15 @@ test("the database accepts only to-dos from the deal's workflow", async (t) => {
 					[deal, todo],
 				);
 			await insert("commencement_letter");
+			await db.query("savepoint invalid_date");
+			await assert.rejects(
+				db.query(
+					"update deal_plan_date set target_on = '9999-12-31' where deal_id = $1",
+					[deal],
+				),
+				{ code: "23514" },
+			);
+			await db.query("rollback to savepoint invalid_date");
 			for (const todo of ["invented_todo", "purchase_close"]) {
 				await db.query("savepoint invalid_todo");
 				await assert.rejects(insert(todo), { code: "23514" });

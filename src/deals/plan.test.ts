@@ -598,6 +598,19 @@ test("a partner’s own end day moves the to-dos that follow", () => {
 	assert.notEqual(custom.expected_signing_on, original.expected_signing_on);
 });
 
+test("a forecast that runs past four-digit years gives later to-dos no expected days", () => {
+	const plan = planOf(
+		facts({
+			lengths: { ...LENGTHS, contract_draft: 2_147_483_647 },
+			own_dates: { business_terms: "9998-12-31" },
+		}),
+	);
+	assert.equal(expectedTo(plan, "business_terms"), "9998-12-31");
+	assert.equal(expectedTo(plan, "contract_draft"), null);
+	assert.equal(expectedTo(plan, "attorney_comments"), null);
+	assert.equal(plan.expected_signing_on, null);
+});
+
 test("forecast attention starts the first day the current phase overruns enough to miss a date", () => {
 	const risk = date("loi_expiry", "2030-06-27");
 	const initial = facts({ today: "2030-06-28", critical_dates: [risk] });
