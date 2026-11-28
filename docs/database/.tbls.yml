@@ -1,3 +1,4 @@
+disableOutputSchema: true
 er:
   format: mermaid
   showColumnTypes:
@@ -6,336 +7,250 @@ er:
 viewpoints:
   - id: people
     name: People
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user
-      - next.deal
-      - next.do_not_contact # area
-      - next.email
-      - next.how_found
-      - next.job
-      - next.merged_party # area
-      - next.outside_id # area
-      - next.party # area
-      - next.party_company # area
-      - next.party_email # area
-      - next.party_phone # area
+      - next.do_not_contact
+      - next.merged_party
+      - next.outside_id
+      - next.party
+      - next.party_company
+      - next.party_email
+      - next.party_phone
   - id: relationships
     name: Relationships
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user
-      - next.claim_type # area
-      - next.client
-      - next.deal
-      - next.how_found # area
-      - next.introduction # area
-      - next.job
-      - next.lead_lane
-      - next.party
-      - next.party_link # area
-      - next.party_role # area
-      - next.party_specialty # area
-      - next.relationship_level # area
-      - next.role # area
-      - next.specialty # area
-      - next.stage
+      - next.claim_type
+      - next.how_found
+      - next.introduction
+      - next.party_link
+      - next.party_role
+      - next.party_specialty
+      - next.relationship_level
+      - next.role
+      - next.specialty
   - id: clients
     name: Clients
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user
-      - next.client # area
-      - next.client_brand # area
-      - next.client_research # area
-      - next.client_research_fact # area
-      - next.client_type # area
-      - next.client_vertical # area
-      - next.job
-      - next.national_account # area
-      - next.national_account_owner # area
-      - next.party
-      - next.party_role
+      - next.client
+      - next.client_brand
+      - next.client_research
+      - next.client_research_fact
+      - next.client_type
+      - next.client_vertical
+      - next.national_account
+      - next.national_account_owner
   - id: vendors-territories
-    name: Vendors Territories
-    desc: Tables and their referenced records.
+    name: Vendors and territories
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user
-      - next.job
-      - next.market # area
-      - next.market_city # area
-      - next.market_county # area
-      - next.party
-      - next.party_role
-      - next.party_territory # area
-      - next.party_territory_review # area
-      - next.territory # area
-      - next.territory_piece # area
-      - next.vendor_loan_program # area
-      - next.vendor_vertical # area
+      - next.market
+      - next.market_city
+      - next.market_county
+      - next.party_territory
+      - next.party_territory_review
+      - next.territory
+      - next.territory_piece
+      - next.vendor_loan_program
+      - next.vendor_vertical
   - id: deals
     name: Deals
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.activity
-      - next.activity_about
-      - next.app_user
-      - next.deal # area
-      - next.deal_kind # area
-      - next.deal_open_name # area
-      - next.deal_party # area
-      - next.deal_phase_change # area
-      - next.deal_reason # area
-      - next.deal_star # area
-      - next.job
-      - next.lease
-      - next.market
-      - next.party
-      - next.party_role
-      - next.phase # area
-      - next.role
-      - next.stage # area
-      - next.typical_length # area
-  - id: imported-deals
-    name: Imported Deals
-    desc: Tables and their referenced records.
-    tables:
-      - next.app_user
       - next.deal
+      - next.deal_kind
+      - next.deal_open_name
+      - next.deal_party
       - next.deal_phase_change
-      - next.imported_automatic_phase_move # area
-      - next.imported_deal_board # area
-      - next.imported_deal_history # area
-      - next.imported_deal_invoiced # area
-      - next.imported_deal_owner # area
-      - next.imported_deal_party # area
-      - next.job
-      - next.party
+      - next.deal_reason
+      - next.deal_star
       - next.phase
-      - next.role
+      - next.stage
+      - next.typical_length
+  - id: imported-deals
+    name: Imported deals
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.imported_automatic_phase_move
+      - next.imported_deal_board
+      - next.imported_deal_history
+      - next.imported_deal_invoiced
+      - next.imported_deal_owner
+      - next.imported_deal_party
   - id: property
     name: Property
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user
-      - next.building_ownership # area
-      - next.deal
-      - next.deal_property # area
-      - next.job
-      - next.market
-      - next.measurement # area
-      - next.party
-      - next.party_role
-      - next.platform_metric
-      - next.post
-      - next.property # area
-      - next.space_need # area
-      - next.suite # area
+      - next.building_ownership
+      - next.deal_property
+      - next.measurement
+      - next.property
+      - next.space_need
+      - next.suite
   - id: leases
     name: Leases
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user
-      - next.critical_date # area
-      - next.deal
-      - next.deal_party
-      - next.deal_property
-      - next.document
-      - next.job
-      - next.lease # area
-      - next.lease_option # area
-      - next.lease_suite # area
-      - next.lease_version # area
-      - next.offer
-      - next.party
-      - next.property
-      - next.suite
+      - next.critical_date
+      - next.lease
+      - next.lease_option
+      - next.lease_suite
+      - next.lease_version
   - id: offers
     name: Offers
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.activity
-      - next.activity_about
-      - next.app_user
-      - next.candidate
-      - next.claim_type
-      - next.deal
-      - next.deal_party
-      - next.deal_property
-      - next.document
-      - next.how_found
-      - next.job
-      - next.next_step
-      - next.offer # area
-      - next.offer_claim # area
-      - next.offer_document # area
-      - next.party
-      - next.phase
-      - next.property
-      - next.proposal # area
-      - next.stage
+      - next.offer
+      - next.offer_claim
+      - next.offer_document
+      - next.proposal
   - id: commissions
     name: Commissions
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user
-      - next.commission # area
-      - next.commission_payment # area
-      - next.commission_share # area
-      - next.commission_tier # area
-      - next.deal
-      - next.job
-      - next.party
+      - next.commission
+      - next.commission_payment
+      - next.commission_share
+      - next.commission_tier
   - id: documents
     name: Documents
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user
-      - next.deal
-      - next.document # area
-      - next.document_extraction # area
-      - next.document_kind # area
-      - next.job
-      - next.party
-      - next.party_document # area
+      - next.document
+      - next.document_extraction
+      - next.document_kind
+      - next.party_document
   - id: email
     name: Email
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.activity
-      - next.app_user
-      - next.doc_turn
-      - next.document
-      - next.email # area
-      - next.email_document # area
-      - next.email_mailbox # area
-      - next.email_recipient # area
-      - next.email_summary # area
-      - next.job
-      - next.reply_draft # area
-      - next.reply_draft_document # area
+      - next.email
+      - next.email_document
+      - next.email_mailbox
+      - next.email_recipient
+      - next.email_summary
+      - next.reply_draft
+      - next.reply_draft_document
   - id: leads
     name: Leads
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.activity
-      - next.activity_about
-      - next.app_user
-      - next.candidate # area
-      - next.email_mailbox
-      - next.job
-      - next.lead_contact_draft # area
-      - next.lead_email_attention # area
-      - next.lead_email_evidence # area
-      - next.lead_email_source # area
-      - next.lead_lane # area
-      - next.lead_source_sender # area
-      - next.lead_stage_move # area
-      - next.party
-      - next.party_role
-      - next.stage
+      - next.candidate
+      - next.lead_contact_draft
+      - next.lead_email_attention
+      - next.lead_email_evidence
+      - next.lead_email_source
+      - next.lead_lane
+      - next.lead_source_sender
+      - next.lead_stage_move
   - id: activity
     name: Activity
-    desc: Tables and their referenced records.
-    tables:
-      - next.activity # area
-      - next.activity_about # area
-      - next.app_user
-      - next.deal
-      - next.deal_attention_alert # area
-      - next.job
-      - next.next_step # area
-      - next.party
-      - next.property
-  - id: home-calendar
-    name: Home Calendar
-    desc: Tables and their referenced records.
-    tables:
-      - next.app_user
-      - next.calendar_agenda # area
-      - next.calendar_review_dismissal # area
-      - next.deal
-      - next.home_mark # area
-      - next.home_update # area
-      - next.job
-      - next.next_step
-      - next.party
-      - next.party_role
-      - next.property
-      - next.proposal
-      - next.reply_draft
-      - next.weekly_review # area
-  - id: doc
-    name: Doc
-    desc: Tables and their referenced records.
-    tables:
-      - next.app_user
-      - next.deal
-      - next.doc_conversation # area
-      - next.doc_judgment_destination # area
-      - next.doc_judgment_job # area
-      - next.doc_link # area
-      - next.doc_turn # area
-      - next.email_mailbox
-      - next.party
-      - next.party_role
-      - next.save_receipt
-  - id: invoices
-    name: Invoices
-    desc: Tables and their referenced records.
-    tables:
-      - next.app_user
-      - next.change
-      - next.commission_payment
-      - next.deal
-      - next.deal_phase_change
-      - next.invoice_email # area
-      - next.invoice_mailbox # area
-      - next.job
-  - id: marketing
-    name: Marketing
-    desc: Tables and their referenced records.
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
       - next.activity
       - next.activity_about
-      - next.app_user
-      - next.deal
-      - next.design_template # area
-      - next.document
-      - next.idea # area
-      - next.job
-      - next.party
-      - next.platform_format # area
-      - next.platform_metric # area
-      - next.post # area
-      - next.post_media # area
-      - next.post_review # area
-      - next.post_text # area
-      - next.property
-      - next.social_account # area
-      - next.social_sign_in # area
-      - next.tour_plan # area
-      - next.tour_stop # area
+      - next.deal_attention_alert
+      - next.next_step
+  - id: home-calendar
+    name: Home and calendar
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.calendar_agenda
+      - next.calendar_review_dismissal
+      - next.home_mark
+      - next.home_update
+      - next.weekly_review
+  - id: doc
+    name: Doc
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.doc_conversation
+      - next.doc_judgment_destination
+      - next.doc_judgment_job
+      - next.doc_link
+      - next.doc_turn
+  - id: invoices
+    name: Invoices
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.invoice_email
+      - next.invoice_mailbox
+  - id: marketing-posts
+    name: Marketing posts
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.post
+      - next.post_media
+  - id: marketing-categories
+    name: Marketing categories
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.design_template
+      - next.idea
+      - next.platform_format
+  - id: marketing-review
+    name: Marketing review
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.platform_metric
+      - next.post_review
+      - next.post_text
+  - id: social-accounts
+    name: Social accounts
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.social_account
+      - next.social_sign_in
+  - id: tours
+    name: Tours
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.tour_plan
+      - next.tour_stop
   - id: website
-    name: Website
-    desc: Tables and their referenced records.
+    name: Client websites
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
+    tables:
+      - next.deal_client_website
+      - next.deal_client_website_attempt
+      - next.deal_client_website_grant
+  - id: users-jobs
+    name: Users and jobs
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
       - next.app_user
-      - next.deal
-      - next.deal_client_website # area
-      - next.deal_client_website_attempt # area
-      - next.deal_client_website_grant # area
       - next.job
-      - next.party
-  - id: system
-    name: System
-    desc: Tables and their referenced records.
+  - id: changes-preferences
+    name: Changes and preferences
+    desc: Tables in this area and the foreign keys between them.
+    distance: 0
     tables:
-      - next.app_user # area
-      - next.change # area
-      - next.imported_change # area
-      - next.job # area
-      - next.merged_party
-      - next.party
-      - next.save_receipt # area
-      - next.user_preference # area
+      - next.change
+      - next.imported_change
+      - next.save_receipt
+      - next.user_preference
