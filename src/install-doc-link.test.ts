@@ -52,6 +52,9 @@ function fakeMac(
 		"link.json",
 	);
 	const loaded = join(scratch, "loaded");
+	const rejectBootstrap = join(scratch, "reject-bootstrap");
+	const oldConfig = join(scratch, "old-config");
+	const oldAgent = join(scratch, "old-agent");
 	const codex = join(bin, "codex cli");
 	const codexHome = join(home, ".codex");
 
@@ -87,7 +90,11 @@ case "$1" in
 	print) case "$2" in */${label}) test -f "${loaded}";; *) exit 0;; esac ;;
 	enable) exit 0 ;;
 	bootout) unlink "${loaded}" ;;
-	bootstrap) [ ! -f "${loaded}" ] && [ "$3" = "${agent}" ] && : > "${loaded}" ;;
+	bootstrap)
+		if [ -f "${rejectBootstrap}" ]; then
+			cmp -s "${config}" "${oldConfig}" && cmp -s "${agent}" "${oldAgent}" || exit 7
+		fi
+		[ ! -f "${loaded}" ] && [ "$3" = "${agent}" ] && : > "${loaded}" ;;
 	*) exit 3 ;;
 esac`,
 	);
@@ -217,6 +224,14 @@ esac
 		agent,
 		config,
 		commands,
+		loaded,
+		rejectBootstrap(preserve = false) {
+			writeFileSync(rejectBootstrap, "");
+			if (preserve) {
+				writeFileSync(oldConfig, readFileSync(config), { mode: 0o600 });
+				writeFileSync(oldAgent, readFileSync(agent), { mode: 0o600 });
+			}
+		},
 	};
 }
 
@@ -233,6 +248,7 @@ test("Codex setup verifies the credential and loads the same job without using C
 		credential: firstCredential,
 		default_backend: "codex",
 		backends: [{ backend: "codex", binary: mac.codex }],
+		codex_home: join(mac.home, ".codex"),
 	});
 	const commands = readFileSync(mac.commands, "utf8");
 	assert.match(
@@ -245,9 +261,10 @@ test("Codex setup verifies the credential and loads the same job without using C
 for (const defaultBackend of ["claude", "codex"] as const) {
 	test(`setup registers both signed-in CLIs with ${defaultBackend} as default`, async (t) => {
 		const mac = fakeMac(t);
+		const codexDirectory = join(mac.home, "Codex & tools");
 		const result = mac.runCodex({
 			defaultBackend,
-			codexDirectory: join(mac.home, "Codex & tools"),
+			codexDirectory,
 		});
 		assert.equal(result.status, 0, result.stderr);
 		const codex =
@@ -264,6 +281,7 @@ for (const defaultBackend of ["claude", "codex"] as const) {
 				entries[defaultBackend],
 				entries[defaultBackend === "claude" ? "codex" : "claude"],
 			],
+			codex_home: codexDirectory,
 		});
 		const plist = readFileSync(mac.agent, "utf8");
 		assert.match(
@@ -273,6 +291,47 @@ for (const defaultBackend of ["claude", "codex"] as const) {
 		assert.ok(plist.includes(`<string>${mac.env.PATH}</string>`));
 	});
 }
+
+test("switching to Claude from a fresh shell keeps the saved custom Codex home", async (t) => {
+	const mac = fakeMac(t);
+	const codexDirectory = join(mac.home, "Codex & tools");
+	assert.equal(mac.runCodex({ codexDirectory }).status, 0);
+	const result = mac.run();
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(await readDocLinkConfig(mac.config), {
+		engine,
+		credential: firstCredential,
+		default_backend: "claude",
+		backends: [
+			{ backend: "claude", binary: mac.claude },
+			{ backend: "codex", binary: mac.codex },
+		],
+		codex_home: codexDirectory,
+	});
+});
+
+test("a rejected new launch restores both files and reloads the working job", (t) => {
+	const mac = fakeMac(t);
+	assert.equal(mac.run().status, 0);
+	const config = readFileSync(mac.config, "utf8");
+	const agent = readFileSync(mac.agent, "utf8");
+	mac.rejectBootstrap(true);
+	const result = mac.runCodex();
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /Could not start Doc link/);
+	assert.equal(readFileSync(mac.config, "utf8"), config);
+	assert.equal(readFileSync(mac.agent, "utf8"), agent);
+	assert.ok(statSync(mac.loaded).isFile());
+});
+
+test("a rejected first launch removes both new files", (t) => {
+	const mac = fakeMac(t);
+	mac.rejectBootstrap();
+	const result = mac.runCodex();
+	assert.equal(result.status, 1);
+	for (const path of [mac.config, mac.agent, mac.loaded])
+		assert.throws(() => statSync(path), { code: "ENOENT" });
+});
 
 test("Claude setup skips an optional signed-out Codex", async (t) => {
 	const mac = fakeMac(t);
@@ -409,6 +468,7 @@ test("switching to Codex keeps a verified legacy credential with no new input", 
 		engine,
 		credential: firstCredential,
 		default_backend: "codex",
+		codex_home: join(mac.home, ".codex"),
 		backends: [
 			{ backend: "codex", binary: mac.codex },
 			{ backend: "claude", binary: mac.claude },

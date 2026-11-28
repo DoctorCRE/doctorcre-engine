@@ -1964,7 +1964,7 @@ Track record counts come from `vendor_track_record`. A deal counts even when its
 
 ### Vendors redesign reads
 
-The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 needs the reads below. The vendor summary and the list read's changes are built. Markets a vendor covers are not. Each reads live vendors from the new schema as the list does, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
+The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 uses the reads below. Each reads live vendors from the new schema, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
 
 **Vendor summary.** `GET /api/engine/vendors/summary`, optional `owner`, `all` when absent, answers the category tiles in one read: `{ all, no_category, categories: [{ slug, label, ...counts }] }`. Each `counts` is `{ count, relationship: { core, established, building, prospective, not_rated, parked, avoid }, quiet }`. `categories` lists every vendor category in label order, with zeros for one no vendor holds. A vendor counts once in each category it holds, so the categories can add up to more than `all`. `no_category` counts vendors that hold only the vendor role. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
 
@@ -1980,13 +1980,15 @@ The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 need
 **The list read.** `GET /api/engine/vendors` changes in these ways:
 
 - `no_category=true` narrows the list to the vendors the summary counts under `no_category`. It combines with the other filters, is echoed in `query` only when asked for, and is refused with `category` and on the legacy list.
-- With `category` or `no_category=true`, it answers every matching vendor in one answer, with no next page. Other lists keep pages of 25.
+- With `category`, `no_category=true` or `markets=true`, it answers every matching vendor in one page. Other lists keep pages of 25.
 - Each row answers `categories`, every category the vendor holds as `{ slug, label }` in label order, beside today's single category until the app stops reading it.
 - `quiet=true` narrows the list to the vendors the summary counts as quiet, by the same rule at the default 90-day cadence. It combines with the other filters, is echoed in `query` only when asked for, and is refused on the legacy list.
 - Each row answers `quiet`, true or false, and `quiet_days`, the whole Central days since its last contact while quiet, otherwise null.
 - `sort=relationship` orders by relationship order, then by name, and is the default. The other sorts stay. The legacy list keeps `name` as its default.
 
-**Markets a vendor covers.** The territory tiles are the 19 named markets. A list row answers `markets`, each `{ id, name }` that one of its current territories covers: a market piece names it, or a state piece holds the market's counties. A vendor under no market but with a territory is under Elsewhere, which includes a typed territory not yet drawn into pieces. A vendor with no current territory is under No territory. Matching typed territories to markets is data work on production, with the owner's yes on the reviewed file, and nothing in it is guessed.
+**Markets a vendor covers.** With `markets=true`, the next list answers all matching vendors in one page and echoes the option in `query`. Each row has `markets`, a name-ordered list of `{ id, name }`, and `territory`, the comma-separated names of its current territories or null. Both fields are present with or without a `contract` parameter. The legacy list refuses the option. A market piece names the market directly. A state piece covers any market with a county in that state. Each market appears once per vendor.
+
+Each summary count also answers `markets` as `[{ id, name, count }]` in name order, with one entry per covered market and one count per vendor in it. `elsewhere` counts vendors with a current territory and no covered markets, including typed territories without pieces. `no_territory` counts vendors without a current territory. The reads include memberships with no end date or one on or after today in Central time. Matching typed territories to markets requires the owner's approval of the reviewed file.
 
 ## Doc conversations and turns
 
@@ -2017,6 +2019,7 @@ All paths below begin `/api/engine/doc`. UUIDs identify conversations, turns, an
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `GET /conversations`, optional `before` conversation ID | `200 { conversations: [{ id, title, created_at, last_message_at, state }], next_before }`. Up to 30, newest message first, in descending `(last_message_at, id)` order. `title` is the first 80 characters of the first question. `next_before` is the last listed ID if older chats remain, otherwise null. |
 | `GET /conversations/{id}`                               | `200 { conversation, turns }`. `conversation` has the same fields as the list entry. `turns` are in `position` order.                                                                                                                                                                                        |
+| `GET /records?query=`                                   | `200 { records: [{ ref, label, href, city }] }`. Search deals, leads and clients through the same new-database read Doc uses. The query is nonblank and at most 200 characters. Returns up to 10 matches.                                                                                                    |
 | `POST /turns`                                           | Send `{ idempotency_key, question, conversation_id?, context? }`. Omit `conversation_id` to start a chat. `200 { conversation_id, turn }` for an answered turn and `202` while queued or working. The conversation read shows a saved failure. Retry sends the original fields and key.                      |
 | `POST /turns/{id}/confirmation`                         | Send `{ idempotency_key, edits }` with a separate UUID for this save. The engine uses the stored proposal's kind and target. `200 { result }` gives the receipt. The reply-draft result also carries `existing`, true for an unchanged draft.                                                                |
 
@@ -2026,11 +2029,13 @@ Before requeuing a failed draft turn, the engine checks its stored draft, source
 
 Every returned `turn` has `id`, `position`, `created_at`, `idempotency_key`, `question`, nullable `context`, `state`, nullable `answer`, and nullable `confirmation` with the saved result. To retry the first turn after reload, omit `conversation_id` again. While queued, the turn carries `waiting_reason` with the existing display text and `waiting_reason_code` with the same machine code as the link's `readiness_code`. Both fields are null outside the queue. Each turn also carries the current runner `backend` when known. This field describes the configured runner, while `answered_by` describes where an answer came from. The app rereads the conversation to show progress and the saved result. The app opens new chat links as `/doc-chats?chat=<id>` so legacy links can show their own message. An older failed turn stays visible and retry applies to the latest question.
 
-A chat's `last_message_at` is the `created_at` of its latest turn. `state` is `working` while that turn is queued or working, `waiting_ok` while an answered turn's proposal has no confirmation, and otherwise null. `working` wins when both hold. The engine derives both from the turns on each read. A `before` cursor uses the chat's current `last_message_at`, so a chat that gets a new message while the partner pages moves to the top.
+To refresh marks for chats already on screen, send `GET /conversations?ids=` with up to 30 comma-separated conversation IDs. The response uses the same list shape, with only the signed-in partner's matching conversations and `next_before: null`. Use `ids` without `before`.
+
+A chat's `last_message_at` is the `created_at` of its latest turn. `state` is `working` while that turn is queued or working. It is `waiting_ok` if the latest turn asks for clarification or any answer's proposal still needs confirmation. Otherwise it is null. `working` wins when both hold. The engine derives both from the turns on each read. A `before` cursor uses the chat's current `last_message_at`, so a chat that gets a new message while the partner pages moves to the top.
 
 Each returned turn also has `draft_review`. It is null for a turn without draft context. For a draft turn it contains `{ draft_id, version, current }`, where `draft_id` and `version` come from the saved turn context. The engine computes `current` when it reads the turn. It is `pending_same` if the draft is still pending at that version, `changed` if it is pending at a newer version, or `gone` if it has left pending or is unavailable to the partner. The app uses `changed` or `gone` to ask the partner to open a fresh review for a failed draft turn.
 
-`answer` is `{ kind, text, sources, proposal }`. `kind` is `answer`, `clarification`, or `refusal`. `text` is plain text. `sources` lists the records used, or accessible choices for a clarification. A refusal has empty sources. `proposal` is null or one of the following on an `answer`.
+`answer` is `{ kind, text, sources, proposal }`. `kind` is `answer`, `clarification`, or `refusal`. `text` is plain text. `sources` lists the records used, or accessible choices for a clarification. Deal, lead and client choices carry a nullable `city`. Lead and client choices also carry `deal_count`, using the same links as Global Search, including a person's current company. A refusal has empty sources. `proposal` is null or one of the following on an `answer`.
 
 | `kind`           | Stored proposal                                                                                                                | Allowed `edits`       |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------- |
@@ -2111,9 +2116,9 @@ Apply [the Doc link migration](../schema/add-doc-link.sql) and then [the link re
 
 #### Doc link on macOS
 
-**Before the visit.** Put the engine checkout where it will stay on the Mac. Install [Node.js 26](https://nodejs.org/en/download), make it available in Terminal, and run `npm ci` in the checkout. Prepare the command with the HTTPS engine origin for the app that issues the credential. Rehearse with the staging origin and a sourced answer about a test record. The coordinator confirms acceptance of Anthropic's Commercial Terms and sets up the first Mac before the second.
+**Before the visit.** Put the engine checkout where it will stay on the Mac. Install [Node.js 26](https://nodejs.org/en/download), make it available in Terminal, and run `npm ci` in the checkout. Prepare the command with the HTTPS engine origin for the app that issues the credential. Rehearse with the staging origin and a sourced answer about a test record. The coordinator confirms acceptance of Anthropic's Commercial Terms for Claude Code setup and sets up the first Mac before the second.
 
-**Three minutes at the Mac.** Open Terminal under the partner's macOS login. From the prepared checkout, run this command with `DOC_ENGINE_ORIGIN` set to the supplied HTTPS engine origin.
+**Choose a CLI.** For first-time Codex setup or to switch to Codex, follow **Switch a Mac to Codex** below. To use Claude Code, open Terminal in the partner's macOS login and run the following command from the prepared checkout with `DOC_ENGINE_ORIGIN` set to the supplied HTTPS engine origin.
 
 ```sh
 bash scripts/install-doc-link.sh "$DOC_ENGINE_ORIGIN"
@@ -2125,7 +2130,7 @@ bash scripts/install-doc-link.sh "$DOC_ENGINE_ORIGIN"
 
 Rerun setup to refresh the list of signed-in CLIs or change the default. Setup verifies a saved credential against its original engine and keeps it if the engine accepts it. If you link to a different engine, have no saved credential, or the engine refuses it, setup prompts for a new one. Setup writes `~/Library/Application Support/DoctorCRE Doc/link.json` with mode `0600`. It records the absolute paths of the signed-in CLIs it finds in `backends` and sets `default_backend` from the setup command. The runner uses that default and can still read earlier single-backend configs. It checks file ownership and permissions before reading the credential, and stops polling on `401`. Mail judgment receives no link credential.
 
-The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts), the configuration, and `link.log` in the same folder as the configuration.
+The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts), the configuration, and `link.log` in the same folder as the configuration. If a reload fails, setup restores the previous files and restarts the old job.
 
 **Claude Code.** The partner signs in through Claude Code and keeps plan usage credits off. Setup and the link use `claude auth status` to confirm a personal Pro, Max, or Ultra subscription. Team, Enterprise, and unrecognized plans stop setup or pause the link. The link checks the sign-in with the same settings it uses for chat. It also checks mail judgment with the settings isolation used for that work. The link checks every 30 seconds and before starting a turn or job. It reports an expired sign-in from a failed session. On a reported plan limit, the work returns to the queue and the Mac waits until the reported reset before claiming again. If Claude Code gives no reset time, the link checks again after five minutes.
 
@@ -2144,7 +2149,7 @@ Doc chat starts in the partner's home directory and uses that CLI's configured t
 **Switch a Mac to Codex.** Open Terminal in your usual macOS login. Use the prepared checkout and the HTTPS engine origin supplied with your setup command.
 
 1. Use the absolute path to a Codex CLI 0.172.0 binary as `DOC_CODEX_BIN`. If you need the binary, get it from the [Codex CLI 0.172.0 release](https://github.com/openai/codex/releases/tag/rust-v0.172.0).
-2. If Codex asks you to sign in, use `"$DOC_CODEX_BIN" login` with your personal ChatGPT plan. Keep plan usage credits off. Setup uses `~/.codex` or the `CODEX_HOME` you set in Terminal.
+2. If Codex asks you to sign in, use `"$DOC_CODEX_BIN" login` with your personal ChatGPT plan. Keep plan usage credits off. Setup uses the `CODEX_HOME` you set in Terminal, a previously saved Codex home, or `~/.codex` in that order.
 3. Run setup. If it prompts for a credential, issue one in the app and paste it at the hidden prompt. Issuing a new credential revokes the previous one.
 
    ```sh
@@ -2155,7 +2160,7 @@ Doc chat starts in the partner's home directory and uses that CLI's configured t
 
 **Switch back to Claude Code.** Run the one-argument setup command above. Ask Doc for a sourced answer.
 
-Codex checks `login status` and reads the personal plan type through app-server's `account/read`. Setup saves the Codex home in the LaunchAgent so the background job uses the same sign-in and configuration. Codex mail judgment uses the verified model catalog, a read-only sandbox, and an ephemeral session. It skips user config and rules, sets the project instruction budget to zero, and disables shell, patch, image, web, agent, app, plugin, and hook capabilities. It connects to no MCP server. The runner leaves Codex mail jobs queued if the catalog is missing or changed, or if it finds managed Codex settings or Codex home instructions. When Codex supplies a plan reset time, the runner waits until then. Otherwise it checks again after five minutes.
+Codex checks `login status` and reads the personal plan type through app-server's `account/read`. Setup saves the Codex home in the private configuration and the LaunchAgent so reruns and the background job use the same sign-in and configuration. Codex mail judgment uses the verified model catalog, a read-only sandbox, and an ephemeral session. It skips user config and rules, sets the project instruction budget to zero, and disables shell, patch, image, web, agent, app, plugin, and hook capabilities. It connects to no MCP server. The runner leaves Codex mail jobs queued if the catalog is missing or changed, or if it finds managed Codex settings or Codex home instructions. When Codex supplies a plan reset time, the runner waits until then. Otherwise it checks again after five minutes.
 
 The link retries a dropped claim or completion request after two seconds. While the model runs, a separate poll refreshes presence without asking for work. A completion retry reuses the original claim and answer until the claim expires. The link ignores a `404` completion and polls for new work. The engine can then give an expired turn a fresh claim.
 

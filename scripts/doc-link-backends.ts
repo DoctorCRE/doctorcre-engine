@@ -289,8 +289,8 @@ export async function isCodexCatalogValid(path = codexCatalog) {
 	}
 }
 
-function codexEnvironment() {
-	return { ...childEnvironment(), CODEX_HOME: codexHome(), TZ: "UTC" };
+function codexEnvironment(home = codexHome()) {
+	return { ...childEnvironment(), CODEX_HOME: home, TZ: "UTC" };
 }
 
 const codexAccount = z.object({
@@ -378,8 +378,9 @@ function codexPlan(
 
 export async function checkCodexSignIn(
 	binary: string,
+	home?: string,
 ): Promise<SignInStatus | "wrong_version"> {
-	const env = codexEnvironment();
+	const env = codexEnvironment(home);
 	const version = await runCli(binary, ["--version"], 5_000, { env, cwd: "/" });
 	if (!version.ok || version.stdout.trim() !== `codex-cli ${codexVersion}`)
 		return "wrong_version";

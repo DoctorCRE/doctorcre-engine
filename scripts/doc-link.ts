@@ -40,6 +40,7 @@ const registeredConfig = z
 		...configFields,
 		default_backend: backendName,
 		backends: z.array(backendRegistration),
+		codex_home: absoluteBinary.optional(),
 	})
 	.refine(
 		({ default_backend, backends }) =>
