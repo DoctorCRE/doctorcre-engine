@@ -5,7 +5,7 @@ import { URL } from "node:url";
 import pg from "pg";
 import {
 	asAdmin,
-	releaseTestDatabase,
+	dropTestDatabase,
 	testDatabaseName,
 } from "../scripts/test-database.ts";
 
@@ -2950,7 +2950,7 @@ before(async () => {
 
 after(async () => {
 	await db.end();
-	await releaseTestDatabase(name);
+	await dropTestDatabase(name);
 });
 
 const SUBJECT = id(9000);

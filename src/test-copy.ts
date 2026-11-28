@@ -4,7 +4,7 @@ import { URL } from "node:url";
 import pg from "pg";
 import {
 	asAdmin,
-	releaseTestDatabase,
+	dropTestDatabase,
 	testDatabaseName,
 } from "../scripts/test-database.ts";
 
@@ -34,7 +34,7 @@ export function copyTest() {
 	};
 	const cleanup = async () => {
 		await db.end();
-		await releaseTestDatabase(name);
+		await dropTestDatabase(name);
 	};
 	return { db, setup, cleanup, connectionString: url.href };
 }

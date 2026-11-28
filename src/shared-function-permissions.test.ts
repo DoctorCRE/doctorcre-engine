@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import pg from "pg";
+import { asAdmin } from "../scripts/test-database.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const legacyRoles = [
@@ -114,12 +115,9 @@ test("shared definer functions keep only the legacy callers' execute access", as
 		);
 	} finally {
 		try {
-			if (rolesCreated) {
-				const roles = legacyRoles.join(", ");
-				await db.query(`rollback; drop owned by ${roles}; drop role ${roles}`);
-			}
-		} finally {
 			await cleanup();
+		} finally {
+			if (rolesCreated) await asAdmin(`drop role ${legacyRoles.join(", ")}`);
 		}
 	}
 });

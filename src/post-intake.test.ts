@@ -5,7 +5,7 @@ import { URL } from "node:url";
 import pg from "pg";
 import {
 	asAdmin,
-	releaseTestDatabase,
+	dropTestDatabase,
 	testDatabaseName,
 } from "../scripts/test-database.ts";
 import { intake } from "./post-intake.ts";
@@ -58,7 +58,7 @@ before(async () => {
 });
 
 after(async () => {
-	await releaseTestDatabase(name);
+	await dropTestDatabase(name);
 });
 
 const stored = new Map<string, string>();

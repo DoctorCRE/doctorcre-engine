@@ -54,8 +54,8 @@ For a single check on an existing local throwaway server, `TEST_DATABASE_URL`
 defaults to `postgres://postgres@127.0.0.1:5432/postgres`.
 The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a server with
-business data. The check runs up to six test files at once on small runners,
-with at most two per CPU, and caps parallelism at eight on larger machines.
+business data. The GitHub runner uses six test workers. Local checks cap
+parallelism at eight workers.
 A check opens roughly one connection per concurrent test file, plus sessions
 for tests that exercise concurrent writes.
 
@@ -64,9 +64,8 @@ with `kysely-codegen`, and runs TypeScript and tests in parallel once the databa
 types are ready.
 A test that needs its own database copies that restore, because one restore
 holds about 2,100 locks and many at once exhaust the server's lock table (#237).
-The check drops finished test databases in batches so PostgreSQL can share the
-checkpoints each drop requests. It drops the remaining databases when the runner
-exits.
+The check drops each test database when its tests finish. On SIGINT or SIGTERM,
+the runner stops its child processes and drops any databases this check created.
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
 query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops` tables, which the generated types leave out.

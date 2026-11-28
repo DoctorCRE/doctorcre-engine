@@ -5,8 +5,6 @@ import pg from "pg";
 
 export class NoDatabase extends Error {}
 
-const dropBatchSize = 16;
-
 function serverUrl() {
 	const url = new URL(
 		process.env.TEST_DATABASE_URL ??
@@ -26,7 +24,10 @@ function serverUrl() {
 // Parallel test processes need the connection slots while tests run (#241).
 async function withAdmin<T>(run: (admin: pg.Client) => Promise<T>) {
 	const url = serverUrl();
-	const admin = new pg.Client({ connectionString: url.href });
+	const admin = new pg.Client({
+		connectionString: url.href,
+		application_name: process.env.TEST_DATABASE_PREFIX,
+	});
 	await admin.connect().catch((error: unknown) => {
 		if (!(error instanceof Error && "code" in error)) throw error;
 		if (error.code !== "ECONNREFUSED") throw error;
@@ -55,78 +56,35 @@ export function testDatabaseName() {
 	return (prefix || "engine_test_") + randomUUID().replaceAll("-", "");
 }
 
-export async function releaseTestDatabase(name: string) {
-	const prefix = process.env.TEST_DATABASE_PREFIX;
-	if (!prefix || !name.startsWith(prefix)) {
-		await asAdmin(`drop database if exists "${name}" with (force)`);
-		return;
-	}
-	await withAdmin(async (admin) => {
-		const { rowCount } = await admin.query(
-			"select from pg_database where datname = $1",
-			[name],
-		);
-		if (!rowCount) return;
-		await admin.query(`alter database "${name}" allow_connections false`);
-		const ready = await checkDatabases(admin, prefix, true);
-		if (ready.length < dropBatchSize) return;
-
-		// Keep other workers moving during cleanup until a second batch is ready.
-		const {
-			rows: [lock],
-		} = await admin.query<{ acquired: boolean }>(
-			ready.length >= 2 * dropBatchSize
-				? "select pg_advisory_lock(hashtextextended($1, 0)), true as acquired"
-				: "select pg_try_advisory_lock(hashtextextended($1, 0)) as acquired",
-			[prefix],
-		);
-		if (!lock?.acquired) return;
-		const finished = await checkDatabases(admin, prefix, true);
-		if (finished.length >= dropBatchSize)
-			await dropDatabases(finished.slice(0, dropBatchSize));
-	});
+export function dropTestDatabase(name: string) {
+	return asAdmin(`drop database if exists "${name}" with (force)`);
 }
 
-export async function withCheckDatabases(
-	run: (prefix: string) => Promise<void>,
-) {
+export async function withCheckDatabases(run: () => Promise<void>) {
 	const prefix = `engine_${randomBytes(10).toString("hex")}_`;
+	process.env.TEST_DATABASE_PREFIX = prefix;
 	try {
-		await run(prefix);
+		await run();
 	} finally {
-		await dropDatabases(
-			await withAdmin((admin) => checkDatabases(admin, prefix, false)),
-		);
+		await withAdmin(async (admin) => {
+			// A cancelled worker can leave a database creation running on the server.
+			while (
+				(
+					await admin.query(
+						`select pg_terminate_backend(pid, 1000) from pg_stat_activity
+					where application_name = $1 and pid <> pg_backend_pid()`,
+						[prefix],
+					)
+				).rowCount
+			) {}
+			const { rows } = await admin.query<{ datname: string }>(
+				"select datname from pg_database where datname ~ $1",
+				[`^${prefix}[a-f0-9]{32}$`],
+			);
+			for (const { datname } of rows)
+				await admin.query(`drop database if exists "${datname}" with (force)`);
+		});
 	}
-}
-
-async function checkDatabases(
-	admin: pg.Client,
-	prefix: string,
-	finished: boolean,
-) {
-	const { rows } = await admin.query<{ datname: string }>(
-		`select datname from pg_database
-		where datname ~ $1 and (not $2::boolean or not datallowconn)`,
-		[`^${prefix}[a-f0-9]{32}$`, finished],
-	);
-	return rows.map(({ datname }) => datname);
-}
-
-async function dropDatabases(names: string[]) {
-	const failures: unknown[] = [];
-	// Concurrent drops can share the checkpoint each drop asks for.
-	for (let i = 0; i < names.length; i += dropBatchSize) {
-		const results = await Promise.allSettled(
-			names
-				.slice(i, i + dropBatchSize)
-				.map((name) => asAdmin(`drop database "${name}" with (force)`)),
-		);
-		for (const result of results)
-			if (result.status === "rejected") failures.push(result.reason);
-	}
-	if (failures.length)
-		throw new AggregateError(failures, "Test database cleanup failed");
 }
 
 // One restore holds about 2,100 locks, so a check's snapshots copy its restore (#237).
@@ -147,7 +105,7 @@ export async function withSnapshot(
 		if (!template) await restore(url.href);
 		await run(url.href, name);
 	} finally {
-		await releaseTestDatabase(name);
+		await dropTestDatabase(name);
 	}
 }
 
