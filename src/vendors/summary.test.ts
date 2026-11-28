@@ -275,16 +275,18 @@ test("market counts follow current territories, owners, and categories", async (
 		elsewhere: 0,
 		no_territory: 0,
 	});
-	const list = await get("vendors?markets=true&contract=vendor-directory.v1");
-	assert.equal(list.status, 200);
-	assert.partialDeepStrictEqual(list.body, {
-		page_size: 4,
-		page_count: 1,
-		rows: [
-			{ id: uuid(10), markets: [east, west] },
-			{ id: uuid(11), markets: [west] },
-			{ id: uuid(12), territory: "Example Typed Territory", markets: [] },
-			{ id: uuid(13), territory: null, markets: [] },
-		],
-	});
+	for (const contract of ["", "&contract=vendor-directory.v1"]) {
+		const list = await get(`vendors?markets=true${contract}`);
+		assert.equal(list.status, 200, contract || "bare market read");
+		assert.partialDeepStrictEqual(list.body, {
+			page_size: 4,
+			page_count: 1,
+			rows: [
+				{ id: uuid(10), markets: [east, west] },
+				{ id: uuid(11), markets: [west] },
+				{ id: uuid(12), territory: "Example Typed Territory", markets: [] },
+				{ id: uuid(13), territory: null, markets: [] },
+			],
+		});
+	}
 });

@@ -504,6 +504,9 @@ export async function readNextVendorList(
 				vendorQuietDays("pr", "recorded", days).as("quiet_days"),
 			]),
 		)
+		.$if(query.markets === true && !query.contract, (qb) =>
+			qb.select(nextTerritory.as("territory")),
+		)
 		.$if(query.markets === true, (qb) =>
 			qb.select(
 				sql<{ id: string; name: string }[]>`(
