@@ -260,7 +260,7 @@ export async function runDocLink(
 			if (!(await policyAllowsTurns())) continue;
 		}
 		if (readiness === "personal_plan_required") continue;
-		const headers = new Headers();
+		const headers = new Headers({ "Doc-Link-Backend": name });
 		if (readiness) headers.set("Doc-Link-Readiness", readiness);
 		if (readiness === "ready")
 			headers.set("Doc-Link-Work", "judgment, email_split, introduction");

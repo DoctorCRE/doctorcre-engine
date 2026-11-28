@@ -13,7 +13,11 @@ import {
 	draftReference,
 	requirePendingDocDraft,
 } from "./doc-confirmation.ts";
-import { docLinkState } from "./doc-link.ts";
+import {
+	type DocLinkBackend,
+	type DocReadinessCode,
+	docLinkState,
+} from "./doc-link.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
@@ -128,6 +132,8 @@ type Turn = Pick<
 	answered_by: "mac" | "backup" | null;
 	confirmation: JsonObject | null;
 	waiting_reason: string | null;
+	waiting_reason_code: DocReadinessCode | null;
+	backend: DocLinkBackend | null;
 	draft_review: {
 		draft_id: string;
 		version: number;
@@ -158,6 +164,7 @@ const conversations = sql`
 
 const queued = sql`(t.state = 'queued' or t.claim_until <= statement_timestamp())`;
 
+const turnLink = docLinkState(sql<string>`t.owner_user_id`);
 const turnFields = sql`t.id, to_jsonb(t.created_at) #>> '{}' as created_at, t.position, t.question, t.context, t.answer, t.idempotency_key,
 	case when t.state = 'answered' then coalesce(to_jsonb(t) ->> 'answered_by', 'mac') end as answered_by,
 	case when ${queued} then 'queued' else t.state end as state,
@@ -168,8 +175,10 @@ const turnFields = sql`t.id, to_jsonb(t.created_at) #>> '{}' as created_at, t.po
 			when 'signed_out' then 'Sign in to Claude Code on your Mac.'
 			when 'plan_limited' then 'Doc is paused until your Claude plan resets.'
 			when 'ready' then 'Doc is waiting for a free slot on your Mac.'
-		end from ${docLinkState(sql<string>`t.owner_user_id`)} link
+		end from ${turnLink} link
 	) end as waiting_reason,
+	case when ${queued} then (select readiness_code from ${turnLink} link) end as waiting_reason_code,
+	(select backend from ${turnLink} link) as backend,
 	(select answer -> 'result' from save_receipt where idempotency_key = t.confirmation_key) as confirmation,
 	case when t.context ->> 'kind' = 'reply_draft'
 		and pg_input_is_valid(t.context ->> 'id', 'uuid')

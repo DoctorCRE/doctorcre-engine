@@ -13,17 +13,37 @@ export type DocLinkReadiness = (typeof docLinkReadiness)[number];
 
 type DocLinkStatus = DocLinkReadiness | "not_set_up" | "mac_off";
 
-type DocLinkState = { issued_at: string | null; status: DocLinkStatus };
+export const docLinkBackends = ["claude", "codex"] as const;
+export type DocLinkBackend = (typeof docLinkBackends)[number];
+export type DocReadinessCode =
+	| "doc_not_set_up"
+	| "doc_mac_off"
+	| "doc_signed_out"
+	| "doc_plan_limit"
+	| "doc_ready";
+type DocLinkState = {
+	issued_at: string | null;
+	status: DocLinkStatus;
+	backend: DocLinkBackend | null;
+	readiness_code: DocReadinessCode;
+};
 
 export function docLinkState(owner: string | RawBuilder<string>) {
-	return sql<DocLinkState>`(select ${asText(sql.ref("issued_at"))} as issued_at,
+	return sql<DocLinkState>`(select link.*, case status
+		when 'not_set_up' then 'doc_not_set_up'
+		when 'mac_off' then 'doc_mac_off'
+		when 'signed_out' then 'doc_signed_out'
+		when 'plan_limited' then 'doc_plan_limit'
+		when 'ready' then 'doc_ready'
+	end as readiness_code from (
+	select ${asText(sql.ref("issued_at"))} as issued_at, backend,
 		case
 			when owner_user_id is null then 'not_set_up'
 			when last_seen_at is null or last_seen_at < statement_timestamp() - interval '30 seconds' then 'mac_off'
 			else coalesce(readiness, 'ready')
 		end as status
 		from (select ${owner}::uuid as id) partner
-		left join doc_link on owner_user_id = partner.id)`;
+		left join doc_link on owner_user_id = partner.id) link)`;
 }
 
 const presenceDue = sql<boolean>`last_seen_at is null or last_seen_at <= clock_timestamp() - interval '15 seconds'`;
@@ -59,6 +79,7 @@ export async function issueDocLink(tx: Transaction<DB>, owner: string) {
 				issued_at: sql`now()`,
 				last_seen_at: null,
 				readiness: null,
+				backend: null,
 			}),
 		)
 		.execute();
@@ -123,17 +144,21 @@ export async function recordDocPoll(
 	tx: Transaction<DB>,
 	owner: string,
 	readiness?: DocLinkReadiness,
+	backend?: DocLinkBackend,
 ) {
 	const nextReadiness = sql<DocLinkReadiness | null>`coalesce(${readiness ?? null}, readiness)`;
+	const nextBackend = sql<DocLinkBackend | null>`coalesce(${backend ?? null}, backend)`;
 	await tx
 		.updateTable("doc_link")
 		.set({
 			last_seen_at: sql`case when ${presenceDue} then clock_timestamp() else last_seen_at end`,
 			readiness: nextReadiness,
+			backend: nextBackend,
 		})
 		.where("owner_user_id", "=", owner)
 		.where(
-			sql<boolean>`((${presenceDue}) or readiness is distinct from ${nextReadiness})`,
+			sql<boolean>`(${presenceDue} or readiness is distinct from ${nextReadiness}
+				or backend is distinct from ${nextBackend})`,
 		)
 		.execute();
 }

@@ -2637,7 +2637,13 @@ const CHANGEABLE: Record<string, string[]> = {
 		"result",
 		"state",
 	],
-	doc_link: ["credential_hash", "issued_at", "last_seen_at", "readiness"],
+	doc_link: [
+		"backend",
+		"credential_hash",
+		"issued_at",
+		"last_seen_at",
+		"readiness",
+	],
 	doc_turn: [
 		"answer",
 		"answered_by",

@@ -137,6 +137,8 @@ async function runLink(
 		assert.equal(request.headers.get("Authorization"), `Bearer ${credential}`);
 		assert.equal(request.headers.get("Cookie"), null);
 		assert.equal(request.redirect, "error");
+		if (new URL(request.url).pathname.endsWith("/claim"))
+			assert.equal(request.headers.get("Doc-Link-Backend"), backend);
 	}
 	return Promise.all(
 		requests.map(async (request) => ({

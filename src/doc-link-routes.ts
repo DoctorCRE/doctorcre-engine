@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { Transaction } from "kysely";
 import {
+	docLinkBackends,
 	docLinkOwnerTransaction,
 	docLinkPresence,
 	docLinkReadiness,
@@ -88,7 +89,14 @@ export function claimDocLink(c: Context<WriterEnv>) {
 				{ status: 400, headers: noStore },
 			);
 
-		await recordDocPoll(tx, owner, readiness);
+		const backendHeader = c.req.header("Doc-Link-Backend");
+		const backend = docLinkBackends.find((value) => value === backendHeader);
+		if (backendHeader !== undefined && !backend)
+			return Response.json(
+				{ error: "invalid_backend" },
+				{ status: 400, headers: noStore },
+			);
+		await recordDocPoll(tx, owner, readiness, backend);
 		const asked = new Set(
 			c.req
 				.header("Doc-Link-Work")
