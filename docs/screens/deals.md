@@ -268,6 +268,16 @@ Coming later: when the client last opened the site, once the engine records it. 
 - [ ] Plan keeps the chart, with a narrower name column and no side list. It scrolls sideways, a tap opens a bar, and nothing drags.
 - [ ] A phase click opens the same question as a sheet from the bottom. An Activity row opens full screen with Back. Tours shows the tour first, with its stops and **Generate tour packet**, then the properties.
 
+## Wiring
+
+What draws each deal page part from the engine. App files are in `src/ui/` of `DoctorCRE/doctorcre-app`.
+
+| Screen part     | App files                            | Engine doors                                                         | Tables                                                                                           |
+| --------------- | ------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| The path        | `deal-path.ts`, `deal-checklist.tsx` | `GET /api/engine/deals/{id}` `checklist`                             | `lease`, `lease_version`, `commission_payment`, `critical_date`, `deal_phase_change`             |
+| Needs attention | Not built yet                        | `GET /api/engine/deals/{id}` and `GET /api/engine/deals` `attention` | `next_step`, `critical_date`, `proposal`, `email`, `activity`, `deal_party`, `deal_phase_change` |
+| Invoice         | Not built yet                        | `GET /api/engine/deals/{id}` `invoice`                               | `commission_payment`, `lease`, `lease_version`, `deal_phase_change`                              |
+
 ## Questions for the owner
 
 1. Answered on 2026-11-18 (#728). The new database keeps each deal's client website registration.

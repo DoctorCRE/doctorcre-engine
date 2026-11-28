@@ -1733,7 +1733,7 @@ These saves follow the same session, replay and `{ from, to }` edit rules. They 
 
 ## Deal page redesign
 
-The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping, deal attention and attention alerts are built. The rest of this section is not built yet.
+The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping, deal attention, attention alerts and invoice dates are built. The rest of this section is not built yet.
 
 ### Deal attention
 
@@ -1754,7 +1754,7 @@ A parked deal, and a deal that is closed, lost, invoiced or otherwise ended, ans
 
 ### Invoice dates
 
-The deal page shows three dates for each commission payment: triggered, sent and paid. Sent is the payment's `invoiced_on` and paid is its `received_on`. Triggered is the day the event happened that lets the brokerage invoice. Before it, the screen names the event, such as "Goes out when the lease is signed". No column holds it yet. Not decided: which event triggers the invoice for each deal kind, and whether triggered is stored or read from the checklist. A new column needs the owner's yes before production.
+The deal page shows three marks for each commission payment: triggered, sent and paid. The deal read answers `invoice` as `{ trigger, triggered_on, payments: [{ id, sent_on, paid_on }] }`. `trigger` is the event that lets the brokerage invoice: `lease_signed` for a lease or renewal, `purchase_closed` for a purchase or land deal, and null for a deal of no known type. `triggered_on` is the day it happened, or null before it: the current lease's `executed_on` for `lease_signed`, and the deal's close day for `purchase_closed`. It is read from those rows, never stored, so no column holds it. The trigger is deal-wide, so a deal with no payment yet still names it. Each payment's `sent_on` is its `invoiced_on` and `paid_on` its `received_on`, ordered by `sent_on` with unsent payments last.
 
 ### Checklist under the phases
 

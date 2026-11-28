@@ -185,6 +185,11 @@ before(async () => {
 		update deal set parking_note = 'Example pause' where id = '${id(32)}';
 		update deal set parking_reason = null, parking_note = null where id = '${id(32)}';
 		insert into typical_length (deal_kind, todo, days) values ('lease', 'loi_submission', 14);
+		insert into phase values ('closed', 'Closed') on conflict do nothing;
+		insert into deal (id, name, kind, owner_user_id) values ('${id(38)}', 'Example closed purchase', 'purchase', '${id(2)}');
+		insert into deal_phase_change (deal_id, phase, happened_at) values ('${id(38)}', 'closed', '2025-03-05T03:00:00Z');
+		insert into commission (deal_id, expected, gross) values ('${id(38)}', null, 300);
+		insert into commission_payment (id, deal_id, amount) values ('${id(95)}', '${id(38)}', 300);
 		commit;`);
 });
 after(cleanup);
@@ -866,6 +871,40 @@ test("the checklist records an invoice and completes receipt only when all payme
 				],
 			},
 		});
+	}
+});
+
+test("the deal read dates each invoice from the signed lease or the purchase close", async () => {
+	for (const [deal, invoice] of [
+		[
+			id(30),
+			{ trigger: "lease_signed", triggered_on: "2025-01-01", payments: [] },
+		],
+		[
+			id(34),
+			{
+				trigger: "lease_signed",
+				triggered_on: null,
+				payments: [
+					{ id: id(93), sent_on: "2025-02-01", paid_on: "2025-02-03" },
+					{ id: id(94), sent_on: "2025-02-02", paid_on: null },
+				],
+			},
+		],
+		[
+			id(38),
+			{
+				trigger: "purchase_closed",
+				triggered_on: "2025-03-04",
+				payments: [{ id: id(95), sent_on: null, paid_on: null }],
+			},
+		],
+	] as const) {
+		const page = await nextPartnerRead(connectionString, "partner_one", (tx) =>
+			readNextDealDetail(tx, deal),
+		);
+		assert.ok(!("error" in page));
+		assert.deepEqual(page.invoice, invoice);
 	}
 });
 
