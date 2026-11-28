@@ -52,7 +52,7 @@ This file wins over any skill or global rule. A skill's advice to add a lint, ch
 
 ## Who does what
 
-A Claude session coordinates: it slices issues, briefs workers, reviews and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
+A Claude session coordinates: it slices issues, briefs workers, arranges each review and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
 
 Codex gpt-6.2-sol builds. Claude Opus 5.5 may also build. Codex gpt-6.1-terra may build routine work such as wording, docs, and small app fixes. Reasoning effort is high, never higher.
 
