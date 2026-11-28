@@ -264,8 +264,8 @@ test("Doc link migration, private credentials and Mac polling", {
 			claim_id: claim,
 			kind: "answered",
 			answer: {
-				kind: "refusal",
-				text: "I could not find that deal.",
+				kind: "answer",
+				text: "The local checklist is ready.",
 				sources: [],
 			},
 		};
@@ -285,6 +285,15 @@ test("Doc link migration, private credentials and Mac polling", {
 			401,
 		);
 		assert.equal((await result({ ...first, ...proof }, appOrigin)).status, 404);
+		assert.equal(
+			(
+				await result(bearer, engineOrigin, {
+					...completion,
+					answer: { ...completion.answer, sources: [`deal:${randomUUID()}`] },
+				})
+			).status,
+			422,
+		);
 		const done = await result(bearer);
 		assert.equal(done.status, 204);
 		assert.equal(done.headers.get("Cache-Control"), "no-store");

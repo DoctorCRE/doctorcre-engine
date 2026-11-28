@@ -310,7 +310,7 @@ test("Doc reads shared records, validates citations and proposes a save without 
 	await tool(
 		request,
 		"validate_answer",
-		{ kind: "answer", text: "Ready.", sources: [] },
+		{ kind: "answer", text: "Ready.", sources: [], proposal },
 		true,
 	);
 	const answer = await tool(request, "validate_answer", {

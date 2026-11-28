@@ -652,8 +652,25 @@ test("a ready Doc link advertises all its mail jobs and finishes a split claim",
 });
 
 for (const backend of ["claude", "codex"] as const) {
-	const binary = backend === "claude" ? claude : codex;
-	test(`${backend} completes every job kind and keeps engine result validation`, async () => {
+	test(`${backend} completes every job kind and keeps engine result validation`, async (t) => {
+		await using directory =
+			backend === "codex"
+				? await mkdtempDisposable(join(process.cwd(), ".scratch."))
+				: undefined;
+		const binary = directory ? join(directory.path, "partner-config") : claude;
+		if (directory) {
+			await symlink(codex, binary);
+			await writeFile(
+				join(directory.path, "config.toml"),
+				'sandbox_mode = "danger-full-access"\n[features]\nshell_tool = true\n',
+			);
+			const previous = process.env.CODEX_HOME;
+			process.env.CODEX_HOME = directory.path;
+			t.after(() => {
+				if (previous === undefined) delete process.env.CODEX_HOME;
+				else process.env.CODEX_HOME = previous;
+			});
+		}
 		const destination = { kind: "deal", id: context.id };
 		const mail = {
 			claim_id: firstClaim,
@@ -689,7 +706,7 @@ for (const backend of ["claude", "codex"] as const) {
 				status(204),
 			],
 			binary,
-			undefined,
+			directory?.path,
 			backend,
 		);
 		const summary = judgment({
@@ -833,46 +850,6 @@ for (const [backend, policy] of [
 		]);
 	});
 }
-
-test("Codex chat uses the partner's tool config and mail uses the same home with tools off", async (t) => {
-	await using directory = await mkdtempDisposable(
-		join(process.cwd(), ".scratch."),
-	);
-	const binary = join(directory.path, "partner-config");
-	await symlink(codex, binary);
-	await writeFile(
-		join(directory.path, "config.toml"),
-		'sandbox_mode = "danger-full-access"\n[features]\nshell_tool = true\n',
-	);
-	const previous = process.env.CODEX_HOME;
-	process.env.CODEX_HOME = directory.path;
-	t.after(() => {
-		if (previous === undefined) delete process.env.CODEX_HOME;
-		else process.env.CODEX_HOME = previous;
-	});
-	const requests = await runLink(
-		[claimed("Question"), status(204), summaryClaim("Tour"), status(204)],
-		binary,
-		directory.path,
-		"codex",
-	);
-	assert.deepEqual(requests[1], answered(firstClaim));
-	assert.deepEqual(
-		requests[3],
-		result({
-			claim_id: firstClaim,
-			kind: "judgment",
-			outcome: {
-				kind: "answered",
-				result: {
-					summary: "The tour is Thursday.",
-					action_title: null,
-					quote: "The tour is Thursday.",
-				},
-			},
-		}),
-	);
-});
 
 test("Codex offers chat only with a missing or altered mail catalog", async () => {
 	await using directory = await mkdtempDisposable(

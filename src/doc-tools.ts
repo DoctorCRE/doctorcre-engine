@@ -142,8 +142,8 @@ export function validateDocAnswer(payload: unknown, state: DocClaimState) {
 					if (!record) throw new Error("Doc cited an unread record");
 					return record;
 				});
-	if (kind === "answer" && !cited.length)
-		throw new Error("Doc answer has no sources");
+	if (kind === "answer" && proposal != null && !cited.length)
+		throw new Error("Doc save proposal has no sources");
 	return {
 		kind,
 		text,
