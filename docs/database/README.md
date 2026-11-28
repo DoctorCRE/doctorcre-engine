@@ -1,6 +1,6 @@
 # Database drawings
 
-Each overview drawing shows an area and its links to areas listed later, so every connected pair appears once. The number on each line counts foreign keys. In an area drawing, each neighboring area box lists its linked tables, and line labels name the tables and linking columns.
+Each overview drawing shows an area and its links to areas listed later, so every connected pair appears once. The number on each line counts foreign keys. Each area page shows connections in small drawings and lists their exact tables and columns below.
 
 <!-- Begin master drawing -->
 ### People

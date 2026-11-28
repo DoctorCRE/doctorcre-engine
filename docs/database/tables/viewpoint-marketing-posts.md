@@ -1,54 +1,70 @@
 # Marketing posts
 
+Each line shows a connection. The foreign keys below name the exact columns.
+
+### Post
+
 ```mermaid
 ---
 config:
   layout: elk
-  er:
-    nodeSpacing: 22
-    rankSpacing: 44
+  flowchart:
+    htmlLabels: false
 ---
-erDiagram
-  "Post"
-  "Post media"
-  "Documents (area)" {
-    string document
-  }
-  "Marketing categories (area)" {
-    string design_template
-    string idea
-    string platform_format
-  }
-  "Marketing review (area)" {
-    string post_review
-    string post_text
-  }
-  "Property (area)" {
-    string measurement
-  }
-  "Social accounts (area)" {
-    string social_account
-  }
-  "Users and jobs (area)" {
-    string app_user
-    string job
-  }
-  "Property (area)" }o--|| "Post" : "Measurement: post ID, platform"
-  "Post" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Post" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Post" }o--o| "Marketing categories (area)" : "design template ID to Design template"
-  "Post" }o--o| "Marketing categories (area)" : "idea ID to Idea"
-  "Post" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Post" }o--|| "Marketing categories (area)" : "platform, format to Platform format"
-  "Post" }o--|| "Social accounts (area)" : "social account ID, platform to Social account"
-  "Post media" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Post media" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Post media" }o--|| "Documents (area)" : "document ID, content type to Document"
-  "Post media" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Post media" }o--|| "Post" : "post ID, format"
-  "Marketing review (area)" }o--|| "Post" : "Post review: post ID"
-  "Marketing review (area)" }o--|| "Post" : "Post text: post ID"
+flowchart LR
+  center["Post"]
+  n0["Marketing categories (area)"]
+  center --- n0
+  n1["Marketing review (area)"]
+  center --- n1
+  n2["Post media"]
+  center --- n2
+  n3["Property (area)"]
+  center --- n3
+  n4["Social accounts (area)"]
+  center --- n4
+  n5["Users and jobs (area)"]
+  center --- n5
 ```
+
+### Post media
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Post media"]
+  n0["Documents (area)"]
+  center --- n0
+  n1["Post"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+## Foreign keys
+
+| From table and columns                                           | To table and columns                                              |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [measurement](next.measurement.md) (`post_id`, `platform`)       | [post](next.post.md) (`id`, `platform`)                           |
+| [post](next.post.md) (`changed_by_user_id`)                      | [app_user](next.app_user.md) (`id`)                               |
+| [post](next.post.md) (`changed_for_user_id`)                     | [app_user](next.app_user.md) (`id`)                               |
+| [post](next.post.md) (`design_template_id`)                      | [design_template](next.design_template.md) (`id`)                 |
+| [post](next.post.md) (`idea_id`)                                 | [idea](next.idea.md) (`id`)                                       |
+| [post](next.post.md) (`changed_by_job`)                          | [job](next.job.md) (`slug`)                                       |
+| [post](next.post.md) (`platform`, `format`)                      | [platform_format](next.platform_format.md) (`platform`, `format`) |
+| [post](next.post.md) (`social_account_id`, `platform`)           | [social_account](next.social_account.md) (`id`, `platform`)       |
+| [post_media](next.post_media.md) (`changed_by_user_id`)          | [app_user](next.app_user.md) (`id`)                               |
+| [post_media](next.post_media.md) (`changed_for_user_id`)         | [app_user](next.app_user.md) (`id`)                               |
+| [post_media](next.post_media.md) (`document_id`, `content_type`) | [document](next.document.md) (`id`, `content_type`)               |
+| [post_media](next.post_media.md) (`changed_by_job`)              | [job](next.job.md) (`slug`)                                       |
+| [post_media](next.post_media.md) (`post_id`, `format`)           | [post](next.post.md) (`id`, `format`)                             |
+| [post_review](next.post_review.md) (`post_id`)                   | [post](next.post.md) (`id`)                                       |
+| [post_text](next.post_text.md) (`post_id`)                       | [post](next.post.md) (`id`)                                       |
 
 ## Connects to
 
@@ -60,5 +76,3 @@ Numbers count foreign keys between the two areas.
 
 - [Post](next.post.md)
 - [Post media](next.post_media.md)
-
-See each table for its columns and links to other areas.

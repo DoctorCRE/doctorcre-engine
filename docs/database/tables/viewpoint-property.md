@@ -1,98 +1,191 @@
 # Property
 
+Each line shows a connection. The foreign keys below name the exact columns.
+
+### Building ownership
+
 ```mermaid
 ---
 config:
   layout: elk
-  er:
-    nodeSpacing: 22
-    rankSpacing: 44
+  flowchart:
+    htmlLabels: false
 ---
-erDiagram
-  "Building ownership"
-  "Deal property"
-  "Measurement"
-  "Property"
-  "Space need"
-  "Suite"
-  "Activity (area)" {
-    string activity_about
-    string next_step
-  }
-  "Deals (area)" {
-    string deal
-  }
-  "Home and calendar (area)" {
-    string home_update
-  }
-  "Leases (area)" {
-    string lease
-    string lease_suite
-  }
-  "Marketing posts (area)" {
-    string post
-  }
-  "Marketing review (area)" {
-    string platform_metric
-  }
-  "Offers (area)" {
-    string offer
-    string proposal
-  }
-  "People (area)" {
-    string party
-  }
-  "Relationships (area)" {
-    string party_role
-  }
-  "Tours (area)" {
-    string tour_stop
-  }
-  "Users and jobs (area)" {
-    string app_user
-    string job
-  }
-  "Vendors and territories (area)" {
-    string market
-  }
-  "Activity (area)" }o--o| "Property" : "Activity about: property ID"
-  "Building ownership" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Building ownership" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Building ownership" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Building ownership" }o--|| "People (area)" : "party ID to Party"
-  "Building ownership" }o--|| "Property" : "property ID"
-  "Deal property" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Deal property" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Deal property" }o--|| "Deals (area)" : "deal ID to Deal"
-  "Deal property" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Deal property" }o--|| "Property" : "property ID"
-  "Home and calendar (area)" }o--o| "Property" : "Home update: property ID"
-  "Leases (area)" }o--o| "Deal property" : "Lease: deal ID, property ID"
-  "Leases (area)" }o--|| "Property" : "Lease: property ID"
-  "Leases (area)" }o--|| "Suite" : "Lease suite: suite ID, property ID"
-  "Measurement" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Measurement" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Measurement" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Measurement" }o--|| "Marketing review (area)" : "platform, metric to Platform metric"
-  "Measurement" }o--|| "Marketing posts (area)" : "post ID, platform to Post"
-  "Activity (area)" }o--o| "Property" : "Next step: property ID"
-  "Offers (area)" }o--|| "Deal property" : "Offer: deal ID, property ID"
-  "Property" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Property" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Property" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Offers (area)" }o--o| "Property" : "Proposal: property ID"
-  "Space need" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Space need" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Space need" }o--|| "Deals (area)" : "deal ID to Deal"
-  "Space need" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Space need" }o--o| "Vendors and territories (area)" : "market ID to Market"
-  "Space need" }o--o| "Relationships (area)" : "vendor ID, vendor role to Party role"
-  "Suite" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Suite" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Suite" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Suite" }o--|| "Property" : "property ID"
-  "Tours (area)" }o--|| "Property" : "Tour stop: property ID"
+flowchart LR
+  center["Building ownership"]
+  n0["People (area)"]
+  center --- n0
+  n1["Property"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
 ```
+
+### Deal property
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal property"]
+  n0["Deals (area)"]
+  center --- n0
+  n1["Leases (area)"]
+  center --- n1
+  n2["Offers (area)"]
+  center --- n2
+  n3["Property"]
+  center --- n3
+  n4["Users and jobs (area)"]
+  center --- n4
+```
+
+### Measurement
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Measurement"]
+  n0["Marketing posts (area)"]
+  center --- n0
+  n1["Marketing review (area)"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+### Property
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Property"]
+  n0["Activity (area)"]
+  center --- n0
+  n1["Building ownership"]
+  center --- n1
+  n2["Deal property"]
+  center --- n2
+  n3["Home and calendar (area)"]
+  center --- n3
+  n4["Leases (area)"]
+  center --- n4
+  n5["Offers (area)"]
+  center --- n5
+  n6["Suite"]
+  center --- n6
+  n7["Tours (area)"]
+  center --- n7
+```
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Property"]
+  n0["Users and jobs (area)"]
+  center --- n0
+```
+
+### Space need
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Space need"]
+  n0["Deals (area)"]
+  center --- n0
+  n1["Relationships (area)"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+  n3["Vendors and territories (area)"]
+  center --- n3
+```
+
+### Suite
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Suite"]
+  n0["Leases (area)"]
+  center --- n0
+  n1["Property"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+## Foreign keys
+
+| From table and columns                                                   | To table and columns                                              |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| [activity_about](next.activity_about.md) (`property_id`)                 | [property](next.property.md) (`id`)                               |
+| [building_ownership](next.building_ownership.md) (`changed_by_user_id`)  | [app_user](next.app_user.md) (`id`)                               |
+| [building_ownership](next.building_ownership.md) (`changed_for_user_id`) | [app_user](next.app_user.md) (`id`)                               |
+| [building_ownership](next.building_ownership.md) (`changed_by_job`)      | [job](next.job.md) (`slug`)                                       |
+| [building_ownership](next.building_ownership.md) (`party_id`)            | [party](next.party.md) (`id`)                                     |
+| [building_ownership](next.building_ownership.md) (`property_id`)         | [property](next.property.md) (`id`)                               |
+| [deal_property](next.deal_property.md) (`changed_by_user_id`)            | [app_user](next.app_user.md) (`id`)                               |
+| [deal_property](next.deal_property.md) (`changed_for_user_id`)           | [app_user](next.app_user.md) (`id`)                               |
+| [deal_property](next.deal_property.md) (`deal_id`)                       | [deal](next.deal.md) (`id`)                                       |
+| [deal_property](next.deal_property.md) (`changed_by_job`)                | [job](next.job.md) (`slug`)                                       |
+| [deal_property](next.deal_property.md) (`property_id`)                   | [property](next.property.md) (`id`)                               |
+| [home_update](next.home_update.md) (`property_id`)                       | [property](next.property.md) (`id`)                               |
+| [lease](next.lease.md) (`deal_id`, `property_id`)                        | [deal_property](next.deal_property.md) (`deal_id`, `property_id`) |
+| [lease](next.lease.md) (`property_id`)                                   | [property](next.property.md) (`id`)                               |
+| [lease_suite](next.lease_suite.md) (`suite_id`, `property_id`)           | [suite](next.suite.md) (`id`, `property_id`)                      |
+| [measurement](next.measurement.md) (`changed_by_user_id`)                | [app_user](next.app_user.md) (`id`)                               |
+| [measurement](next.measurement.md) (`changed_for_user_id`)               | [app_user](next.app_user.md) (`id`)                               |
+| [measurement](next.measurement.md) (`changed_by_job`)                    | [job](next.job.md) (`slug`)                                       |
+| [measurement](next.measurement.md) (`platform`, `metric`)                | [platform_metric](next.platform_metric.md) (`platform`, `metric`) |
+| [measurement](next.measurement.md) (`post_id`, `platform`)               | [post](next.post.md) (`id`, `platform`)                           |
+| [next_step](next.next_step.md) (`property_id`)                           | [property](next.property.md) (`id`)                               |
+| [offer](next.offer.md) (`deal_id`, `property_id`)                        | [deal_property](next.deal_property.md) (`deal_id`, `property_id`) |
+| [property](next.property.md) (`changed_by_user_id`)                      | [app_user](next.app_user.md) (`id`)                               |
+| [property](next.property.md) (`changed_for_user_id`)                     | [app_user](next.app_user.md) (`id`)                               |
+| [property](next.property.md) (`changed_by_job`)                          | [job](next.job.md) (`slug`)                                       |
+| [proposal](next.proposal.md) (`property_id`)                             | [property](next.property.md) (`id`)                               |
+| [space_need](next.space_need.md) (`changed_by_user_id`)                  | [app_user](next.app_user.md) (`id`)                               |
+| [space_need](next.space_need.md) (`changed_for_user_id`)                 | [app_user](next.app_user.md) (`id`)                               |
+| [space_need](next.space_need.md) (`deal_id`)                             | [deal](next.deal.md) (`id`)                                       |
+| [space_need](next.space_need.md) (`changed_by_job`)                      | [job](next.job.md) (`slug`)                                       |
+| [space_need](next.space_need.md) (`market_id`)                           | [market](next.market.md) (`id`)                                   |
+| [space_need](next.space_need.md) (`vendor_id`, `vendor_role`)            | [party_role](next.party_role.md) (`party_id`, `role`)             |
+| [suite](next.suite.md) (`changed_by_user_id`)                            | [app_user](next.app_user.md) (`id`)                               |
+| [suite](next.suite.md) (`changed_for_user_id`)                           | [app_user](next.app_user.md) (`id`)                               |
+| [suite](next.suite.md) (`changed_by_job`)                                | [job](next.job.md) (`slug`)                                       |
+| [suite](next.suite.md) (`property_id`)                                   | [property](next.property.md) (`id`)                               |
+| [tour_stop](next.tour_stop.md) (`property_id`)                           | [property](next.property.md) (`id`)                               |
 
 ## Connects to
 
@@ -108,5 +201,3 @@ Numbers count foreign keys between the two areas.
 - [Property](next.property.md)
 - [Space need](next.space_need.md)
 - [Suite](next.suite.md)
-
-See each table for its columns and links to other areas.

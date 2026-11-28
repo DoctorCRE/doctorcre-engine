@@ -1,78 +1,165 @@
 # Leases
 
+Each line shows a connection. The foreign keys below name the exact columns.
+
+### Critical date
+
 ```mermaid
 ---
 config:
   layout: elk
-  er:
-    nodeSpacing: 22
-    rankSpacing: 44
+  flowchart:
+    htmlLabels: false
 ---
-erDiagram
-  "Critical date"
-  "Lease"
-  "Lease option"
-  "Lease suite"
-  "Lease version"
-  "Deals (area)" {
-    string deal
-    string deal_party
-  }
-  "Documents (area)" {
-    string document
-  }
-  "Offers (area)" {
-    string offer
-  }
-  "People (area)" {
-    string party
-  }
-  "Property (area)" {
-    string deal_property
-    string property
-    string suite
-  }
-  "Users and jobs (area)" {
-    string app_user
-    string job
-  }
-  "Critical date" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Critical date" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Critical date" }o--o| "Users and jobs (area)" : "confirmed by user ID to App user"
-  "Critical date" }o--o| "Users and jobs (area)" : "resolved by user ID to App user"
-  "Critical date" }o--|| "Deals (area)" : "deal ID to Deal"
-  "Critical date" }o--o| "Documents (area)" : "document ID to Document"
-  "Critical date" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Critical date" }o--o| "Lease option" : "lease version ID, option number"
-  "Critical date" }o--o| "Lease version" : "lease version ID"
-  "Critical date" }o--o| "Offers (area)" : "offer ID, deal ID to Offer"
-  "Deals (area)" }o--o| "Lease" : "Deal: renews lease ID"
-  "Lease" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Lease" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Lease" |o--o| "Deals (area)" : "deal ID to Deal"
-  "Lease" }o--o| "Deals (area)" : "deal ID, party ID, client role to Deal party"
-  "Lease" }o--o| "Property (area)" : "deal ID, property ID to Deal property"
-  "Lease" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Lease" }o--|| "People (area)" : "party ID to Party"
-  "Lease" }o--|| "Property (area)" : "property ID to Property"
-  "Lease option" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Lease option" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Lease option" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Lease option" }o--|| "Lease version" : "lease version ID"
-  "Lease suite" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Lease suite" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Lease suite" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Lease suite" }o--|| "Lease" : "lease ID, property ID"
-  "Lease suite" }o--|| "Lease version" : "lease version ID, lease ID"
-  "Lease suite" }o--|| "Property (area)" : "suite ID, property ID to Suite"
-  "Lease version" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Lease version" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Lease version" }o--|| "Documents (area)" : "document ID to Document"
-  "Lease version" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Lease version" }o--|| "Lease" : "lease ID"
-  "Lease version" }o--o| "Lease version" : "lease ID, previous version#160;#160;#160;#160;"
-  "Lease version" }o--o| "Offers (area)" : "offer ID to Offer"
+flowchart LR
+  center["Critical date"]
+  n0["Deals (area)"]
+  center --- n0
+  n1["Documents (area)"]
+  center --- n1
+  n2["Lease option"]
+  center --- n2
+  n3["Lease version"]
+  center --- n3
+  n4["Offers (area)"]
+  center --- n4
+  n5["Users and jobs (area)"]
+  center --- n5
 ```
+
+### Lease
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Lease"]
+  n0["Deals (area)"]
+  center --- n0
+  n1["Lease suite"]
+  center --- n1
+  n2["Lease version"]
+  center --- n2
+  n3["People (area)"]
+  center --- n3
+  n4["Property (area)"]
+  center --- n4
+  n5["Users and jobs (area)"]
+  center --- n5
+```
+
+### Lease option
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Lease option"]
+  n0["Critical date"]
+  center --- n0
+  n1["Lease version"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+### Lease suite
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Lease suite"]
+  n0["Lease"]
+  center --- n0
+  n1["Lease version"]
+  center --- n1
+  n2["Property (area)"]
+  center --- n2
+  n3["Users and jobs (area)"]
+  center --- n3
+```
+
+### Lease version
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Lease version"]
+  n0["Critical date"]
+  center --- n0
+  n1["Documents (area)"]
+  center --- n1
+  n2["Lease"]
+  center --- n2
+  n3["Lease option"]
+  center --- n3
+  n4["Lease suite"]
+  center --- n4
+  center --- center
+  n6["Offers (area)"]
+  center --- n6
+  n7["Users and jobs (area)"]
+  center --- n7
+```
+
+## Foreign keys
+
+| From table and columns                                                       | To table and columns                                                |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| [critical_date](next.critical_date.md) (`changed_by_user_id`)                | [app_user](next.app_user.md) (`id`)                                 |
+| [critical_date](next.critical_date.md) (`changed_for_user_id`)               | [app_user](next.app_user.md) (`id`)                                 |
+| [critical_date](next.critical_date.md) (`confirmed_by_user_id`)              | [app_user](next.app_user.md) (`id`)                                 |
+| [critical_date](next.critical_date.md) (`resolved_by_user_id`)               | [app_user](next.app_user.md) (`id`)                                 |
+| [critical_date](next.critical_date.md) (`deal_id`)                           | [deal](next.deal.md) (`id`)                                         |
+| [critical_date](next.critical_date.md) (`document_id`)                       | [document](next.document.md) (`id`)                                 |
+| [critical_date](next.critical_date.md) (`changed_by_job`)                    | [job](next.job.md) (`slug`)                                         |
+| [critical_date](next.critical_date.md) (`lease_version_id`, `option_number`) | [lease_option](next.lease_option.md) (`lease_version_id`, `number`) |
+| [critical_date](next.critical_date.md) (`lease_version_id`)                  | [lease_version](next.lease_version.md) (`id`)                       |
+| [critical_date](next.critical_date.md) (`offer_id`, `deal_id`)               | [offer](next.offer.md) (`id`, `deal_id`)                            |
+| [deal](next.deal.md) (`renews_lease_id`)                                     | [lease](next.lease.md) (`id`)                                       |
+| [lease](next.lease.md) (`changed_by_user_id`)                                | [app_user](next.app_user.md) (`id`)                                 |
+| [lease](next.lease.md) (`changed_for_user_id`)                               | [app_user](next.app_user.md) (`id`)                                 |
+| [lease](next.lease.md) (`deal_id`)                                           | [deal](next.deal.md) (`id`)                                         |
+| [lease](next.lease.md) (`deal_id`, `party_id`, `client_role`)                | [deal_party](next.deal_party.md) (`deal_id`, `party_id`, `role`)    |
+| [lease](next.lease.md) (`deal_id`, `property_id`)                            | [deal_property](next.deal_property.md) (`deal_id`, `property_id`)   |
+| [lease](next.lease.md) (`changed_by_job`)                                    | [job](next.job.md) (`slug`)                                         |
+| [lease](next.lease.md) (`party_id`)                                          | [party](next.party.md) (`id`)                                       |
+| [lease](next.lease.md) (`property_id`)                                       | [property](next.property.md) (`id`)                                 |
+| [lease_option](next.lease_option.md) (`changed_by_user_id`)                  | [app_user](next.app_user.md) (`id`)                                 |
+| [lease_option](next.lease_option.md) (`changed_for_user_id`)                 | [app_user](next.app_user.md) (`id`)                                 |
+| [lease_option](next.lease_option.md) (`changed_by_job`)                      | [job](next.job.md) (`slug`)                                         |
+| [lease_option](next.lease_option.md) (`lease_version_id`)                    | [lease_version](next.lease_version.md) (`id`)                       |
+| [lease_suite](next.lease_suite.md) (`changed_by_user_id`)                    | [app_user](next.app_user.md) (`id`)                                 |
+| [lease_suite](next.lease_suite.md) (`changed_for_user_id`)                   | [app_user](next.app_user.md) (`id`)                                 |
+| [lease_suite](next.lease_suite.md) (`changed_by_job`)                        | [job](next.job.md) (`slug`)                                         |
+| [lease_suite](next.lease_suite.md) (`lease_id`, `property_id`)               | [lease](next.lease.md) (`id`, `property_id`)                        |
+| [lease_suite](next.lease_suite.md) (`lease_version_id`, `lease_id`)          | [lease_version](next.lease_version.md) (`id`, `lease_id`)           |
+| [lease_suite](next.lease_suite.md) (`suite_id`, `property_id`)               | [suite](next.suite.md) (`id`, `property_id`)                        |
+| [lease_version](next.lease_version.md) (`changed_by_user_id`)                | [app_user](next.app_user.md) (`id`)                                 |
+| [lease_version](next.lease_version.md) (`changed_for_user_id`)               | [app_user](next.app_user.md) (`id`)                                 |
+| [lease_version](next.lease_version.md) (`document_id`)                       | [document](next.document.md) (`id`)                                 |
+| [lease_version](next.lease_version.md) (`changed_by_job`)                    | [job](next.job.md) (`slug`)                                         |
+| [lease_version](next.lease_version.md) (`lease_id`)                          | [lease](next.lease.md) (`id`)                                       |
+| [lease_version](next.lease_version.md) (`lease_id`, `previous_version`)      | [lease_version](next.lease_version.md) (`lease_id`, `version`)      |
+| [lease_version](next.lease_version.md) (`offer_id`)                          | [offer](next.offer.md) (`id`)                                       |
 
 ## Connects to
 
@@ -87,5 +174,3 @@ Numbers count foreign keys between the two areas.
 - [Lease option](next.lease_option.md)
 - [Lease suite](next.lease_suite.md)
 - [Lease version](next.lease_version.md)
-
-See each table for its columns and links to other areas.

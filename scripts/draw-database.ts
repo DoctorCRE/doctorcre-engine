@@ -14,6 +14,7 @@ const relation = z.object({
 	columns: z.array(z.string()).min(1),
 	cardinality,
 	parent_table: z.string(),
+	parent_columns: z.array(z.string()).min(1),
 	parent_cardinality: cardinality,
 });
 const tbls = z.object({
@@ -92,94 +93,94 @@ function tableName(table: string) {
 	return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-const markers = {
-	zero_or_one: ["|o", "o|"],
-	exactly_one: ["||", "||"],
-	zero_or_more: ["}o", "o{"],
-	one_or_more: ["}|", "|{"],
-} as const;
-
-// A blank Mermaid title reserves space for GitHub's expand and copy controls.
-const controlsSpacer = 'title: "\\u00a0"';
-
 function areaPage(area: Area) {
-	const boxes = area.tables.map((table) => `  "${tableName(table)}"`);
-	const externalAreas = [...area.neighbors.keys()].sort((a, b) =>
-		a.name.localeCompare(b.name, "en"),
-	);
-	for (const external of externalAreas) {
-		const tables = [...area.external]
-			.filter(([, owner]) => owner === external)
-			.map(([table]) => table.replace(/^next\./, ""));
-		boxes.push(
-			`  "${external.name} (area)" {`,
-			...tables.sort().map((table) => `    string ${table}`),
-			"  }",
+	const diagrams = area.tables.flatMap((table) => {
+		const neighbors = new Set<string>();
+		for (const link of area.relations) {
+			const other =
+				link.table === table
+					? link.parent_table
+					: link.parent_table === table
+						? link.table
+						: undefined;
+			if (!other) continue;
+			const external = area.external.get(other);
+			neighbors.add(external ? `${external.name} (area)` : tableName(other));
+		}
+		const nodes = [...neighbors].sort((a, b) => a.localeCompare(b, "en"));
+		const groups = Array.from(
+			{ length: Math.max(1, Math.ceil(nodes.length / 8)) },
+			(_, index) => nodes.slice(index * 8, index * 8 + 8),
 		);
-	}
-	const display = (table: string) => {
-		const external = area.external.get(table);
-		return external ? `${external.name} (area)` : tableName(table);
-	};
-	const lines = area.relations.map((link) => {
-		const [left] = markers[link.cardinality];
-		const [, right] = markers[link.parent_cardinality];
-		const columns = link.columns.map(plainName).join(", ");
-		const label = area.external.has(link.table)
-			? `${tableName(link.table)}: ${columns}`
-			: area.external.has(link.parent_table)
-				? `${columns} to ${tableName(link.parent_table)}`
-				: columns;
-		const padding = link.table === link.parent_table ? "#160;".repeat(4) : "";
-		return `  "${display(link.table)}" ${left}--${right} "${display(link.parent_table)}" : "${label}${padding}"`;
+		return [
+			`### ${tableName(table)}`,
+			"",
+			...groups.flatMap((group) => [
+				"```mermaid",
+				"---",
+				"config:",
+				"  layout: elk",
+				"  flowchart:",
+				"    htmlLabels: false",
+				"---",
+				"flowchart LR",
+				`  center["${tableName(table)}"]`,
+				...group.flatMap((node, index) =>
+					node === tableName(table)
+						? ["  center --- center"]
+						: [`  n${index}["${node}"]`, `  center --- n${index}`],
+				),
+				"```",
+				"",
+			]),
+		];
 	});
-	const tables = area.tables.map(
-		(table) => `- [${tableName(table)}](${table}.md)`,
-	);
+	const links = area.relations.map((link) => {
+		const source = link.table.replace(/^next\./, "");
+		const target = link.parent_table.replace(/^next\./, "");
+		const columns = (values: string[]) =>
+			values.map((value) => `\`${value}\``).join(", ");
+		return `| [${source}](${link.table}.md) (${columns(link.columns)}) | [${target}](${link.parent_table}.md) (${columns(link.parent_columns)}) |`;
+	});
 	const connections = [...area.neighbors]
 		.sort(([a], [b]) => a.name.localeCompare(b.name, "en"))
 		.map(
 			([other, count]) =>
 				`[${other.name}](viewpoint-${other.id}.md) (${count})`,
 		);
-	const reserveControls = area.id === "people";
 	return [
 		`# ${area.name}`,
 		"",
-		"```mermaid",
-		"---",
-		...(reserveControls ? [controlsSpacer] : []),
-		"config:",
-		"  layout: elk",
-		"  er:",
-		...(reserveControls ? ["    titleTopMargin: 56"] : []),
-		"    nodeSpacing: 22",
-		"    rankSpacing: 44",
-		"---",
-		"erDiagram",
-		...boxes,
-		...lines,
-		"```",
+		"Each line shows a connection. The foreign keys below name the exact columns.",
+		"",
+		...diagrams,
+		...(links.length
+			? [
+					"## Foreign keys",
+					"",
+					"| From table and columns | To table and columns |",
+					"| --- | --- |",
+					...links,
+					"",
+				]
+			: []),
 		...(connections.length
 			? [
-					"",
 					"## Connects to",
 					"",
 					"Numbers count foreign keys between the two areas.",
 					"",
 					connections.join(" · "),
+					"",
 				]
 			: []),
-		"",
 		"## Tables",
 		"",
-		...tables,
+		...area.tables.map((table) => `- [${tableName(table)}](${table}.md)`),
 		"",
-		"See each table for its columns and links to other areas.",
 		...(area.tables.includes("next.lead_source_sender")
-			? ["", "Lead source sender is standalone intake configuration."]
+			? ["Lead source sender is standalone intake configuration.", ""]
 			: []),
-		"",
 	].join("\n");
 }
 

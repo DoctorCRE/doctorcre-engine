@@ -1,158 +1,264 @@
 # People
 
+Each line shows a connection. The foreign keys below name the exact columns.
+
+### Do not contact
+
 ```mermaid
 ---
-title: "\u00a0"
 config:
   layout: elk
-  er:
-    titleTopMargin: 56
-    nodeSpacing: 22
-    rankSpacing: 44
+  flowchart:
+    htmlLabels: false
 ---
-erDiagram
-  "Do not contact"
-  "Merged party"
-  "Outside ID"
-  "Party"
-  "Party company"
-  "Party email"
-  "Party phone"
-  "Activity (area)" {
-    string activity
-    string activity_about
-    string next_step
-  }
-  "Changes and preferences (area)" {
-    string change
-  }
-  "Client websites (area)" {
-    string deal_client_website
-  }
-  "Clients (area)" {
-    string client_brand
-    string national_account
-  }
-  "Commissions (area)" {
-    string commission_share
-  }
-  "Deals (area)" {
-    string deal
-    string deal_party
-  }
-  "Doc (area)" {
-    string doc_judgment_destination
-  }
-  "Documents (area)" {
-    string party_document
-  }
-  "Email (area)" {
-    string email
-  }
-  "Home and calendar (area)" {
-    string home_mark
-  }
-  "Imported deals (area)" {
-    string imported_deal_party
-  }
-  "Leads (area)" {
-    string candidate
-    string lead_contact_draft
-    string lead_email_attention
-    string lead_email_source
-    string lead_stage_move
-  }
-  "Leases (area)" {
-    string lease
-  }
-  "Offers (area)" {
-    string proposal
-  }
-  "Property (area)" {
-    string building_ownership
-  }
-  "Relationships (area)" {
-    string how_found
-    string introduction
-    string party_link
-    string party_role
-    string party_specialty
-  }
-  "Social accounts (area)" {
-    string social_account
-  }
-  "Users and jobs (area)" {
-    string app_user
-    string job
-  }
-  "Vendors and territories (area)" {
-    string party_territory
-  }
-  "Activity (area)" }o--o| "Party" : "Activity: from party ID"
-  "Activity (area)" }o--o| "Party" : "Activity about: party ID"
-  "Users and jobs (area)" }o--|| "Party" : "App user: ID, kind"
-  "Property (area)" }o--|| "Party" : "Building ownership: party ID"
-  "Leads (area)" }o--o| "Party" : "Candidate: promoted party ID"
-  "Changes and preferences (area)" }o--o| "Merged party" : "Change: merge of"
-  "Clients (area)" }o--o| "Party" : "Client brand: brand ID, brand kind"
-  "Commissions (area)" }o--|| "Party" : "Commission share: party ID"
-  "Client websites (area)" }o--|| "Party" : "Deal client website: client party ID"
-  "Deals (area)" }o--|| "Party" : "Deal party: party ID"
-  "Do not contact" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Do not contact" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Do not contact" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Do not contact" |o--|| "Party" : "party ID"
-  "Doc (area)" }o--o| "Party" : "Doc judgment destination: vendor ID"
-  "Home and calendar (area)" }o--o| "Party" : "Home mark: waiting on party ID"
-  "Imported deals (area)" }o--|| "Party" : "Imported deal party: party ID"
-  "Relationships (area)" }o--|| "Party" : "Introduction: introduced party ID"
-  "Leads (area)" |o--|| "Party" : "Lead contact draft: party ID"
-  "Leads (area)" |o--|| "Party" : "Lead email attention: party ID"
-  "Leads (area)" }o--|| "Party" : "Lead email source: party ID"
-  "Leads (area)" }o--|| "Party" : "Lead stage move: party ID"
-  "Leases (area)" }o--|| "Party" : "Lease: party ID"
-  "Merged party" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Merged party" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Merged party" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Merged party" }o--|| "Party" : "survivor ID"
-  "Clients (area)" }o--o| "Party" : "National account: party ID, kind"
-  "Activity (area)" }o--o| "Party" : "Next step: call contact party ID"
-  "Activity (area)" }o--o| "Party" : "Next step: owner party ID"
-  "Activity (area)" }o--o| "Party" : "Next step: party ID"
-  "Outside ID" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Outside ID" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Outside ID" }o--o| "Deals (area)" : "deal ID to Deal"
-  "Outside ID" }o--o| "Email (area)" : "email activity ID to Email"
-  "Outside ID" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Outside ID" }o--o| "Party" : "party ID"
-  "Party" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Party" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Party" }o--o| "Relationships (area)" : "how found to How found"
-  "Party" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Party company" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Party company" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Party company" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Party company" }o--|| "Party" : "company ID, company kind"
-  "Party company" }o--|| "Party" : "person ID, person kind"
-  "Documents (area)" }o--|| "Party" : "Party document: party ID"
-  "Party email" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Party email" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Party email" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Party email" }o--|| "Party" : "party ID"
-  "Relationships (area)" }o--|| "Party" : "Party link: other party ID"
-  "Relationships (area)" }o--|| "Party" : "Party link: party ID"
-  "Party phone" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Party phone" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Party phone" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Party phone" }o--|| "Party" : "party ID"
-  "Relationships (area)" }o--|| "Party" : "Party role: party ID"
-  "Relationships (area)" }o--|| "Party" : "Party specialty: person ID, person kind"
-  "Vendors and territories (area)" }o--|| "Party" : "Party territory: party ID"
-  "Offers (area)" }o--o| "Party" : "Proposal: filed vendor ID"
-  "Offers (area)" }o--o| "Party" : "Proposal: owner party ID"
-  "Offers (area)" }o--o| "Party" : "Proposal: party ID"
-  "Social accounts (area)" }o--|| "Party" : "Social account: owner party ID"
+flowchart LR
+  center["Do not contact"]
+  n0["Party"]
+  center --- n0
+  n1["Users and jobs (area)"]
+  center --- n1
 ```
+
+### Merged party
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Merged party"]
+  n0["Changes and preferences (area)"]
+  center --- n0
+  n1["Party"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+### Outside ID
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Outside ID"]
+  n0["Deals (area)"]
+  center --- n0
+  n1["Email (area)"]
+  center --- n1
+  n2["Party"]
+  center --- n2
+  n3["Users and jobs (area)"]
+  center --- n3
+```
+
+### Party
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Party"]
+  n0["Activity (area)"]
+  center --- n0
+  n1["Client websites (area)"]
+  center --- n1
+  n2["Clients (area)"]
+  center --- n2
+  n3["Commissions (area)"]
+  center --- n3
+  n4["Deals (area)"]
+  center --- n4
+  n5["Do not contact"]
+  center --- n5
+  n6["Doc (area)"]
+  center --- n6
+  n7["Documents (area)"]
+  center --- n7
+```
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Party"]
+  n0["Home and calendar (area)"]
+  center --- n0
+  n1["Imported deals (area)"]
+  center --- n1
+  n2["Leads (area)"]
+  center --- n2
+  n3["Leases (area)"]
+  center --- n3
+  n4["Merged party"]
+  center --- n4
+  n5["Offers (area)"]
+  center --- n5
+  n6["Outside ID"]
+  center --- n6
+  n7["Party company"]
+  center --- n7
+```
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Party"]
+  n0["Party email"]
+  center --- n0
+  n1["Party phone"]
+  center --- n1
+  n2["Property (area)"]
+  center --- n2
+  n3["Relationships (area)"]
+  center --- n3
+  n4["Social accounts (area)"]
+  center --- n4
+  n5["Users and jobs (area)"]
+  center --- n5
+  n6["Vendors and territories (area)"]
+  center --- n6
+```
+
+### Party company
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Party company"]
+  n0["Party"]
+  center --- n0
+  n1["Users and jobs (area)"]
+  center --- n1
+```
+
+### Party email
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Party email"]
+  n0["Party"]
+  center --- n0
+  n1["Users and jobs (area)"]
+  center --- n1
+```
+
+### Party phone
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Party phone"]
+  n0["Party"]
+  center --- n0
+  n1["Users and jobs (area)"]
+  center --- n1
+```
+
+## Foreign keys
+
+| From table and columns                                                     | To table and columns                        |
+| -------------------------------------------------------------------------- | ------------------------------------------- |
+| [activity](next.activity.md) (`from_party_id`)                             | [party](next.party.md) (`id`)               |
+| [activity_about](next.activity_about.md) (`party_id`)                      | [party](next.party.md) (`id`)               |
+| [app_user](next.app_user.md) (`id`, `kind`)                                | [party](next.party.md) (`id`, `kind`)       |
+| [building_ownership](next.building_ownership.md) (`party_id`)              | [party](next.party.md) (`id`)               |
+| [candidate](next.candidate.md) (`promoted_party_id`)                       | [party](next.party.md) (`id`)               |
+| [change](next.change.md) (`merge_of`)                                      | [merged_party](next.merged_party.md) (`id`) |
+| [client_brand](next.client_brand.md) (`brand_id`, `brand_kind`)            | [party](next.party.md) (`id`, `kind`)       |
+| [commission_share](next.commission_share.md) (`party_id`)                  | [party](next.party.md) (`id`)               |
+| [deal_client_website](next.deal_client_website.md) (`client_party_id`)     | [party](next.party.md) (`id`)               |
+| [deal_party](next.deal_party.md) (`party_id`)                              | [party](next.party.md) (`id`)               |
+| [do_not_contact](next.do_not_contact.md) (`changed_by_user_id`)            | [app_user](next.app_user.md) (`id`)         |
+| [do_not_contact](next.do_not_contact.md) (`changed_for_user_id`)           | [app_user](next.app_user.md) (`id`)         |
+| [do_not_contact](next.do_not_contact.md) (`changed_by_job`)                | [job](next.job.md) (`slug`)                 |
+| [do_not_contact](next.do_not_contact.md) (`party_id`)                      | [party](next.party.md) (`id`)               |
+| [doc_judgment_destination](next.doc_judgment_destination.md) (`vendor_id`) | [party](next.party.md) (`id`)               |
+| [home_mark](next.home_mark.md) (`waiting_on_party_id`)                     | [party](next.party.md) (`id`)               |
+| [imported_deal_party](next.imported_deal_party.md) (`party_id`)            | [party](next.party.md) (`id`)               |
+| [introduction](next.introduction.md) (`introduced_party_id`)               | [party](next.party.md) (`id`)               |
+| [lead_contact_draft](next.lead_contact_draft.md) (`party_id`)              | [party](next.party.md) (`id`)               |
+| [lead_email_attention](next.lead_email_attention.md) (`party_id`)          | [party](next.party.md) (`id`)               |
+| [lead_email_source](next.lead_email_source.md) (`party_id`)                | [party](next.party.md) (`id`)               |
+| [lead_stage_move](next.lead_stage_move.md) (`party_id`)                    | [party](next.party.md) (`id`)               |
+| [lease](next.lease.md) (`party_id`)                                        | [party](next.party.md) (`id`)               |
+| [merged_party](next.merged_party.md) (`changed_by_user_id`)                | [app_user](next.app_user.md) (`id`)         |
+| [merged_party](next.merged_party.md) (`changed_for_user_id`)               | [app_user](next.app_user.md) (`id`)         |
+| [merged_party](next.merged_party.md) (`changed_by_job`)                    | [job](next.job.md) (`slug`)                 |
+| [merged_party](next.merged_party.md) (`survivor_id`)                       | [party](next.party.md) (`id`)               |
+| [national_account](next.national_account.md) (`party_id`, `kind`)          | [party](next.party.md) (`id`, `kind`)       |
+| [next_step](next.next_step.md) (`call_contact_party_id`)                   | [party](next.party.md) (`id`)               |
+| [next_step](next.next_step.md) (`owner_party_id`)                          | [party](next.party.md) (`id`)               |
+| [next_step](next.next_step.md) (`party_id`)                                | [party](next.party.md) (`id`)               |
+| [outside_id](next.outside_id.md) (`changed_by_user_id`)                    | [app_user](next.app_user.md) (`id`)         |
+| [outside_id](next.outside_id.md) (`changed_for_user_id`)                   | [app_user](next.app_user.md) (`id`)         |
+| [outside_id](next.outside_id.md) (`deal_id`)                               | [deal](next.deal.md) (`id`)                 |
+| [outside_id](next.outside_id.md) (`email_activity_id`)                     | [email](next.email.md) (`activity_id`)      |
+| [outside_id](next.outside_id.md) (`changed_by_job`)                        | [job](next.job.md) (`slug`)                 |
+| [outside_id](next.outside_id.md) (`party_id`)                              | [party](next.party.md) (`id`)               |
+| [party](next.party.md) (`changed_by_user_id`)                              | [app_user](next.app_user.md) (`id`)         |
+| [party](next.party.md) (`changed_for_user_id`)                             | [app_user](next.app_user.md) (`id`)         |
+| [party](next.party.md) (`how_found`)                                       | [how_found](next.how_found.md) (`slug`)     |
+| [party](next.party.md) (`changed_by_job`)                                  | [job](next.job.md) (`slug`)                 |
+| [party_company](next.party_company.md) (`changed_by_user_id`)              | [app_user](next.app_user.md) (`id`)         |
+| [party_company](next.party_company.md) (`changed_for_user_id`)             | [app_user](next.app_user.md) (`id`)         |
+| [party_company](next.party_company.md) (`changed_by_job`)                  | [job](next.job.md) (`slug`)                 |
+| [party_company](next.party_company.md) (`company_id`, `company_kind`)      | [party](next.party.md) (`id`, `kind`)       |
+| [party_company](next.party_company.md) (`person_id`, `person_kind`)        | [party](next.party.md) (`id`, `kind`)       |
+| [party_document](next.party_document.md) (`party_id`)                      | [party](next.party.md) (`id`)               |
+| [party_email](next.party_email.md) (`changed_by_user_id`)                  | [app_user](next.app_user.md) (`id`)         |
+| [party_email](next.party_email.md) (`changed_for_user_id`)                 | [app_user](next.app_user.md) (`id`)         |
+| [party_email](next.party_email.md) (`changed_by_job`)                      | [job](next.job.md) (`slug`)                 |
+| [party_email](next.party_email.md) (`party_id`)                            | [party](next.party.md) (`id`)               |
+| [party_link](next.party_link.md) (`other_party_id`)                        | [party](next.party.md) (`id`)               |
+| [party_link](next.party_link.md) (`party_id`)                              | [party](next.party.md) (`id`)               |
+| [party_phone](next.party_phone.md) (`changed_by_user_id`)                  | [app_user](next.app_user.md) (`id`)         |
+| [party_phone](next.party_phone.md) (`changed_for_user_id`)                 | [app_user](next.app_user.md) (`id`)         |
+| [party_phone](next.party_phone.md) (`changed_by_job`)                      | [job](next.job.md) (`slug`)                 |
+| [party_phone](next.party_phone.md) (`party_id`)                            | [party](next.party.md) (`id`)               |
+| [party_role](next.party_role.md) (`party_id`)                              | [party](next.party.md) (`id`)               |
+| [party_specialty](next.party_specialty.md) (`person_id`, `person_kind`)    | [party](next.party.md) (`id`, `kind`)       |
+| [party_territory](next.party_territory.md) (`party_id`)                    | [party](next.party.md) (`id`)               |
+| [proposal](next.proposal.md) (`filed_vendor_id`)                           | [party](next.party.md) (`id`)               |
+| [proposal](next.proposal.md) (`owner_party_id`)                            | [party](next.party.md) (`id`)               |
+| [proposal](next.proposal.md) (`party_id`)                                  | [party](next.party.md) (`id`)               |
+| [social_account](next.social_account.md) (`owner_party_id`)                | [party](next.party.md) (`id`)               |
 
 ## Connects to
 
@@ -169,5 +275,3 @@ Numbers count foreign keys between the two areas.
 - [Party company](next.party_company.md)
 - [Party email](next.party_email.md)
 - [Party phone](next.party_phone.md)
-
-See each table for its columns and links to other areas.

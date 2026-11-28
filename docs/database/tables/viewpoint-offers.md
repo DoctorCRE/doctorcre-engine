@@ -1,100 +1,146 @@
 # Offers
 
+Each line shows a connection. The foreign keys below name the exact columns.
+
+### Offer
+
 ```mermaid
 ---
 config:
   layout: elk
-  er:
-    nodeSpacing: 22
-    rankSpacing: 44
+  flowchart:
+    htmlLabels: false
 ---
-erDiagram
-  "Offer"
-  "Offer claim"
-  "Offer document"
-  "Proposal"
-  "Activity (area)" {
-    string activity
-    string activity_about
-    string next_step
-  }
-  "Deals (area)" {
-    string deal
-    string deal_party
-    string phase
-    string stage
-  }
-  "Documents (area)" {
-    string document
-  }
-  "Home and calendar (area)" {
-    string home_mark
-  }
-  "Leads (area)" {
-    string candidate
-  }
-  "Leases (area)" {
-    string critical_date
-    string lease_version
-  }
-  "People (area)" {
-    string party
-  }
-  "Property (area)" {
-    string deal_property
-    string property
-  }
-  "Relationships (area)" {
-    string claim_type
-    string how_found
-  }
-  "Users and jobs (area)" {
-    string app_user
-    string job
-  }
-  "Leases (area)" }o--o| "Offer" : "Critical date: offer ID, deal ID"
-  "Home and calendar (area)" }o--o| "Proposal" : "Home mark: proposal ID"
-  "Leases (area)" }o--o| "Offer" : "Lease version: offer ID"
-  "Offer" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Offer" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Offer" }o--|| "Deals (area)" : "deal ID, from party ID, from role to Deal party"
-  "Offer" }o--|| "Property (area)" : "deal ID, property ID to Deal property"
-  "Offer" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Offer" }o--o| "Offer" : "deal ID, answers round#160;#160;#160;#160;"
-  "Offer claim" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Offer claim" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Offer claim" }o--|| "Relationships (area)" : "claim type to Claim type"
-  "Offer claim" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Offer claim" }o--|| "Offer" : "offer ID"
-  "Offer document" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Offer document" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Offer document" }o--|| "Documents (area)" : "document ID to Document"
-  "Offer document" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Offer document" }o--|| "Offer" : "offer ID"
-  "Proposal" }o--o| "Activity (area)" : "activity ID, activity kind to Activity"
-  "Proposal" }o--o| "Activity (area)" : "activity ID, call deal ID to Activity about"
-  "Proposal" }o--o| "Activity (area)" : "activity ID, held deal ID to Activity about"
-  "Proposal" }o--o| "Activity (area)" : "activity ID, party ID to Activity about"
-  "Proposal" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Proposal" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Proposal" }o--o| "Users and jobs (area)" : "decided by user ID to App user"
-  "Proposal" |o--o| "Leads (area)" : "candidate ID to Candidate"
-  "Proposal" }o--o| "Deals (area)" : "deal ID to Deal"
-  "Proposal" }o--o| "Deals (area)" : "filed deal ID to Deal"
-  "Proposal" }o--o| "Relationships (area)" : "how found to How found"
-  "Proposal" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Proposal" }o--|| "Users and jobs (area)" : "proposed by job to Job"
-  "Proposal" }o--o| "Activity (area)" : "merged step ID to Next step"
-  "Proposal" }o--o| "Activity (area)" : "next step ID, deal ID to Next step"
-  "Proposal" }o--o| "People (area)" : "filed vendor ID to Party"
-  "Proposal" }o--o| "People (area)" : "owner party ID to Party"
-  "Proposal" }o--o| "People (area)" : "party ID to Party"
-  "Proposal" }o--o| "Deals (area)" : "from phase to Phase"
-  "Proposal" }o--o| "Deals (area)" : "to phase to Phase"
-  "Proposal" }o--o| "Property (area)" : "property ID to Property"
-  "Proposal" }o--o| "Deals (area)" : "lead role, from stage to Stage"
-  "Proposal" }o--o| "Deals (area)" : "lead role, to stage to Stage"
+flowchart LR
+  center["Offer"]
+  n0["Deals (area)"]
+  center --- n0
+  n1["Leases (area)"]
+  center --- n1
+  center --- center
+  n3["Offer claim"]
+  center --- n3
+  n4["Offer document"]
+  center --- n4
+  n5["Property (area)"]
+  center --- n5
+  n6["Users and jobs (area)"]
+  center --- n6
 ```
+
+### Offer claim
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Offer claim"]
+  n0["Offer"]
+  center --- n0
+  n1["Relationships (area)"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+### Offer document
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Offer document"]
+  n0["Documents (area)"]
+  center --- n0
+  n1["Offer"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+### Proposal
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Proposal"]
+  n0["Activity (area)"]
+  center --- n0
+  n1["Deals (area)"]
+  center --- n1
+  n2["Home and calendar (area)"]
+  center --- n2
+  n3["Leads (area)"]
+  center --- n3
+  n4["People (area)"]
+  center --- n4
+  n5["Property (area)"]
+  center --- n5
+  n6["Relationships (area)"]
+  center --- n6
+  n7["Users and jobs (area)"]
+  center --- n7
+```
+
+## Foreign keys
+
+| From table and columns                                           | To table and columns                                                 |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [critical_date](next.critical_date.md) (`offer_id`, `deal_id`)   | [offer](next.offer.md) (`id`, `deal_id`)                             |
+| [home_mark](next.home_mark.md) (`proposal_id`)                   | [proposal](next.proposal.md) (`id`)                                  |
+| [lease_version](next.lease_version.md) (`offer_id`)              | [offer](next.offer.md) (`id`)                                        |
+| [offer](next.offer.md) (`changed_by_user_id`)                    | [app_user](next.app_user.md) (`id`)                                  |
+| [offer](next.offer.md) (`changed_for_user_id`)                   | [app_user](next.app_user.md) (`id`)                                  |
+| [offer](next.offer.md) (`deal_id`, `from_party_id`, `from_role`) | [deal_party](next.deal_party.md) (`deal_id`, `party_id`, `role`)     |
+| [offer](next.offer.md) (`deal_id`, `property_id`)                | [deal_property](next.deal_property.md) (`deal_id`, `property_id`)    |
+| [offer](next.offer.md) (`changed_by_job`)                        | [job](next.job.md) (`slug`)                                          |
+| [offer](next.offer.md) (`deal_id`, `answers_round`)              | [offer](next.offer.md) (`deal_id`, `round`)                          |
+| [offer_claim](next.offer_claim.md) (`changed_by_user_id`)        | [app_user](next.app_user.md) (`id`)                                  |
+| [offer_claim](next.offer_claim.md) (`changed_for_user_id`)       | [app_user](next.app_user.md) (`id`)                                  |
+| [offer_claim](next.offer_claim.md) (`claim_type`)                | [claim_type](next.claim_type.md) (`slug`)                            |
+| [offer_claim](next.offer_claim.md) (`changed_by_job`)            | [job](next.job.md) (`slug`)                                          |
+| [offer_claim](next.offer_claim.md) (`offer_id`)                  | [offer](next.offer.md) (`id`)                                        |
+| [offer_document](next.offer_document.md) (`changed_by_user_id`)  | [app_user](next.app_user.md) (`id`)                                  |
+| [offer_document](next.offer_document.md) (`changed_for_user_id`) | [app_user](next.app_user.md) (`id`)                                  |
+| [offer_document](next.offer_document.md) (`document_id`)         | [document](next.document.md) (`id`)                                  |
+| [offer_document](next.offer_document.md) (`changed_by_job`)      | [job](next.job.md) (`slug`)                                          |
+| [offer_document](next.offer_document.md) (`offer_id`)            | [offer](next.offer.md) (`id`)                                        |
+| [proposal](next.proposal.md) (`activity_id`, `activity_kind`)    | [activity](next.activity.md) (`id`, `kind`)                          |
+| [proposal](next.proposal.md) (`activity_id`, `call_deal_id`)     | [activity_about](next.activity_about.md) (`activity_id`, `deal_id`)  |
+| [proposal](next.proposal.md) (`activity_id`, `held_deal_id`)     | [activity_about](next.activity_about.md) (`activity_id`, `deal_id`)  |
+| [proposal](next.proposal.md) (`activity_id`, `party_id`)         | [activity_about](next.activity_about.md) (`activity_id`, `party_id`) |
+| [proposal](next.proposal.md) (`changed_by_user_id`)              | [app_user](next.app_user.md) (`id`)                                  |
+| [proposal](next.proposal.md) (`changed_for_user_id`)             | [app_user](next.app_user.md) (`id`)                                  |
+| [proposal](next.proposal.md) (`decided_by_user_id`)              | [app_user](next.app_user.md) (`id`)                                  |
+| [proposal](next.proposal.md) (`candidate_id`)                    | [candidate](next.candidate.md) (`id`)                                |
+| [proposal](next.proposal.md) (`deal_id`)                         | [deal](next.deal.md) (`id`)                                          |
+| [proposal](next.proposal.md) (`filed_deal_id`)                   | [deal](next.deal.md) (`id`)                                          |
+| [proposal](next.proposal.md) (`how_found`)                       | [how_found](next.how_found.md) (`slug`)                              |
+| [proposal](next.proposal.md) (`changed_by_job`)                  | [job](next.job.md) (`slug`)                                          |
+| [proposal](next.proposal.md) (`proposed_by_job`)                 | [job](next.job.md) (`slug`)                                          |
+| [proposal](next.proposal.md) (`merged_step_id`)                  | [next_step](next.next_step.md) (`id`)                                |
+| [proposal](next.proposal.md) (`next_step_id`, `deal_id`)         | [next_step](next.next_step.md) (`id`, `deal_id`)                     |
+| [proposal](next.proposal.md) (`filed_vendor_id`)                 | [party](next.party.md) (`id`)                                        |
+| [proposal](next.proposal.md) (`owner_party_id`)                  | [party](next.party.md) (`id`)                                        |
+| [proposal](next.proposal.md) (`party_id`)                        | [party](next.party.md) (`id`)                                        |
+| [proposal](next.proposal.md) (`from_phase`)                      | [phase](next.phase.md) (`slug`)                                      |
+| [proposal](next.proposal.md) (`to_phase`)                        | [phase](next.phase.md) (`slug`)                                      |
+| [proposal](next.proposal.md) (`property_id`)                     | [property](next.property.md) (`id`)                                  |
+| [proposal](next.proposal.md) (`lead_role`, `from_stage`)         | [stage](next.stage.md) (`role`, `slug`)                              |
+| [proposal](next.proposal.md) (`lead_role`, `to_stage`)           | [stage](next.stage.md) (`role`, `slug`)                              |
 
 ## Connects to
 
@@ -108,5 +154,3 @@ Numbers count foreign keys between the two areas.
 - [Offer claim](next.offer_claim.md)
 - [Offer document](next.offer_document.md)
 - [Proposal](next.proposal.md)
-
-See each table for its columns and links to other areas.

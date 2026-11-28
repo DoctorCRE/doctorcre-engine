@@ -1,177 +1,352 @@
 # Deals
 
+Each line shows a connection. The foreign keys below name the exact columns.
+
+### Deal
+
 ```mermaid
 ---
 config:
   layout: elk
-  er:
-    nodeSpacing: 22
-    rankSpacing: 44
+  flowchart:
+    htmlLabels: false
 ---
-erDiagram
-  "Deal"
-  "Deal kind"
-  "Deal open name"
-  "Deal party"
-  "Deal phase change"
-  "Deal plan date"
-  "Deal reason"
-  "Phase"
-  "Stage"
-  "Typical length"
-  "Activity (area)" {
-    string activity
-    string activity_about
-    string deal_attention_alert
-    string next_step
-  }
-  "Client websites (area)" {
-    string deal_client_website
-  }
-  "Commissions (area)" {
-    string commission
-  }
-  "Doc (area)" {
-    string doc_judgment_destination
-  }
-  "Documents (area)" {
-    string document
-  }
-  "Home and calendar (area)" {
-    string home_update
-    string weekly_review
-  }
-  "Imported deals (area)" {
-    string imported_automatic_phase_move
-    string imported_deal_board
-    string imported_deal_history
-    string imported_deal_invoiced
-    string imported_deal_owner
-    string imported_deal_party
-  }
-  "Invoices (area)" {
-    string invoice_email
-  }
-  "Leads (area)" {
-    string lead_stage_move
-  }
-  "Leases (area)" {
-    string critical_date
-    string lease
-  }
-  "Offers (area)" {
-    string offer
-    string proposal
-  }
-  "People (area)" {
-    string outside_id
-    string party
-  }
-  "Property (area)" {
-    string deal_property
-    string space_need
-  }
-  "Relationships (area)" {
-    string introduction
-    string party_role
-    string role
-  }
-  "Tours (area)" {
-    string tour_plan
-  }
-  "Users and jobs (area)" {
-    string app_user
-    string job
-  }
-  "Vendors and territories (area)" {
-    string market
-  }
-  "Activity (area)" }o--o| "Deal" : "Activity about: deal ID"
-  "Commissions (area)" |o--|| "Deal" : "Commission: deal ID"
-  "Leases (area)" }o--|| "Deal" : "Critical date: deal ID"
-  "Deal" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Deal" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Deal" }o--|| "Users and jobs (area)" : "owner user ID to App user"
-  "Deal" }o--o| "Users and jobs (area)" : "parked by user ID to App user"
-  "Deal" }o--o| "Deal kind" : "kind"
-  "Deal" }o--o| "Deal reason" : "reason"
-  "Deal" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Deal" }o--o| "Leases (area)" : "renews lease ID to Lease"
-  "Deal" }o--o| "Vendors and territories (area)" : "market ID to Market"
-  "Activity (area)" |o--|| "Deal" : "Deal attention alert: deal ID"
-  "Client websites (area)" }o--|| "Deal" : "Deal client website: deal ID"
-  "Deal kind" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Deal kind" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Deal kind" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Deal open name" |o--|| "Deal" : "deal ID"
-  "Deal party" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Deal party" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Deal party" }o--|| "Deal" : "deal ID"
-  "Deal party" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Deal party" }o--|| "People (area)" : "party ID to Party"
-  "Deal party" }o--o| "Relationships (area)" : "party ID, client role to Party role"
-  "Deal party" }o--|| "Relationships (area)" : "role to Role"
-  "Deal phase change" }o--o| "Activity (area)" : "call activity ID, call kind to Activity"
-  "Deal phase change" }o--o| "Activity (area)" : "call activity ID, deal ID to Activity about"
-  "Deal phase change" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Deal phase change" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Deal phase change" }o--|| "Deal" : "deal ID"
-  "Deal phase change" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Deal phase change" }o--|| "Phase" : "phase"
-  "Deal plan date" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Deal plan date" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Deal plan date" }o--|| "Deal" : "deal ID"
-  "Deal plan date" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Property (area)" }o--|| "Deal" : "Deal property: deal ID"
-  "Deal reason" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Deal reason" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Deal reason" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Doc (area)" }o--o| "Deal" : "Doc judgment destination: deal ID"
-  "Documents (area)" }o--o| "Deal" : "Document: deal ID"
-  "Home and calendar (area)" }o--|| "Deal" : "Home update: deal ID"
-  "Imported deals (area)" |o--|| "Deal phase change" : "Imported automatic phase move: deal ID, happened at"
-  "Imported deals (area)" }o--|| "Phase" : "Imported automatic phase move: prior phase"
-  "Imported deals (area)" |o--|| "Deal" : "Imported deal board: deal ID"
-  "Imported deals (area)" }o--o| "Deal phase change" : "Imported deal board: deal ID, phase at"
-  "Imported deals (area)" }o--o| "Phase" : "Imported deal board: phase"
-  "Imported deals (area)" }o--|| "Deal" : "Imported deal history: deal ID"
-  "Imported deals (area)" |o--|| "Deal" : "Imported deal invoiced: deal ID"
-  "Imported deals (area)" }o--|| "Deal" : "Imported deal owner: deal ID"
-  "Imported deals (area)" }o--|| "Deal" : "Imported deal party: deal ID"
-  "Relationships (area)" }o--o| "Deal" : "Introduction: deal ID"
-  "Relationships (area)" }o--o| "Deal party" : "Introduction: deal ID, introduced party ID, maker client role"
-  "Invoices (area)" }o--o| "Deal" : "Invoice email: deal ID"
-  "Invoices (area)" }o--o| "Deal phase change" : "Invoice email: deal ID, applied phase at"
-  "Invoices (area)" }o--o| "Deal phase change" : "Invoice email: deal ID, prior phase at"
-  "Leads (area)" }o--|| "Stage" : "Lead stage move: role, from stage"
-  "Leads (area)" }o--|| "Stage" : "Lead stage move: role, to stage"
-  "Leases (area)" |o--o| "Deal" : "Lease: deal ID"
-  "Leases (area)" }o--o| "Deal party" : "Lease: deal ID, party ID, client role"
-  "Activity (area)" }o--o| "Deal" : "Next step: deal ID"
-  "Offers (area)" }o--|| "Deal party" : "Offer: deal ID, from party ID, from role"
-  "People (area)" }o--o| "Deal" : "Outside ID: deal ID"
-  "Relationships (area)" }o--o| "Stage" : "Party role: role, stage"
-  "Phase" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Phase" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Phase" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Offers (area)" }o--o| "Deal" : "Proposal: deal ID"
-  "Offers (area)" }o--o| "Deal" : "Proposal: filed deal ID"
-  "Offers (area)" }o--o| "Phase" : "Proposal: from phase"
-  "Offers (area)" }o--o| "Phase" : "Proposal: to phase"
-  "Offers (area)" }o--o| "Stage" : "Proposal: lead role, from stage"
-  "Offers (area)" }o--o| "Stage" : "Proposal: lead role, to stage"
-  "Property (area)" }o--|| "Deal" : "Space need: deal ID"
-  "Stage" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Stage" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Stage" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Stage" }o--|| "Relationships (area)" : "role to Role"
-  "Tours (area)" }o--|| "Deal" : "Tour plan: deal ID"
-  "Typical length" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Typical length" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Typical length" }o--|| "Deal kind" : "deal kind"
-  "Typical length" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Home and calendar (area)" }o--o| "Deal" : "Weekly review: deal ID"
+flowchart LR
+  center["Deal"]
+  n0["Activity (area)"]
+  center --- n0
+  n1["Client websites (area)"]
+  center --- n1
+  n2["Commissions (area)"]
+  center --- n2
+  n3["Deal kind"]
+  center --- n3
+  n4["Deal open name"]
+  center --- n4
+  n5["Deal party"]
+  center --- n5
+  n6["Deal phase change"]
+  center --- n6
+  n7["Deal plan date"]
+  center --- n7
 ```
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal"]
+  n0["Deal reason"]
+  center --- n0
+  n1["Doc (area)"]
+  center --- n1
+  n2["Documents (area)"]
+  center --- n2
+  n3["Home and calendar (area)"]
+  center --- n3
+  n4["Imported deals (area)"]
+  center --- n4
+  n5["Invoices (area)"]
+  center --- n5
+  n6["Leases (area)"]
+  center --- n6
+  n7["Offers (area)"]
+  center --- n7
+```
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal"]
+  n0["People (area)"]
+  center --- n0
+  n1["Property (area)"]
+  center --- n1
+  n2["Relationships (area)"]
+  center --- n2
+  n3["Tours (area)"]
+  center --- n3
+  n4["Users and jobs (area)"]
+  center --- n4
+  n5["Vendors and territories (area)"]
+  center --- n5
+```
+
+### Deal kind
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal kind"]
+  n0["Deal"]
+  center --- n0
+  n1["Typical length"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+### Deal open name
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal open name"]
+  n0["Deal"]
+  center --- n0
+```
+
+### Deal party
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal party"]
+  n0["Deal"]
+  center --- n0
+  n1["Leases (area)"]
+  center --- n1
+  n2["Offers (area)"]
+  center --- n2
+  n3["People (area)"]
+  center --- n3
+  n4["Relationships (area)"]
+  center --- n4
+  n5["Users and jobs (area)"]
+  center --- n5
+```
+
+### Deal phase change
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal phase change"]
+  n0["Activity (area)"]
+  center --- n0
+  n1["Deal"]
+  center --- n1
+  n2["Imported deals (area)"]
+  center --- n2
+  n3["Invoices (area)"]
+  center --- n3
+  n4["Phase"]
+  center --- n4
+  n5["Users and jobs (area)"]
+  center --- n5
+```
+
+### Deal plan date
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal plan date"]
+  n0["Deal"]
+  center --- n0
+  n1["Users and jobs (area)"]
+  center --- n1
+```
+
+### Deal reason
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Deal reason"]
+  n0["Deal"]
+  center --- n0
+  n1["Users and jobs (area)"]
+  center --- n1
+```
+
+### Phase
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Phase"]
+  n0["Deal phase change"]
+  center --- n0
+  n1["Imported deals (area)"]
+  center --- n1
+  n2["Offers (area)"]
+  center --- n2
+  n3["Users and jobs (area)"]
+  center --- n3
+```
+
+### Stage
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Stage"]
+  n0["Leads (area)"]
+  center --- n0
+  n1["Offers (area)"]
+  center --- n1
+  n2["Relationships (area)"]
+  center --- n2
+  n3["Users and jobs (area)"]
+  center --- n3
+```
+
+### Typical length
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Typical length"]
+  n0["Deal kind"]
+  center --- n0
+  n1["Users and jobs (area)"]
+  center --- n1
+```
+
+## Foreign keys
+
+| From table and columns                                                                            | To table and columns                                                      |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [activity_about](next.activity_about.md) (`deal_id`)                                              | [deal](next.deal.md) (`id`)                                               |
+| [commission](next.commission.md) (`deal_id`)                                                      | [deal](next.deal.md) (`id`)                                               |
+| [critical_date](next.critical_date.md) (`deal_id`)                                                | [deal](next.deal.md) (`id`)                                               |
+| [deal](next.deal.md) (`changed_by_user_id`)                                                       | [app_user](next.app_user.md) (`id`)                                       |
+| [deal](next.deal.md) (`changed_for_user_id`)                                                      | [app_user](next.app_user.md) (`id`)                                       |
+| [deal](next.deal.md) (`owner_user_id`)                                                            | [app_user](next.app_user.md) (`id`)                                       |
+| [deal](next.deal.md) (`parked_by_user_id`)                                                        | [app_user](next.app_user.md) (`id`)                                       |
+| [deal](next.deal.md) (`kind`)                                                                     | [deal_kind](next.deal_kind.md) (`slug`)                                   |
+| [deal](next.deal.md) (`reason`)                                                                   | [deal_reason](next.deal_reason.md) (`slug`)                               |
+| [deal](next.deal.md) (`changed_by_job`)                                                           | [job](next.job.md) (`slug`)                                               |
+| [deal](next.deal.md) (`renews_lease_id`)                                                          | [lease](next.lease.md) (`id`)                                             |
+| [deal](next.deal.md) (`market_id`)                                                                | [market](next.market.md) (`id`)                                           |
+| [deal_attention_alert](next.deal_attention_alert.md) (`deal_id`)                                  | [deal](next.deal.md) (`id`)                                               |
+| [deal_client_website](next.deal_client_website.md) (`deal_id`)                                    | [deal](next.deal.md) (`id`)                                               |
+| [deal_kind](next.deal_kind.md) (`changed_by_user_id`)                                             | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_kind](next.deal_kind.md) (`changed_for_user_id`)                                            | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_kind](next.deal_kind.md) (`changed_by_job`)                                                 | [job](next.job.md) (`slug`)                                               |
+| [deal_open_name](next.deal_open_name.md) (`deal_id`)                                              | [deal](next.deal.md) (`id`)                                               |
+| [deal_party](next.deal_party.md) (`changed_by_user_id`)                                           | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_party](next.deal_party.md) (`changed_for_user_id`)                                          | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_party](next.deal_party.md) (`deal_id`)                                                      | [deal](next.deal.md) (`id`)                                               |
+| [deal_party](next.deal_party.md) (`changed_by_job`)                                               | [job](next.job.md) (`slug`)                                               |
+| [deal_party](next.deal_party.md) (`party_id`)                                                     | [party](next.party.md) (`id`)                                             |
+| [deal_party](next.deal_party.md) (`party_id`, `client_role`)                                      | [party_role](next.party_role.md) (`party_id`, `role`)                     |
+| [deal_party](next.deal_party.md) (`role`)                                                         | [role](next.role.md) (`slug`)                                             |
+| [deal_phase_change](next.deal_phase_change.md) (`call_activity_id`, `call_kind`)                  | [activity](next.activity.md) (`id`, `kind`)                               |
+| [deal_phase_change](next.deal_phase_change.md) (`call_activity_id`, `deal_id`)                    | [activity_about](next.activity_about.md) (`activity_id`, `deal_id`)       |
+| [deal_phase_change](next.deal_phase_change.md) (`changed_by_user_id`)                             | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_phase_change](next.deal_phase_change.md) (`changed_for_user_id`)                            | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_phase_change](next.deal_phase_change.md) (`deal_id`)                                        | [deal](next.deal.md) (`id`)                                               |
+| [deal_phase_change](next.deal_phase_change.md) (`changed_by_job`)                                 | [job](next.job.md) (`slug`)                                               |
+| [deal_phase_change](next.deal_phase_change.md) (`phase`)                                          | [phase](next.phase.md) (`slug`)                                           |
+| [deal_plan_date](next.deal_plan_date.md) (`changed_by_user_id`)                                   | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_plan_date](next.deal_plan_date.md) (`changed_for_user_id`)                                  | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_plan_date](next.deal_plan_date.md) (`deal_id`)                                              | [deal](next.deal.md) (`id`)                                               |
+| [deal_plan_date](next.deal_plan_date.md) (`changed_by_job`)                                       | [job](next.job.md) (`slug`)                                               |
+| [deal_property](next.deal_property.md) (`deal_id`)                                                | [deal](next.deal.md) (`id`)                                               |
+| [deal_reason](next.deal_reason.md) (`changed_by_user_id`)                                         | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_reason](next.deal_reason.md) (`changed_for_user_id`)                                        | [app_user](next.app_user.md) (`id`)                                       |
+| [deal_reason](next.deal_reason.md) (`changed_by_job`)                                             | [job](next.job.md) (`slug`)                                               |
+| [doc_judgment_destination](next.doc_judgment_destination.md) (`deal_id`)                          | [deal](next.deal.md) (`id`)                                               |
+| [document](next.document.md) (`deal_id`)                                                          | [deal](next.deal.md) (`id`)                                               |
+| [home_update](next.home_update.md) (`deal_id`)                                                    | [deal](next.deal.md) (`id`)                                               |
+| [imported_automatic_phase_move](next.imported_automatic_phase_move.md) (`deal_id`, `happened_at`) | [deal_phase_change](next.deal_phase_change.md) (`deal_id`, `happened_at`) |
+| [imported_automatic_phase_move](next.imported_automatic_phase_move.md) (`prior_phase`)            | [phase](next.phase.md) (`slug`)                                           |
+| [imported_deal_board](next.imported_deal_board.md) (`deal_id`)                                    | [deal](next.deal.md) (`id`)                                               |
+| [imported_deal_board](next.imported_deal_board.md) (`deal_id`, `phase_at`)                        | [deal_phase_change](next.deal_phase_change.md) (`deal_id`, `happened_at`) |
+| [imported_deal_board](next.imported_deal_board.md) (`phase`)                                      | [phase](next.phase.md) (`slug`)                                           |
+| [imported_deal_history](next.imported_deal_history.md) (`deal_id`)                                | [deal](next.deal.md) (`id`)                                               |
+| [imported_deal_invoiced](next.imported_deal_invoiced.md) (`deal_id`)                              | [deal](next.deal.md) (`id`)                                               |
+| [imported_deal_owner](next.imported_deal_owner.md) (`deal_id`)                                    | [deal](next.deal.md) (`id`)                                               |
+| [imported_deal_party](next.imported_deal_party.md) (`deal_id`)                                    | [deal](next.deal.md) (`id`)                                               |
+| [introduction](next.introduction.md) (`deal_id`)                                                  | [deal](next.deal.md) (`id`)                                               |
+| [introduction](next.introduction.md) (`deal_id`, `introduced_party_id`, `maker_client_role`)      | [deal_party](next.deal_party.md) (`deal_id`, `party_id`, `role`)          |
+| [invoice_email](next.invoice_email.md) (`deal_id`)                                                | [deal](next.deal.md) (`id`)                                               |
+| [invoice_email](next.invoice_email.md) (`deal_id`, `applied_phase_at`)                            | [deal_phase_change](next.deal_phase_change.md) (`deal_id`, `happened_at`) |
+| [invoice_email](next.invoice_email.md) (`deal_id`, `prior_phase_at`)                              | [deal_phase_change](next.deal_phase_change.md) (`deal_id`, `happened_at`) |
+| [lead_stage_move](next.lead_stage_move.md) (`role`, `from_stage`)                                 | [stage](next.stage.md) (`role`, `slug`)                                   |
+| [lead_stage_move](next.lead_stage_move.md) (`role`, `to_stage`)                                   | [stage](next.stage.md) (`role`, `slug`)                                   |
+| [lease](next.lease.md) (`deal_id`)                                                                | [deal](next.deal.md) (`id`)                                               |
+| [lease](next.lease.md) (`deal_id`, `party_id`, `client_role`)                                     | [deal_party](next.deal_party.md) (`deal_id`, `party_id`, `role`)          |
+| [next_step](next.next_step.md) (`deal_id`)                                                        | [deal](next.deal.md) (`id`)                                               |
+| [offer](next.offer.md) (`deal_id`, `from_party_id`, `from_role`)                                  | [deal_party](next.deal_party.md) (`deal_id`, `party_id`, `role`)          |
+| [outside_id](next.outside_id.md) (`deal_id`)                                                      | [deal](next.deal.md) (`id`)                                               |
+| [party_role](next.party_role.md) (`role`, `stage`)                                                | [stage](next.stage.md) (`role`, `slug`)                                   |
+| [phase](next.phase.md) (`changed_by_user_id`)                                                     | [app_user](next.app_user.md) (`id`)                                       |
+| [phase](next.phase.md) (`changed_for_user_id`)                                                    | [app_user](next.app_user.md) (`id`)                                       |
+| [phase](next.phase.md) (`changed_by_job`)                                                         | [job](next.job.md) (`slug`)                                               |
+| [proposal](next.proposal.md) (`deal_id`)                                                          | [deal](next.deal.md) (`id`)                                               |
+| [proposal](next.proposal.md) (`filed_deal_id`)                                                    | [deal](next.deal.md) (`id`)                                               |
+| [proposal](next.proposal.md) (`from_phase`)                                                       | [phase](next.phase.md) (`slug`)                                           |
+| [proposal](next.proposal.md) (`to_phase`)                                                         | [phase](next.phase.md) (`slug`)                                           |
+| [proposal](next.proposal.md) (`lead_role`, `from_stage`)                                          | [stage](next.stage.md) (`role`, `slug`)                                   |
+| [proposal](next.proposal.md) (`lead_role`, `to_stage`)                                            | [stage](next.stage.md) (`role`, `slug`)                                   |
+| [space_need](next.space_need.md) (`deal_id`)                                                      | [deal](next.deal.md) (`id`)                                               |
+| [stage](next.stage.md) (`changed_by_user_id`)                                                     | [app_user](next.app_user.md) (`id`)                                       |
+| [stage](next.stage.md) (`changed_for_user_id`)                                                    | [app_user](next.app_user.md) (`id`)                                       |
+| [stage](next.stage.md) (`changed_by_job`)                                                         | [job](next.job.md) (`slug`)                                               |
+| [stage](next.stage.md) (`role`)                                                                   | [role](next.role.md) (`slug`)                                             |
+| [tour_plan](next.tour_plan.md) (`deal_id`)                                                        | [deal](next.deal.md) (`id`)                                               |
+| [typical_length](next.typical_length.md) (`changed_by_user_id`)                                   | [app_user](next.app_user.md) (`id`)                                       |
+| [typical_length](next.typical_length.md) (`changed_for_user_id`)                                  | [app_user](next.app_user.md) (`id`)                                       |
+| [typical_length](next.typical_length.md) (`deal_kind`)                                            | [deal_kind](next.deal_kind.md) (`slug`)                                   |
+| [typical_length](next.typical_length.md) (`changed_by_job`)                                       | [job](next.job.md) (`slug`)                                               |
+| [weekly_review](next.weekly_review.md) (`deal_id`)                                                | [deal](next.deal.md) (`id`)                                               |
 
 ## Connects to
 
@@ -191,5 +366,3 @@ Numbers count foreign keys between the two areas.
 - [Phase](next.phase.md)
 - [Stage](next.stage.md)
 - [Typical length](next.typical_length.md)
-
-See each table for its columns and links to other areas.

@@ -1,42 +1,62 @@
 # Tours
 
+Each line shows a connection. The foreign keys below name the exact columns.
+
+### Tour plan
+
 ```mermaid
 ---
 config:
   layout: elk
-  er:
-    nodeSpacing: 22
-    rankSpacing: 44
+  flowchart:
+    htmlLabels: false
 ---
-erDiagram
-  "Tour plan"
-  "Tour stop"
-  "Activity (area)" {
-    string activity
-    string activity_about
-  }
-  "Deals (area)" {
-    string deal
-  }
-  "Property (area)" {
-    string property
-  }
-  "Users and jobs (area)" {
-    string app_user
-    string job
-  }
-  "Tour plan" }o--o| "Activity (area)" : "completed activity ID, completed activity kind to Activity"
-  "Tour plan" }o--o| "Activity (area)" : "completed activity ID, deal ID to Activity about"
-  "Tour plan" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Tour plan" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Tour plan" }o--|| "Deals (area)" : "deal ID to Deal"
-  "Tour plan" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Tour stop" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
-  "Tour stop" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
-  "Tour stop" }o--o| "Users and jobs (area)" : "changed by job to Job"
-  "Tour stop" }o--|| "Property (area)" : "property ID to Property"
-  "Tour stop" }o--|| "Tour plan" : "tour plan ID"
+flowchart LR
+  center["Tour plan"]
+  n0["Activity (area)"]
+  center --- n0
+  n1["Deals (area)"]
+  center --- n1
+  n2["Tour stop"]
+  center --- n2
+  n3["Users and jobs (area)"]
+  center --- n3
 ```
+
+### Tour stop
+
+```mermaid
+---
+config:
+  layout: elk
+  flowchart:
+    htmlLabels: false
+---
+flowchart LR
+  center["Tour stop"]
+  n0["Property (area)"]
+  center --- n0
+  n1["Tour plan"]
+  center --- n1
+  n2["Users and jobs (area)"]
+  center --- n2
+```
+
+## Foreign keys
+
+| From table and columns                                                              | To table and columns                                                |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| [tour_plan](next.tour_plan.md) (`completed_activity_id`, `completed_activity_kind`) | [activity](next.activity.md) (`id`, `kind`)                         |
+| [tour_plan](next.tour_plan.md) (`completed_activity_id`, `deal_id`)                 | [activity_about](next.activity_about.md) (`activity_id`, `deal_id`) |
+| [tour_plan](next.tour_plan.md) (`changed_by_user_id`)                               | [app_user](next.app_user.md) (`id`)                                 |
+| [tour_plan](next.tour_plan.md) (`changed_for_user_id`)                              | [app_user](next.app_user.md) (`id`)                                 |
+| [tour_plan](next.tour_plan.md) (`deal_id`)                                          | [deal](next.deal.md) (`id`)                                         |
+| [tour_plan](next.tour_plan.md) (`changed_by_job`)                                   | [job](next.job.md) (`slug`)                                         |
+| [tour_stop](next.tour_stop.md) (`changed_by_user_id`)                               | [app_user](next.app_user.md) (`id`)                                 |
+| [tour_stop](next.tour_stop.md) (`changed_for_user_id`)                              | [app_user](next.app_user.md) (`id`)                                 |
+| [tour_stop](next.tour_stop.md) (`changed_by_job`)                                   | [job](next.job.md) (`slug`)                                         |
+| [tour_stop](next.tour_stop.md) (`property_id`)                                      | [property](next.property.md) (`id`)                                 |
+| [tour_stop](next.tour_stop.md) (`tour_plan_id`)                                     | [tour_plan](next.tour_plan.md) (`id`)                               |
 
 ## Connects to
 
@@ -48,5 +68,3 @@ Numbers count foreign keys between the two areas.
 
 - [Tour plan](next.tour_plan.md)
 - [Tour stop](next.tour_stop.md)
-
-See each table for its columns and links to other areas.

@@ -25,6 +25,7 @@ function foreignKey(table: string, parent: string, ...columns: string[]) {
 		columns,
 		cardinality: "zero_or_more",
 		parent_table: `next.${parent}`,
+		parent_columns: ["id"],
 		parent_cardinality: "exactly_one",
 	};
 }
@@ -37,33 +38,19 @@ const relations = [
 	foreignKey("party", "deal", "first_deal_id"),
 ];
 
-test("area pages show plain names and distinct foreign key labels", () => {
+test("area pages group connections and list distinct foreign keys", () => {
 	const { pages } = drawDatabase({ tables, viewpoints, relations });
 	const deals = pages.find(
 		({ file }) => file === "viewpoint-deals.md",
 	)?.markdown;
 	assert(deals);
-	assert.match(deals, /^# Deals\n/);
-	assert.match(deals, /"Deal phase change" \}o--\|\| "Phase" : "phase"/);
 	assert.match(
 		deals,
-		/"Deal phase change" \}o--\|\| "Phase" : "previous phase"/,
+		/\| \[deal_phase_change\]\(next\.deal_phase_change\.md\) \(`phase`\) \| \[phase\]\(next\.phase\.md\) \(`id`\) \|/,
 	);
-	assert.match(deals, /\[Deal phase change\]\(next\.deal_phase_change\.md\)/);
-	const diagram = deals.split("```")[1];
-	assert(diagram);
-	assert.doesNotMatch(diagram, /next\.|FOREIGN KEY/);
-	assert.match(
-		diagram,
-		/"Deal" \}o--\|\| "People \(area\)" : "owner ID to Party"/,
-	);
-	const people = pages.find(
-		({ file }) => file === "viewpoint-people.md",
-	)?.markdown;
-	assert.match(
-		people ?? "",
-		/"Deals \(area\)" \}o--\|\| "Party" : "Deal: owner ID"/,
-	);
+	assert.match(deals, /\(`previous_phase`\)/);
+	assert.match(deals, /n\d+\["People \(area\)"\]/);
+	assert.equal((deals.match(/center --- n\d+/g) ?? []).length, 4);
 });
 
 test("the master counts cross-area foreign keys in both directions with one line per pair", () => {
@@ -134,16 +121,13 @@ test("the area page links to every neighbor", () => {
 	assert.match(deals, /\[People\]\(viewpoint-people\.md\) \(1\)/);
 });
 
-test("self-reference labels leave room for their cardinality markers", () => {
+test("self-references appear as a connection", () => {
 	const { pages } = drawDatabase({
 		tables,
 		viewpoints,
 		relations: [foreignKey("deal", "deal", "previous_deal_id")],
 	});
-	assert.match(
-		pages[0]?.markdown ?? "",
-		/"Deal" \}o--\|\| "Deal" : "previous deal ID(?:#160;){4}"/,
-	);
+	assert.match(pages[0]?.markdown ?? "", /center --- center/);
 });
 
 test("the drawings require an area for every table, including tables with no foreign keys", () => {
@@ -162,9 +146,12 @@ test("committed drawings include every schema foreign key and area count", async
 			source: string;
 			target: string;
 			columns: string[];
+			target_columns: string[];
 		}>(`select src.relname as source, dst.relname as target,
 			array(select a.attname from unnest(c.conkey) with ordinality k(attnum, ord)
-			join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum order by k.ord)::text[] as columns
+			join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum order by k.ord)::text[] as columns,
+			array(select a.attname from unnest(c.confkey) with ordinality k(attnum, ord)
+			join pg_attribute a on a.attrelid = c.confrelid and a.attnum = k.attnum order by k.ord)::text[] as target_columns
 			from pg_constraint c join pg_class src on src.oid = c.conrelid
 			join pg_class dst on dst.oid = c.confrelid join pg_namespace n on n.oid = src.relnamespace
 			where c.contype = 'f' and n.nspname = 'next'`);
@@ -188,14 +175,8 @@ test("committed drawings include every schema foreign key and area count", async
 			assert(area, `Missing area for ${table}`);
 			return area;
 		};
-		const name = (value: string) => {
-			const plain = value.replaceAll("_", " ").replace(/\bid\b/g, "ID");
-			return plain.charAt(0).toUpperCase() + plain.slice(1);
-		};
 		const columns = (values: string[]) =>
-			values
-				.map((value) => value.replaceAll("_", " ").replace(/\bid\b/g, "ID"))
-				.join(", ");
+			values.map((value) => `\`${value}\``).join(", ");
 		const pages = new Map(
 			areas.map((area) => [
 				area.id,
@@ -213,42 +194,22 @@ test("committed drawings include every schema foreign key and area count", async
 			const from = owner(fk.source),
 				to = owner(fk.target);
 			for (const area of new Set([from, to])) {
-				const source = area === from ? name(fk.source) : `${from.name} (area)`;
-				const target = area === to ? name(fk.target) : `${to.name} (area)`;
-				const label =
-					area !== from
-						? `${name(fk.source)}: ${columns(fk.columns)}`
-						: area !== to
-							? `${columns(fk.columns)} to ${name(fk.target)}`
-							: columns(fk.columns);
 				const lines = pages.get(area.id);
 				assert(lines);
-				if (from !== to) {
-					const neighbor = area === from ? to : from;
-					const table = area === from ? fk.target : fk.source;
-					const start = lines.indexOf(`  "${neighbor.name} (area)" {`);
-					const end = lines.indexOf("  }", start);
-					assert(
-						start >= 0 &&
-							end > start &&
-							lines.slice(start, end).includes(`    string ${table}`),
-						`Missing ${table} in ${neighbor.id} box on ${area.id}`,
-					);
-				}
-				const index = lines.findIndex(
-					(line) =>
-						line.includes(`"${source}"`) &&
-						line.includes(`"${target}"`) &&
-						(line.endsWith(`: "${label}"`) ||
-							line.endsWith(`: "${label}${"#160;".repeat(4)}"`)) &&
-						line.includes("--"),
-				);
+				const row = `| [${fk.source}](next.${fk.source}.md) (${columns(fk.columns)}) | [${fk.target}](next.${fk.target}.md) (${columns(fk.target_columns)}) |`;
+				const cells = (line: string) =>
+					line
+						.split("|")
+						.map((cell) => cell.trim())
+						.join("|");
+				const index = lines.findIndex((line) => cells(line) === cells(row));
 				assert(
 					index >= 0,
 					`Missing ${fk.source} (${fk.columns}) -> ${fk.target} in ${area.id}`,
 				);
 				lines.splice(index, 1);
 			}
+
 			if (from !== to) {
 				const key = [from.id, to.id].sort().join("|");
 				counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -256,7 +217,7 @@ test("committed drawings include every schema foreign key and area count", async
 		}
 		for (const [area, lines] of pages) {
 			assert(
-				!lines.some((line) => /^ {2}".+" [|o{}-]+--[|o{}-]+ "/.test(line)),
+				!lines.some((line) => line.startsWith("| [")),
 				`Unexpected link in ${area}`,
 			);
 		}
