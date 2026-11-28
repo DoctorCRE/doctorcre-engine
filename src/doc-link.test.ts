@@ -17,7 +17,9 @@ async function runSubtest(
 	parent: TestContext,
 	name: string,
 	run: (context: TestContext) => Promise<void>,
+	enabled = true,
 ) {
+	if (!enabled) return;
 	let body: Promise<void> | undefined;
 	await parent.test(name, (context) => {
 		body = run(context);
@@ -28,9 +30,10 @@ async function runSubtest(
 	parent.signal.throwIfAborted();
 }
 
-test("Doc link migration, private credentials and Mac polling", {
-	timeout: 30_000,
-}, async (t) => {
+async function exerciseDocLink(
+	t: TestContext,
+	scenario: "polling" | "judgment",
+) {
 	const { db, setup, cleanup, connectionString } = copyTest();
 	const reader = `doc_read_${randomUUID().replaceAll("-", "")}`;
 	const writer = `doc_write_${randomUUID().replaceAll("-", "")}`;
@@ -155,220 +158,239 @@ test("Doc link migration, private credentials and Mac polling", {
 		const revoke = (partner: typeof first, suffix = "") =>
 			send({ ...partner, ...proof }, "POST", `/revoke${suffix}`);
 
-		const wrongCredential = randomBytes(32).toString("base64url");
-		for (const response of await Promise.all([
-			send(first),
-			send({ ...first, ...proof }, "POST"),
-			revoke(first),
-			poll(wrongCredential),
-		])) {
-			assert.equal(response.status, 503);
-			assert.deepEqual(await response.json(), {
-				error: "doc_link_unavailable",
+		const { credential, status } = await (async () => {
+			if (scenario === "judgment") {
+				await db.query(await readSchema("add-doc-link.sql"));
+				await db.query(await readSchema("add-doc-link-readiness.sql"));
+				await db.query(await readSchema("add-doc-link-backend.sql"));
+				const credential = await issue(first);
+				await db.query(
+					"insert into next.doc_conversation (owner_user_id) values ($1)",
+					[appUserId],
+				);
+				return { credential, status: undefined };
+			}
+			const wrongCredential = randomBytes(32).toString("base64url");
+			for (const response of await Promise.all([
+				send(first),
+				send({ ...first, ...proof }, "POST"),
+				revoke(first),
+				poll(wrongCredential),
+			])) {
+				assert.equal(response.status, 503);
+				assert.deepEqual(await response.json(), {
+					error: "doc_link_unavailable",
+				});
+				assert.equal(response.headers.get("cache-control"), "no-store");
+			}
+			assert.equal(
+				(await request(`${appOrigin}/auth/session`, { headers: first })).status,
+				200,
+			);
+			await db.query(await readSchema("add-doc-link.sql"));
+			await db.query(await readSchema("add-doc-link-readiness.sql"));
+			await db.query(await readSchema("add-doc-link-backend.sql"));
+
+			assert.equal((await send({})).status, 401);
+			assert.equal((await send(first, "POST")).status, 403);
+			assert.equal((await send(first, "POST", "/revoke")).status, 403);
+			assert.equal(
+				(await send({ ...first, ...proof }, "POST", "/claim")).status,
+				404,
+			);
+			assert.equal(
+				(
+					await request(engineOrigin + linkPath, {
+						method: "POST",
+						headers: { ...first, ...proof },
+					})
+				).status,
+				401,
+			);
+			assert.deepEqual(await presence(first), {
+				connected: false,
+				issued_at: null,
+				status: "not_set_up",
+				readiness_code: "doc_not_set_up",
+				backend: null,
 			});
-			assert.equal(response.headers.get("cache-control"), "no-store");
-		}
-		assert.equal(
-			(await request(`${appOrigin}/auth/session`, { headers: first })).status,
-			200,
-		);
-		await db.query(await readSchema("add-doc-link.sql"));
-		await db.query(await readSchema("add-doc-link-readiness.sql"));
-		await db.query(await readSchema("add-doc-link-backend.sql"));
+			const credential = await issue(first);
+			assert.equal((await presence(first)).status, "mac_off");
+			const expectedHash = createHash("sha256")
+				.update(credential)
+				.digest("hex");
+			const stored = await db.query(
+				"select owner_user_id, credential_hash from next.doc_link",
+			);
+			assert.ok(
+				stored.rows.length === 1 &&
+					stored.rows[0]?.owner_user_id === appUserId &&
+					stored.rows[0]?.credential_hash === expectedHash,
+				"database stores only the credential hash for the session owner",
+			);
 
-		assert.equal((await send({})).status, 401);
-		assert.equal((await send(first, "POST")).status, 403);
-		assert.equal((await send(first, "POST", "/revoke")).status, 403);
-		assert.equal(
-			(await send({ ...first, ...proof }, "POST", "/claim")).status,
-			404,
-		);
-		assert.equal(
-			(
-				await request(engineOrigin + linkPath, {
-					method: "POST",
-					headers: { ...first, ...proof },
-				})
-			).status,
-			401,
-		);
-		assert.deepEqual(await presence(first), {
-			connected: false,
-			issued_at: null,
-			status: "not_set_up",
-			readiness_code: "doc_not_set_up",
-			backend: null,
-		});
-		const credential = await issue(first);
-		assert.equal((await presence(first)).status, "mac_off");
-		const expectedHash = createHash("sha256").update(credential).digest("hex");
-		const stored = await db.query(
-			"select owner_user_id, credential_hash from next.doc_link",
-		);
-		assert.ok(
-			stored.rows.length === 1 &&
-				stored.rows[0]?.owner_user_id === appUserId &&
-				stored.rows[0]?.credential_hash === expectedHash,
-			"database stores only the credential hash for the session owner",
-		);
-
-		const claim = randomUUID();
-		await db.query(
-			`with chat as (insert into next.doc_conversation (owner_user_id) values ($1) returning id)
+			const claim = randomUUID();
+			await db.query(
+				`with chat as (insert into next.doc_conversation (owner_user_id) values ($1) returning id)
 			insert into next.doc_turn (conversation_id, owner_user_id, position, idempotency_key,
 				request_hash, question, state, claim_id, claim_until, claim_state)
 			select id, $1, 1, gen_random_uuid(), 'example', 'Find a deal', 'working', $2,
 				clock_timestamp() + interval '60 seconds', '{"reads":0,"sources":{}}' from chat`,
-			[appUserId, claim],
-		);
-		const mcp = await request(`${engineOrigin}/api/engine/doc/mcp`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${credential}`,
-				"Doc-Claim-Id": claim,
-				"Content-Type": "application/json",
-				Accept: "application/json, text/event-stream",
-			},
-			body: JSON.stringify({
-				jsonrpc: "2.0",
-				id: 1,
-				method: "tools/call",
-				params: {
-					name: "find",
-					arguments: { query: "Example Missing Deal", kind: "deal" },
-				},
-			}),
-		});
-		assert.equal(mcp.status, 200);
-		assert.equal(mcp.headers.get("cache-control"), "no-store");
-		assert.equal(
-			(
-				await request(`${appOrigin}/api/engine/doc/mcp`, {
-					method: "POST",
-					headers: {
-						...first,
-						...proof,
-						Authorization: `Bearer ${credential}`,
-					},
-				})
-			).status,
-			404,
-		);
-		assert.deepEqual(await mcp.json(), {
-			jsonrpc: "2.0",
-			id: 1,
-			result: { content: [{ type: "text", text: "[]" }] },
-		});
-
-		const completion = {
-			claim_id: claim,
-			kind: "answered",
-			answer: {
-				kind: "refusal",
-				text: "I could not find that deal.",
-				sources: [],
-			},
-		};
-		const result = (
-			headers: Record<string, string>,
-			origin = engineOrigin,
-			payload: object = completion,
-		) =>
-			request(`${origin}${linkPath}/result`, {
+				[appUserId, claim],
+			);
+			const mcp = await request(`${engineOrigin}/api/engine/doc/mcp`, {
 				method: "POST",
-				headers: { "Content-Type": "application/json", ...headers },
-				body: JSON.stringify(payload),
+				headers: {
+					Authorization: `Bearer ${credential}`,
+					"Doc-Claim-Id": claim,
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "tools/call",
+					params: {
+						name: "find",
+						arguments: { query: "Example Missing Deal", kind: "deal" },
+					},
+				}),
 			});
-		const bearer = { Authorization: `Bearer ${credential}` };
-		assert.equal(
-			(await result({ ...bearer, Cookie: first.Cookie })).status,
-			401,
-		);
-		assert.equal((await result({ ...first, ...proof }, appOrigin)).status, 404);
-		const done = await result(bearer);
-		assert.equal(done.status, 204);
-		assert.equal(done.headers.get("Cache-Control"), "no-store");
-		assert.equal((await result(bearer)).status, 404);
-		const { rows: turns } = await db.query(
-			"select state, answer from next.doc_turn where owner_user_id = $1",
-			[appUserId],
-		);
-		assert.deepEqual(turns, [
-			{
-				state: "answered",
-				answer: { ...completion.answer, proposal: null },
-			},
-		]);
-
-		assert.equal((await poll(wrongCredential)).status, 401);
-		assert.equal(
-			(await poll(credential, { Cookie: first.Cookie })).status,
-			401,
-		);
-		assert.equal((await poll(credential, { Authorization: "" })).status, 401);
-		assert.equal((await presence(first)).connected, false);
-		const empty = await poll(credential);
-		assert.equal(empty.status, 204);
-		assert.equal(empty.headers.get("cache-control"), "no-store");
-		assert.equal(await empty.text(), "");
-		const status = await presence(first);
-		assert.equal(status.connected, true);
-		assert.equal(status.status, "ready");
-		assert.equal(status.readiness_code, "doc_ready");
-		assert.equal(status.backend, null);
-		assert.ok(
-			typeof status.issued_at === "string" &&
-				Number.isFinite(Date.parse(status.issued_at)),
-		);
-		assert.deepEqual(await presence(second, `?owner_user_id=${appUserId}`), {
-			connected: false,
-			issued_at: null,
-			status: "not_set_up",
-			readiness_code: "doc_not_set_up",
-			backend: null,
-		});
-		assert.equal(
-			(await poll(credential, { "Doc-Link-Backend": "unknown" })).status,
-			400,
-		);
-		for (const [readiness, code, backend] of [
-			["signed_out", "doc_signed_out", "codex"],
-			["plan_limited", "doc_plan_limit", "claude"],
-		] as const) {
+			assert.equal(mcp.status, 200);
+			assert.equal(mcp.headers.get("cache-control"), "no-store");
 			assert.equal(
 				(
-					await poll(credential, {
-						"Doc-Link-Readiness": readiness,
-						"Doc-Link-Backend": backend,
+					await request(`${appOrigin}/api/engine/doc/mcp`, {
+						method: "POST",
+						headers: {
+							...first,
+							...proof,
+							Authorization: `Bearer ${credential}`,
+						},
 					})
 				).status,
-				204,
+				404,
+			);
+			assert.deepEqual(await mcp.json(), {
+				jsonrpc: "2.0",
+				id: 1,
+				result: { content: [{ type: "text", text: "[]" }] },
+			});
+
+			const completion = {
+				claim_id: claim,
+				kind: "answered",
+				answer: {
+					kind: "refusal",
+					text: "I could not find that deal.",
+					sources: [],
+				},
+			};
+			const result = (
+				headers: Record<string, string>,
+				origin = engineOrigin,
+				payload: object = completion,
+			) =>
+				request(`${origin}${linkPath}/result`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json", ...headers },
+					body: JSON.stringify(payload),
+				});
+			const bearer = { Authorization: `Bearer ${credential}` };
+			assert.equal(
+				(await result({ ...bearer, Cookie: first.Cookie })).status,
+				401,
+			);
+			assert.equal(
+				(await result({ ...first, ...proof }, appOrigin)).status,
+				404,
+			);
+			const done = await result(bearer);
+			assert.equal(done.status, 204);
+			assert.equal(done.headers.get("Cache-Control"), "no-store");
+			assert.equal((await result(bearer)).status, 404);
+			const { rows: turns } = await db.query(
+				"select state, answer from next.doc_turn where owner_user_id = $1",
+				[appUserId],
+			);
+			assert.deepEqual(turns, [
+				{
+					state: "answered",
+					answer: { ...completion.answer, proposal: null },
+				},
+			]);
+
+			assert.equal((await poll(wrongCredential)).status, 401);
+			assert.equal(
+				(await poll(credential, { Cookie: first.Cookie })).status,
+				401,
+			);
+			assert.equal((await poll(credential, { Authorization: "" })).status, 401);
+			assert.equal((await presence(first)).connected, false);
+			const empty = await poll(credential);
+			assert.equal(empty.status, 204);
+			assert.equal(empty.headers.get("cache-control"), "no-store");
+			assert.equal(await empty.text(), "");
+			const status = await presence(first);
+			assert.equal(status.connected, true);
+			assert.equal(status.status, "ready");
+			assert.equal(status.readiness_code, "doc_ready");
+			assert.equal(status.backend, null);
+			assert.ok(
+				typeof status.issued_at === "string" &&
+					Number.isFinite(Date.parse(status.issued_at)),
+			);
+			assert.deepEqual(await presence(second, `?owner_user_id=${appUserId}`), {
+				connected: false,
+				issued_at: null,
+				status: "not_set_up",
+				readiness_code: "doc_not_set_up",
+				backend: null,
+			});
+			assert.equal(
+				(await poll(credential, { "Doc-Link-Backend": "unknown" })).status,
+				400,
+			);
+			for (const [readiness, code, backend] of [
+				["signed_out", "doc_signed_out", "codex"],
+				["plan_limited", "doc_plan_limit", "claude"],
+			] as const) {
+				assert.equal(
+					(
+						await poll(credential, {
+							"Doc-Link-Readiness": readiness,
+							"Doc-Link-Backend": backend,
+						})
+					).status,
+					204,
+				);
+				assert.deepEqual(await presence(first), {
+					...status,
+					status: readiness,
+					readiness_code: code,
+					backend,
+				});
+			}
+			await db.query(
+				`update next.doc_link set last_seen_at = clock_timestamp() - interval '31 seconds'
+			where owner_user_id = $1`,
+				[appUserId],
 			);
 			assert.deepEqual(await presence(first), {
 				...status,
-				status: readiness,
-				readiness_code: code,
-				backend,
+				connected: false,
+				status: "mac_off",
+				readiness_code: "doc_mac_off",
+				backend: "claude",
 			});
-		}
-		await db.query(
-			`update next.doc_link set last_seen_at = clock_timestamp() - interval '31 seconds'
-			where owner_user_id = $1`,
-			[appUserId],
-		);
-		assert.deepEqual(await presence(first), {
-			...status,
-			connected: false,
-			status: "mac_off",
-			readiness_code: "doc_mac_off",
-			backend: "claude",
-		});
-		assert.equal(
-			(await poll(credential, { "Doc-Link-Readiness": "ready" })).status,
-			204,
-		);
-		assert.deepEqual(await presence(first), { ...status, backend: "claude" });
+			assert.equal(
+				(await poll(credential, { "Doc-Link-Readiness": "ready" })).status,
+				204,
+			);
+			assert.deepEqual(await presence(first), { ...status, backend: "claude" });
 
+			return { credential, status };
+		})();
 		const otherCredential = await issue(second, `?owner_user_id=${appUserId}`);
 		assert.equal((await poll(otherCredential)).status, 204);
 		assert.equal((await presence(second)).connected, true);
@@ -458,15 +480,14 @@ test("Doc link migration, private credentials and Mac polling", {
 					status: number,
 					token = credential,
 				) => {
-					const response = await result(
-						{ Authorization: `Bearer ${token}` },
-						engineOrigin,
-						{
-							claim_id,
-							kind: "judgment",
-							outcome,
+					const response = await request(`${engineOrigin}${linkPath}/result`, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: `Bearer ${token}`,
 						},
-					);
+						body: JSON.stringify({ claim_id, kind: "judgment", outcome }),
+					});
 					assert.equal(response.status, status);
 				};
 				const fetchClaim = async (
@@ -779,7 +800,10 @@ test("Doc link migration, private credentials and Mac polling", {
 					},
 				);
 			},
+			scenario === "judgment",
 		);
+		if (scenario === "judgment") return;
+		assert.ok(status);
 		assert.equal(
 			(await revoke(second, `?owner_user_id=${appUserId}`)).status,
 			204,
@@ -917,4 +941,10 @@ test("Doc link migration, private credentials and Mac polling", {
 			await cleanup();
 		}
 	}
-});
+}
+
+for (const scenario of ["polling", "judgment"] as const) {
+	test(`Doc link ${scenario}`, { timeout: 30_000 }, (t) =>
+		exerciseDocLink(t, scenario),
+	);
+}
