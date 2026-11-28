@@ -173,6 +173,8 @@ The owner approved this design on 2026-11-25, with every change it proposed. On 
 - [ ] The top bar reads "Deals / " and the deal's name. **Deals** returns to the board where the partner left it.
 - [ ] One row of tabs: Overview, Plan, Activity, Tours, Documents and Client portal.
 - [ ] On the right of the tab row, in the muted tone: the client, the phase, the deal owner, then deal kind, deal reason and market, and the market agent on a national-account deal. The next critical date is not in the header; it is the first row of Overview. The client's name opens the client. The deal owner opens the choice of Joe or Dell. A deal with no market says "No market recorded".
+- [ ] A status line under the title shows the automatic move receipt and the signing date when either is available. It stays on one line and uses an ellipsis when space runs out. Open the move receipt for its full text, including the call time when recorded. A signing date says "Lease signing expected Mar 5" or "Lease signed Mar 5" and opens Plan.
+- [ ] An automatic move offers **Undo** in the status line for 7 days from when the move was recorded. The receipt stays after Undo expires (owner ruling, 2026-11-24). If Undo would return the deal to Closed deals or Lost deals, the receipt explains why the deal stays in its current phase.
 
 ### Overview
 
@@ -185,7 +187,6 @@ Overview answers four questions on one screen: which dates matter, where the dea
 - [ ] Clicking a to-do opens it: its document, its date, or what is still missing.
 - [ ] Clicking a phase name asks "Move this deal to Legal?" with an optional "What changed" line, **Move to Legal** and **Cancel**. Nothing moves without the second click. It asks for no next step and no critical date.
 - [ ] Clicking Closed asks Won or Lost and the date. Won asks the closed value, which may stay empty until known and is never zero. Lost asks the reason.
-- [ ] A move the system made says "Moved automatically Mon, Nov 23 · Undo" under the phase name. Undo works for 7 days from when the move was recorded, then the mark stays without it (owner ruling, 2026-11-24). If Undo would return the deal to Closed deals or Lost deals, it explains why the deal stays in its current phase.
 
 #### Next steps
 
@@ -229,10 +230,9 @@ Plan answers "when, and are we on pace". It draws the deal's checklist and steps
 - [ ] Clicking a bar opens it on the right. A step offers Mark done and Change date. A critical date offers Confirm or Mark done, and Drop. A to-do shows its facts and offers Set your own date.
 - [ ] Dragging a step's end moves its due date through the same save Home and Calendar use. Dragging an expected bar's end sets the partner's own date for that to-do on this deal, and what follows moves with it while dragging. A dashed outline keeps the old place and a label gives the new date.
 - [ ] Letting go saves. The footer says what changed, such as "Terms comparison: expected by Mon, Dec 14. What follows moved with it.", with **Undo**. **Reset to typical** clears the deal's own dates after one confirmation.
-- [ ] A critical date, a bar's start, a finished bar and a phase bar never drag. A drag cannot set a past day. Dragging works at Day and Week zoom only. With the keyboard, a focused bar's end moves a day with the arrow keys and a week with Shift. Enter saves and Esc cancels. A filtered row keeps its focused grip until the save settles, then focus returns to the row in the chart.
+- [ ] A critical date, a bar's start, a finished bar and a phase bar never drag. A drag cannot set a past day. Dragging works at Day and Week zoom only. With the keyboard, a focused bar's end moves a day with the arrow keys and a week with Shift. Enter saves and Esc cancels. A filtered row keeps its focused grip until the save settles. Focus goes to the saved row where it now appears, or to the next result if the row leaves the view.
 - [ ] Either partner can drag either partner's step. A conflicting step edit says "This step changed. Review the latest version." and reloads. Undo restores a step date only while that save is still the latest version of the step.
 - [ ] **Typical lengths**, bottom left, opens the table of typical days per to-do. A partner edits any number there and it saves; no confirmation step. Once a to-do has five finished examples, the measured number shows beside it with **Use measured**, and nothing changes without that click.
-- [ ] The current phase's tile on Overview gains one quiet line, such as "Lease signing expected Mar 5", which opens Plan.
 - [ ] Expected dates never show on Home or Calendar.
 
 ### Activity
