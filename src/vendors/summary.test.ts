@@ -59,9 +59,14 @@ async function summaryDoor(t: TestContext, seed: string) {
 		${seed}
 		commit;`);
 	const get = async (path: string) => {
-		const response = await door.request({ user: "joe" }, path, {
-			method: "GET",
-		});
+		const response = await door.request(
+			{ user: "joe" },
+			path,
+			{
+				method: "GET",
+			},
+			{ DIRECTORY_READ_SCHEMA: "next" },
+		);
 		return {
 			status: response.status,
 			body: (await response.json()) as Body,
@@ -93,6 +98,9 @@ const counts = (
 		...words,
 	},
 	quiet,
+	markets: [],
+	elsewhere: 0,
+	no_territory: count,
 });
 
 test("each category tile counts its vendors by relationship word", async (t) => {
@@ -207,4 +215,78 @@ test("a partner's summary counts only that partner's vendors", async (t) => {
 	const refused = await get("vendors/summary?owner=someone");
 	assert.equal(refused.status, 400);
 	assert.equal(refused.body.error, "value_not_in_declared_vocabulary");
+});
+
+test("market counts follow current territories, owners, and categories", async (t) => {
+	const west = { id: uuid(31), name: "Example West" };
+	const east = { id: uuid(32), name: "Example East" };
+	const get = await summaryDoor(
+		t,
+		[
+			vendor(10, { owner: JOE, categories: ["lender", "attorney"] }),
+			vendor(11, { owner: DELL, categories: ["lender"] }),
+			vendor(12, { owner: JOE, categories: ["lender"] }),
+			vendor(13),
+			`insert into market (id, name) values ('${west.id}', '${west.name}'), ('${east.id}', '${east.name}');
+		insert into market_county (market_id, county_fips) values ('${west.id}', '01001'), ('${east.id}', '01003');
+		insert into territory (id, name) values ('${uuid(41)}', 'Example State'), ('${uuid(42)}', 'Example West'),
+			('${uuid(43)}', 'Example Typed Territory'), ('${uuid(44)}', 'Example East');
+		insert into territory_piece (territory_id, state_fips, market_id) values
+			('${uuid(41)}', '01', null), ('${uuid(42)}', null, '${west.id}'),
+			('${uuid(44)}', null, '${east.id}');
+		insert into party_territory (party_id, territory_id, started_on, ended_on) values
+			('${uuid(10)}', '${uuid(41)}', null, null), ('${uuid(10)}', '${uuid(42)}', null, null),
+			('${uuid(11)}', '${uuid(42)}', null, null), ('${uuid(12)}', '${uuid(43)}', null, null),
+			('${uuid(12)}', '${uuid(44)}', '2001-01-01', '2001-02-01'),
+			('${uuid(13)}', '${uuid(42)}', '2001-01-01', '2001-02-01');`,
+		].join(""),
+	);
+	const { body } = await get("vendors/summary");
+	assert.partialDeepStrictEqual(body.all, {
+		markets: [
+			{ ...east, count: 1 },
+			{ ...west, count: 2 },
+		],
+		elsewhere: 1,
+		no_territory: 1,
+	});
+	assert.partialDeepStrictEqual(inCategory(body, "lender"), {
+		markets: [
+			{ ...east, count: 1 },
+			{ ...west, count: 2 },
+		],
+		elsewhere: 1,
+		no_territory: 0,
+	});
+	assert.partialDeepStrictEqual(inCategory(body, "attorney"), {
+		markets: [
+			{ ...east, count: 1 },
+			{ ...west, count: 1 },
+		],
+	});
+	assert.partialDeepStrictEqual(body.no_category, {
+		markets: [],
+		elsewhere: 0,
+		no_territory: 1,
+	});
+	const dell = (await get("vendors/summary?owner=dell")).body;
+	assert.partialDeepStrictEqual(dell.all, {
+		markets: [{ ...west, count: 1 }],
+		elsewhere: 0,
+		no_territory: 0,
+	});
+	for (const contract of ["", "&contract=vendor-directory.v1"]) {
+		const list = await get(`vendors?markets=true${contract}`);
+		assert.equal(list.status, 200, contract || "bare market read");
+		assert.partialDeepStrictEqual(list.body, {
+			page_size: 4,
+			page_count: 1,
+			rows: [
+				{ id: uuid(10), markets: [east, west] },
+				{ id: uuid(11), markets: [west] },
+				{ id: uuid(12), territory: "Example Typed Territory", markets: [] },
+				{ id: uuid(13), territory: null, markets: [] },
+			],
+		});
+	}
 });
