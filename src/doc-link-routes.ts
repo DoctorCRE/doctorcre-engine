@@ -9,7 +9,12 @@ import {
 	revokeDocLink,
 	withDocLink,
 } from "./doc-link.ts";
-import { claimDocWork, finishDocJudgment, finishDocTurn } from "./doc-queue.ts";
+import {
+	claimDocWork,
+	finishDocJudgment,
+	finishDocTurn,
+	macRunner,
+} from "./doc-queue.ts";
 import type { DB } from "./next-database.d.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
 import type { WriterEnv } from "./save.ts";
@@ -90,17 +95,10 @@ export function claimDocLink(c: Context<WriterEnv>) {
 				?.split(",")
 				.map((token) => token.trim()),
 		);
-		const runner = !asked.has("judgment")
-			? "mac"
-			: asked.has("email_split")
-				? asked.has("introduction")
-					? "mac_with_split_and_introduction"
-					: "mac_with_split"
-				: asked.has("introduction")
-					? "mac_with_introduction"
-					: "mac_with_judgment";
 		const work =
-			readiness === "ready" ? await claimDocWork(tx, owner, runner) : null;
+			readiness === "ready"
+				? await claimDocWork(tx, owner, macRunner(asked))
+				: null;
 		return work
 			? Response.json(work, { headers: noStore })
 			: new Response(null, { status: 204, headers: noStore });

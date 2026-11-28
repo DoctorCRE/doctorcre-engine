@@ -84,21 +84,27 @@ const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
 	) order by position) from doc_judgment_destination where job_id = j.id), '[]') as destinations`;
 
 const mail = ["email_summary", "email_filing"] satisfies JudgmentKind[];
-// Split and introduction jobs require a capable Mac on the partner's plan.
-const mailKinds = {
-	mac: [],
-	mac_with_judgment: mail,
-	mac_with_split: [...mail, "email_split"],
-	mac_with_introduction: [...mail, "introduction"],
-	mac_with_split_and_introduction: [...mail, "email_split", "introduction"],
-	backup: [],
-	backup_mail: mail,
-} satisfies Record<string, JudgmentKind[]>;
+// Optional jobs require a capable Mac on the partner's plan. Keep suffixes in their established order.
+const optionalMacWork = [
+	["split", "email_split"],
+	["introduction", "introduction"],
+] as const satisfies readonly [string, JudgmentKind][];
+const macPrefix = "mac_with_";
+type MacRunner = "mac" | `${typeof macPrefix}${string}`;
+
+export function macRunner(asked: ReadonlySet<string>): MacRunner {
+	if (!asked.has("judgment")) return "mac";
+	const suffix = optionalMacWork
+		.filter(([, kind]) => asked.has(kind))
+		.map(([name]) => name)
+		.join("_and_");
+	return `${macPrefix}${suffix || "judgment"}`;
+}
 
 export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
-	runner: keyof typeof mailKinds,
+	runner: MacRunner | "backup" | "backup_mail",
 ) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
@@ -108,7 +114,18 @@ export async function claimDocWork(
 			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
 				or (select status from ${docLinkState(owner)} link) <> 'ready'`
 			: sql`true`;
-	const kinds = mailKinds[runner];
+	const suffixes = runner.startsWith(macPrefix)
+		? runner.slice(macPrefix.length).split("_and_")
+		: [];
+	const kinds =
+		runner === "mac" || runner === "backup"
+			? []
+			: [
+					...mail,
+					...optionalMacWork
+						.filter(([name]) => suffixes.includes(name))
+						.map(([, kind]) => kind),
+				];
 	const turnQueuedAt = sql`coalesce(requeued_at, created_at)`;
 	const mailQueuedAt = sql`created_at`;
 	// Turns still run before the separate judgment storage migration.

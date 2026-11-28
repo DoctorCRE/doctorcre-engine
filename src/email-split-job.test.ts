@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import pg from "pg";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink } from "./doc-link-routes.ts";
-import { claimDocWork, finishDocJudgment } from "./doc-queue.ts";
+import { claimDocWork, finishDocJudgment, macRunner } from "./doc-queue.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -246,6 +246,19 @@ test("the backfill queues one split for each unsplit email and prints counts onl
 		],
 	);
 	assert.equal(run("on"), `${counts}5,0,3,2\napplied\n`);
+});
+
+test("Doc-Link-Work keeps the existing Mac runner names", () => {
+	const runner = (...kinds: string[]) => macRunner(new Set(kinds));
+	assert.equal(runner(), "mac");
+	assert.equal(runner("email_split", "introduction"), "mac");
+	assert.equal(runner("judgment", "unknown"), "mac_with_judgment");
+	assert.equal(runner("judgment", "email_split"), "mac_with_split");
+	assert.equal(runner("judgment", "introduction"), "mac_with_introduction");
+	assert.equal(
+		runner("introduction", "judgment", "email_split"),
+		"mac_with_split_and_introduction",
+	);
 });
 
 test("Doc-Link-Work claims a split only together with judgment", async () => {
