@@ -59,6 +59,7 @@ const LIST_FIELDS = {
 		"territory",
 		"quiet",
 		"no_category",
+		"markets",
 	],
 };
 const RECORD_FIELDS = ["viewer", "contract"];
@@ -197,6 +198,7 @@ const vendorQuery = (
 	// Absent unless asked, so an unfiltered list keeps its old echo.
 	...(oneOf(params, "quiet", ["true"], null) && { quiet: true }),
 	...(noCategory(params) && { no_category: true }),
+	...(oneOf(params, "markets", ["true"], null) && { markets: true }),
 });
 
 function noCategory(params: URLSearchParams) {
@@ -315,6 +317,8 @@ directory.get("/vendors", (c) =>
 			throw invalid({ parameter: "quiet", reason: "unsupported" });
 		if (query.no_category)
 			throw invalid({ parameter: "no_category", reason: "unsupported" });
+		if (query.markets)
+			throw invalid({ parameter: "markets", reason: "unsupported" });
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
 );

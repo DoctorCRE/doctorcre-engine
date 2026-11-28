@@ -118,7 +118,17 @@ Mail capture can save an unconfirmed introduction with source **Found in email**
 - [ ] **Draft email** is the one orange button on a vendor's card, and only there. It starts or reopens a Doc chat named "Email to" and the vendor. Doc reads the vendor, asks what the email is for, and shows a draft the partner can edit. The email sends from the partner's mailbox only after **Approve and send**, and is saved to the vendor's Conversations. It waits on Doc chats started from a button.
 - [ ] For a firm with several contacts, Doc first asks who the email is for. With no email on file, the button's place shows "No email on file" and **Add email**, which opens Edit. A vendor marked Do not contact has no button, and the card shows the Do not contact line with its reason.
 - [ ] Sending an email never changes the relationship. A partner changes it on the card.
-- [ ] Territory tiles wait until typed territories are matched to markets, because until then most vendors are under Elsewhere.
+- [ ] Enable the app's `vendor-territory-tiles` routing key after the engine market reads are available and typed territories are matched to markets.
+
+## Wiring
+
+| Screen part | App files | Engine doors | Tables |
+| --- | --- | --- | --- |
+| Category tiles and owner counts | `business.html`, `js/workspace-business.js`, `js/workspace-business-model.js` | `GET /api/engine/vendors/summary` | `party_role`, `role`, `app_user`, `activity`, `activity_about`, `next_step`, `do_not_contact` |
+| Category table, search and Quiet | `js/workspace-business.js`, `js/workspace-business-model.js` | `GET /api/engine/vendors` | `party`, `party_role`, `role`, `app_user`, `outside_id`, `party_territory`, `territory`, `activity`, `activity_about`, `next_step`, `do_not_contact` |
+| Territory tile counts and filtering | `business.html`, `js/workspace-business.js`, `js/workspace-business-model.js`, `css/workspace-business.css`, `src/worker.js` | `GET /api/engine/vendors/summary`, `GET /api/engine/vendors?markets=true` | `party_territory`, `territory`, `territory_piece`, `market`, `market_county` |
+| Vendor card and relationship changes | `js/workspace-business.js`, `js/workspace-business-model.js` | `GET /api/engine/vendors/{id}`, `POST /api/engine/vendors/{id}` | `party`, `party_role`, `party_email`, `party_phone`, `party_company`, `party_territory`, `territory`, `vendor_track_record`, `do_not_contact` |
+| Relationships diagram | `src/ui/vendor-relationships.tsx` | `GET /api/engine/vendors/{id}/relationships` | `party`, `party_role`, `app_user`, `introduction`, `deal`, `deal_party`, `party_link` |
 
 ## Meeting planner
 
