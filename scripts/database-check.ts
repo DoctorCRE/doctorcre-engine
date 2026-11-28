@@ -89,9 +89,9 @@ await withCheckDatabases(() =>
 			await withSnapshot(async (nextUrl, copySnapshot) => {
 				await loadNextSection(nextUrl);
 				await npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
+				// Small runners can run more files while their tests wait for PostgreSQL.
 				const cpus = availableParallelism();
-				const workers = Math.max(cpus - 1, Math.min(2 * cpus, 6));
-				const concurrency = process.env.CI ? workers : Math.min(8, workers);
+				const concurrency = Math.max(cpus - 1, Math.min(2 * cpus, 6));
 				// Both commands must finish before the snapshots are dropped.
 				const results = await Promise.allSettled([
 					npmRun("types", env),
