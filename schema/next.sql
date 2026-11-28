@@ -688,14 +688,6 @@ do $$ begin
 	execute format('alter function carry_weekly_review set search_path = %I, pg_temp', current_schema());
 end $$;
 
--- Each partner's own starred deals, which stay at the top of their Deals board and list.
-create table deal_star (
-	user_id uuid not null references app_user,
-	deal_id uuid not null references deal on delete cascade,
-	created_at timestamptz not null default now(),
-	primary key (user_id, deal_id)
-);
-
 -- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
 
 -- How a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
@@ -3642,7 +3634,7 @@ begin
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'market_city', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity', 'tour_plan', 'tour_stop',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
-		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement', 'weekly_review', 'deal_star',
+		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement', 'weekly_review',
 		'party_document', 'email_document', 'client_vertical', 'client_research', 'client_research_fact',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'invoice_email', 'invoice_mailbox', 'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
@@ -3694,8 +3686,6 @@ alter table weekly_review
 	add reviewer_is_partner boolean generated always as (true) stored,
 	add constraint weekly_review_by_a_user check (changed_by_user_id is not null),
 	add foreign key (changed_by_user_id, reviewer_is_partner) references app_user (id, is_account_partner);
-
-alter table deal_star add constraint deal_star_by_its_user check (changed_by_user_id is not distinct from user_id);
 
 -- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
 alter table post_text add constraint post_text_edit_by_a_user
@@ -4202,7 +4192,7 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county, market_city,
 	territory, territory_piece, party_territory, party_territory_review, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, home_mark, deal_attention_alert, social_account, idea, design_template, introduction, party_link, weekly_review, deal_star to engine;
+	activity_about, email, next_step, home_mark, deal_attention_alert, social_account, idea, design_template, introduction, party_link, weekly_review to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.

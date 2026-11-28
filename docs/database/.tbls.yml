@@ -64,7 +64,6 @@ viewpoints:
       - next.deal_party
       - next.deal_phase_change
       - next.deal_reason
-      - next.deal_star
       - next.phase
       - next.stage
       - next.typical_length

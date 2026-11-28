@@ -50,7 +50,6 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`email_summary`**: a recorded summary result for that email, with its source, generator and recorded time. `email_current_summary` gives the one current text when any result has text.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
 - **`weekly_review`**: one deal or prospect marked reviewed in one week's Monday review.
-- **`deal_star`**: one partner's star on one deal, kept until the owner approves dropping it. Nothing reads or saves stars (owner, 2026-11-25).
 - **`commission`**: a deal's commission, once: what an open deal is expected to bring, the gross the brokerage collects, and the closing user's part on this deal when it overrides their ladder.
 - **`commission_payment`**: one part of the gross, with when it was invoiced, falls due and was received.
 - **`commission_share`**: what goes to someone other than the users, such as a referring agent or the brokerage, as a share of the whole.
@@ -1665,12 +1664,6 @@ A copied or fresh automatic call move appears as `phase_change` on the board and
 All next-schema automatic receipts give `event_id` (UUID), `prior_phase`, `phase`, nullable `reason`, Chicago `evidence_date` (the phase's effective day), `recorded_at` (the save time), and `automatic: true`. An automatic invoice close gives `source: "invoice"` and `call: null`. A copied receipt gives `source: "copied"`, its original event ID, and `call: null`. It uses the phase row's reason if the copied reason is empty. A fresh call receipt gives `source: "call_capture"`, the phase save's idempotency key as its event ID, and `call: { activity_id, happened_at }` with the stored call's UUID and start timestamp. Use `evidence_date` for the move caption. The receipt sets `undoable: false` for a copied close with an invoice date and no invoice application for the current move. The receipt and invoice date stay visible, with Undo hidden. Other receipts set `undoable: true` and follow the usual Undo rules.
 
 The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. Undo returns the same status and error for a previous phase of Closed, Invoiced, or Dead, with a hint that Undo would return the deal to Closed deals or Lost deals. A copied invoice-dated close returns the same status and error with the hint "Closed because an invoice was recorded; Undo isn't available". A same-key retry returns the original answer.
-
-### Starred deals
-
-Stars are gone (owner, 2026-11-25: "every deal is important"; #1457). No door saves a star and the board read gives none. `deal_star` still holds the stars saved before, one row per user and deal, until the owner approves dropping the table in production. Until then the database keeps its rules: one row per pair, only the user saving it, never a job, removed with the deal, each star and unstar in change history.
-
-Fresh schemas include the table. [The deal stars migration](../schema/add-deal-stars.sql) adds it to an older `next` schema and can be applied twice; no engine needs it any more.
 
 ### App work for the Deals switch
 

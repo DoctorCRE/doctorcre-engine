@@ -512,7 +512,6 @@ const STAMPED = [
 	"client_research_fact",
 	"vendor_vertical",
 	"weekly_review",
-	"deal_star",
 	"vendor_loan_program",
 	"commission",
 	"commission_payment",
@@ -2809,7 +2808,6 @@ const DEFAULTED: Record<string, string[]> = {
 };
 const REMOVABLE = [
 	"tour_stop",
-	"deal_star",
 	"doc_link",
 	"deal_client_website_attempt",
 	"deal_client_website_grant",
@@ -4469,6 +4467,13 @@ test("the deal reader can form the website link but cannot read its password ver
 			{ code: "42501" },
 		);
 	}));
+
+test("the fresh schema has no deal star table", async () => {
+	const { rows } = await db.query(
+		"select to_regclass('next.deal_star') as table_name",
+	);
+	assert.deepEqual(rows, [{ table_name: null }]);
+});
 
 test("every table a user or a job changes records who changed it and when", async () => {
 	const { rows } = await db.query(
