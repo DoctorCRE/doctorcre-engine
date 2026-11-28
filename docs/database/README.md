@@ -623,7 +623,7 @@ flowchart LR
 
 <!-- End master drawing -->
 
-Select a box to open its drawing on the main branch, or use the [area and table index](tables/README.md) to browse this version. Each area drawing labels its lines with the columns that link the tables. For columns, cross-area references, and constraints, open a table page or see [the schema](../../schema/next.sql).
+Select a box to open its drawing on the main branch, or use the [area and table index](tables/README.md) to browse this version. Each area page lists the linking columns in its Foreign keys table. For columns, cross-area references, and constraints, open a table page or see [the schema](../../schema/next.sql).
 
 ## Regenerate
 
