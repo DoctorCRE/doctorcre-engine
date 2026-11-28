@@ -1,4 +1,4 @@
-import { sql, type Transaction } from "kysely";
+import { type RawBuilder, sql, type Transaction } from "kysely";
 import { selectNextDeals } from "../deals/next-board.ts";
 import type { DB } from "../next-database.d.ts";
 
@@ -25,6 +25,14 @@ export const searchableLead = sql<boolean>`r.role = 'lead'
 	and r.stage not in ('active_deal', 'closed_won') and r.lead_client_id is null
 	and not exists (select from client where party_id = r.party_id)
 	and not exists (select from deal_party where party_id = r.party_id and role in ('client', 'client_contact'))`;
+
+export const partySearchDealIds = (id: string | RawBuilder<unknown>) => sql`
+	select deal_id from deal_party where party_id = ${id}
+	union all
+	select dp.deal_id from party_company pc
+	join deal_party dp on dp.party_id = pc.company_id and dp.role = 'client'
+	where pc.person_id = ${id} and (pc.started_on is null or pc.started_on <= current_date)
+		and (pc.ended_on is null or pc.ended_on > current_date)`;
 
 export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 	const query = input.trim();
@@ -84,14 +92,7 @@ export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 					from party_role r where r.party_id = p.id and ${searchableLead}
 				) as lead_id, coalesce((
 					select jsonb_agg(to_jsonb(link) order by lower(link.name), link.id) from (
-						select d.id, d.name from deal d where d.id in (
-							select deal_id from deal_party where party_id = p.id
-							union all
-							select dp.deal_id from party_company pc
-							join deal_party dp on dp.party_id = pc.company_id and dp.role = 'client'
-							where pc.person_id = p.id and (pc.started_on is null or pc.started_on <= current_date)
-								and (pc.ended_on is null or pc.ended_on > current_date)
-						)
+						select d.id, d.name from deal d where d.id in (${partySearchDealIds(sql`p.id`)})
 						order by lower(d.name), d.id limit 20
 					) link
 				), '[]') as deals

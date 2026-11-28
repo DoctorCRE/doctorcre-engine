@@ -130,11 +130,15 @@ test("Doc link migration, private credentials and Mac polling", {
 					typeof status === "object" &&
 					"issued_at" in status &&
 					"connected" in status &&
-					"status" in status,
+					"status" in status &&
+					"readiness_code" in status &&
+					"backend" in status,
 			);
 			assert.deepEqual(Object.keys(status).sort(), [
+				"backend",
 				"connected",
 				"issued_at",
+				"readiness_code",
 				"status",
 			]);
 			return status;
@@ -170,6 +174,7 @@ test("Doc link migration, private credentials and Mac polling", {
 		);
 		await db.query(await readSchema("add-doc-link.sql"));
 		await db.query(await readSchema("add-doc-link-readiness.sql"));
+		await db.query(await readSchema("add-doc-link-backend.sql"));
 
 		assert.equal((await send({})).status, 401);
 		assert.equal((await send(first, "POST")).status, 403);
@@ -191,6 +196,8 @@ test("Doc link migration, private credentials and Mac polling", {
 			connected: false,
 			issued_at: null,
 			status: "not_set_up",
+			readiness_code: "doc_not_set_up",
+			backend: null,
 		});
 		const credential = await issue(first);
 		assert.equal((await presence(first)).status, "mac_off");
@@ -307,6 +314,8 @@ test("Doc link migration, private credentials and Mac polling", {
 		const status = await presence(first);
 		assert.equal(status.connected, true);
 		assert.equal(status.status, "ready");
+		assert.equal(status.readiness_code, "doc_ready");
+		assert.equal(status.backend, null);
 		assert.ok(
 			typeof status.issued_at === "string" &&
 				Number.isFinite(Date.parse(status.issued_at)),
@@ -315,13 +324,32 @@ test("Doc link migration, private credentials and Mac polling", {
 			connected: false,
 			issued_at: null,
 			status: "not_set_up",
+			readiness_code: "doc_not_set_up",
+			backend: null,
 		});
-		for (const readiness of ["signed_out", "plan_limited"]) {
+		assert.equal(
+			(await poll(credential, { "Doc-Link-Backend": "unknown" })).status,
+			400,
+		);
+		for (const [readiness, code, backend] of [
+			["signed_out", "doc_signed_out", "codex"],
+			["plan_limited", "doc_plan_limit", "claude"],
+		] as const) {
 			assert.equal(
-				(await poll(credential, { "Doc-Link-Readiness": readiness })).status,
+				(
+					await poll(credential, {
+						"Doc-Link-Readiness": readiness,
+						"Doc-Link-Backend": backend,
+					})
+				).status,
 				204,
 			);
-			assert.deepEqual(await presence(first), { ...status, status: readiness });
+			assert.deepEqual(await presence(first), {
+				...status,
+				status: readiness,
+				readiness_code: code,
+				backend,
+			});
 		}
 		await db.query(
 			`update next.doc_link set last_seen_at = clock_timestamp() - interval '31 seconds'
@@ -332,12 +360,14 @@ test("Doc link migration, private credentials and Mac polling", {
 			...status,
 			connected: false,
 			status: "mac_off",
+			readiness_code: "doc_mac_off",
+			backend: "claude",
 		});
 		assert.equal(
 			(await poll(credential, { "Doc-Link-Readiness": "ready" })).status,
 			204,
 		);
-		assert.deepEqual(await presence(first), status);
+		assert.deepEqual(await presence(first), { ...status, backend: "claude" });
 
 		const otherCredential = await issue(second, `?owner_user_id=${appUserId}`);
 		assert.equal((await poll(otherCredential)).status, 204);
@@ -755,7 +785,7 @@ test("Doc link migration, private credentials and Mac polling", {
 			204,
 		);
 		assert.equal((await poll(otherCredential)).status, 401);
-		assert.deepEqual(await presence(first), status);
+		assert.deepEqual(await presence(first), { ...status, backend: "claude" });
 
 		async function waitForBlockedRequest(
 			request: Promise<unknown>,
@@ -810,7 +840,9 @@ test("Doc link migration, private credentials and Mac polling", {
 		);
 		assert.equal(pollDuringRotation.status, 401);
 		assert.equal((await poll(credential)).status, 401);
-		assert.equal((await presence(first)).connected, false);
+		const rotated = await presence(first);
+		assert.equal(rotated.connected, false);
+		assert.equal(rotated.backend, null);
 		assert.equal((await poll(replacement)).status, 204);
 		assert.equal((await presence(first)).connected, true);
 		const [revoked, pollDuringRevoke] = await queueLinkRequests(
@@ -825,6 +857,8 @@ test("Doc link migration, private credentials and Mac polling", {
 			connected: false,
 			issued_at: null,
 			status: "not_set_up",
+			readiness_code: "doc_not_set_up",
+			backend: null,
 		});
 
 		await runSubtest(

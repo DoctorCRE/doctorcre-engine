@@ -25,6 +25,7 @@ import { DEFAULT_CADENCE } from "../leads/quiet-follow-ups.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText, inJsonbOrder } from "../reader.ts";
 import { UUID } from "../uuid.ts";
+import { activeTerritory, vendorMarkets } from "./markets.ts";
 import { nextVendorContacts, people } from "./people.ts";
 import {
 	nextTrackRecordFacts,
@@ -44,6 +45,7 @@ export type VendorQuery = ListQuery<
 	disposition: string | null;
 	quiet?: true;
 	no_category?: true;
+	markets?: true;
 };
 
 // The legacy `category` column has no lookup key; `category_slug` does.
@@ -314,7 +316,6 @@ const NEXT_DISPOSITIONS = [
 	{ slug: "parked", label: "Parked", workable: false },
 	{ slug: "avoid", label: "Avoid", workable: false },
 ];
-const activeTerritory = sql`pt.ended_on is null or pt.ended_on >= (now() at time zone 'America/Chicago')::date`;
 export const nextTerritory = sql<
 	string | null
 >`(select nullif(string_agg(distinct t.name, ', ' order by t.name), '')
@@ -462,7 +463,7 @@ export async function readNextVendorList(
 		query;
 	const uncategorized = query.no_category === true;
 	// A category's table filters in place, so it needs every vendor at once.
-	const whole = category !== null || uncategorized;
+	const whole = category !== null || uncategorized || query.markets;
 	const term = q === null ? null : `%${q.replace(/([\\%_])/g, "\\$1")}%`;
 	const days = DEFAULT_CADENCE.vendor_days;
 	const matching = liveNextVendors(db)
@@ -502,6 +503,17 @@ export async function readNextVendorList(
 				sql<boolean>`${vendorIsQuiet("pr", "recorded", days)}`.as("quiet"),
 				vendorQuietDays("pr", "recorded", days).as("quiet_days"),
 			]),
+		)
+		.$if(query.markets === true && !query.contract, (qb) =>
+			qb.select(nextTerritory.as("territory")),
+		)
+		.$if(query.markets === true, (qb) =>
+			qb.select(
+				sql<{ id: string; name: string }[]>`(
+				select coalesce(jsonb_agg(m order by m.name), '[]')
+				from (${vendorMarkets(sql.ref("p.id"))}) m
+			)`.as("markets"),
+			),
 		)
 		.orderBy(NEXT_ORDER[query.sort])
 		.limit(pageSize)

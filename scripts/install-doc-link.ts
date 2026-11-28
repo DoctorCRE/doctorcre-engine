@@ -16,11 +16,11 @@ import { createInterface } from "node:readline";
 import { fileURLToPath, URL } from "node:url";
 import {
 	docLinkConfigSchema,
+	docLinkEngineSchema,
 	hasManagedPolicy,
-	ownClaudePlanMessage,
 	postDocLink,
-	signInStatus,
 } from "./doc-link.ts";
+import { ownClaudePlanMessage, signInStatus } from "./doc-link-backends.ts";
 
 const label = "com.doctorcre.doc-link";
 const managedSettingsMessage =
@@ -132,7 +132,7 @@ export async function installDocLink(
 	managedSettings?: Parameters<typeof hasManagedPolicy>[0],
 ) {
 	try {
-		const engine = docLinkConfigSchema.shape.engine.safeParse(origin);
+		const engine = docLinkEngineSchema.safeParse(origin);
 		if (!engine.success)
 			throw new SetupError(
 				"Use the HTTPS engine origin supplied with your Doc setup command.",

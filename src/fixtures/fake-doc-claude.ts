@@ -58,13 +58,15 @@ if (args.includes("auth")) {
 		finished(
 			prompt.includes('{"authored"')
 				? { authored }
-				: input.destinations
-					? {
-							facts: [
-								{ destination: input.destinations[0], text: quote, quote },
-							],
-						}
-					: { summary: quote, action_title: null, quote },
+				: input.candidates
+					? { introductions: [] }
+					: input.destinations
+						? {
+								facts: [
+									{ destination: input.destinations[0], text: quote, quote },
+								],
+							}
+						: { summary: quote, action_title: null, quote },
 		);
 	} else {
 		emit({ type: "system", subtype: "init" });
@@ -76,6 +78,15 @@ if (args.includes("auth")) {
 			type: "assistant",
 			message: { content: [{ type: "text", text: "intermediate" }] },
 		});
+		if (question === "Invalid format") {
+			emit({
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				result: "not JSON",
+			});
+			process.exit(0);
+		}
 		const answer = {
 			kind: "answer",
 			text:

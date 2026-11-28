@@ -30,6 +30,9 @@ const engine = "https://engine.example.test";
 const claude = fileURLToPath(
 	new URL("./fixtures/fake-doc-claude.ts", import.meta.url).href,
 );
+const codex = fileURLToPath(
+	new URL("./fixtures/fake-doc-codex.ts", import.meta.url).href,
+);
 const firstClaim = "8b97c249-aee2-46a1-9cfb-3c5b9f9d84b6";
 const secondClaim = "876f42ed-1b39-4d13-a5c8-af599539907a";
 const context = { kind: "deal", id: "c0a0d936-615b-45ec-924c-f61550a68354" };
@@ -87,15 +90,28 @@ function managedSettingsIn(directory: string) {
 	};
 }
 
-async function runLink(replies: Reply[], binary = claude, directory?: string) {
+async function runLink(
+	replies: Reply[],
+	binary = claude,
+	directory?: string,
+	backend: "claude" | "codex" = "claude",
+) {
 	let now = 60_000;
 	const maxWaits = replies.length;
 	let waits = 0;
 	const requests: Request[] = [];
 	await runDocLink(
-		{ engine, claude: binary, credential },
+		backend === "claude"
+			? { engine, claude: binary, credential }
+			: { engine, backend, binary, credential },
 		{
-			...(directory ? { managedSettings: managedSettingsIn(directory) } : {}),
+			...(directory
+				? {
+						managedSettings: managedSettingsIn(directory),
+						managedCodexPolicy: [join(directory, "requirements.toml")],
+					}
+				: {}),
+			codexAccountAllowed: async () => true,
 			now: () => now,
 			wait: async () => {
 				assert.ok(
@@ -121,6 +137,8 @@ async function runLink(replies: Reply[], binary = claude, directory?: string) {
 		assert.equal(request.headers.get("Authorization"), `Bearer ${credential}`);
 		assert.equal(request.headers.get("Cookie"), null);
 		assert.equal(request.redirect, "error");
+		if (new URL(request.url).pathname.endsWith("/claim"))
+			assert.equal(request.headers.get("Doc-Link-Backend"), backend);
 	}
 	return Promise.all(
 		requests.map(async (request) => ({
@@ -647,7 +665,7 @@ for (const [subject, kind] of [
 	});
 }
 
-test("a ready Doc link asks for judgment and email_split, and a split claim finishes", async () => {
+test("a ready Doc link advertises all its mail jobs and finishes a split claim", async () => {
 	const body = "See you Thursday.\n\nSam\n\nSent from my phone";
 	assert.deepEqual(await link(splitClaim(body), status(204)), [
 		poll("ready"),
@@ -660,3 +678,263 @@ test("a ready Doc link asks for judgment and email_split, and a split claim fini
 		poll("ready"),
 	]);
 });
+
+for (const backend of ["claude", "codex"] as const) {
+	const binary = backend === "claude" ? claude : codex;
+	test(`${backend} completes every job kind and keeps engine result validation`, async () => {
+		const destination = { kind: "deal", id: context.id };
+		const mail = {
+			claim_id: firstClaim,
+			claim_until: new Date(120_000).toISOString(),
+			activity_id: context.id,
+			subject: "Tour",
+			body: "The tour is Thursday.",
+		};
+		const requests = await runLink(
+			[
+				claimed("Find tour"),
+				status(204),
+				summaryClaim("Tour"),
+				status(204),
+				Response.json({
+					...mail,
+					kind: "email_filing",
+					destinations: [destination],
+				}),
+				status(204),
+				splitClaim("See you Thursday.\n\nSam"),
+				status(204),
+				Response.json({
+					...mail,
+					kind: "introduction",
+					context: { sent_on: "2026-10-01", sender_ids: [], candidates: [] },
+				}),
+				status(204),
+				claimed("Invalid format"),
+				status(204),
+				summaryClaim("Tour"),
+				status(422),
+				status(204),
+			],
+			binary,
+			undefined,
+			backend,
+		);
+		const summary = judgment({
+			kind: "answered",
+			result: { summary: mail.body, action_title: null, quote: mail.body },
+		});
+		assert.deepEqual(requests, [
+			poll("ready"),
+			answered(firstClaim),
+			poll("ready"),
+			summary,
+			poll("ready"),
+			judgment({
+				kind: "answered",
+				result: { facts: [{ destination, text: mail.body, quote: mail.body }] },
+			}),
+			poll("ready"),
+			judgment({
+				kind: "answered",
+				result: { authored: ["See you Thursday.", "Sam"] },
+			}),
+			poll("ready"),
+			judgment({ kind: "answered", result: { introductions: [] } }),
+			poll("ready"),
+			result({ claim_id: firstClaim, kind: "failed" }),
+			poll("ready"),
+			summary,
+			judgment({ kind: "failed" }),
+			poll("ready"),
+		]);
+	});
+}
+
+test("Codex never submits a partial turn as an answer", async () => {
+	assert.deepEqual(
+		await runLink(
+			[claimed("Interrupted"), status(204)],
+			codex,
+			undefined,
+			"codex",
+		),
+		[
+			poll("ready"),
+			result({ claim_id: firstClaim, kind: "failed" }),
+			poll("ready"),
+		],
+	);
+});
+
+for (const [question, kind] of [
+	["Expired sign-in", "signed_out"],
+	["Plan limit", "plan_limited"],
+] as const) {
+	test(`Codex releases work after ${kind}`, async () => {
+		assert.deepEqual(
+			await runLink(
+				[claimed(question), status(204)],
+				codex,
+				undefined,
+				"codex",
+			),
+			[poll("ready"), result({ claim_id: firstClaim, kind }), poll(kind)],
+		);
+	});
+}
+
+for (const variant of ["signed-out", "api-key", "business", "unsupported"]) {
+	test(`Codex cannot claim work with ${variant}`, async () => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, variant);
+		await symlink(codex, binary);
+		const requests: Request[] = [];
+		const paused = Symbol("polling paused");
+		const expectedReadiness = variant === "signed-out" ? "signed_out" : null;
+		await assert.rejects(
+			runDocLink(
+				{ backend: "codex", binary, engine, credential },
+				{
+					codexAccountAllowed: async () => true,
+					now: () => 60_000,
+					wait: async () => {
+						throw paused;
+					},
+					fetch: async (url, init) => {
+						requests.push(new Request(url, init));
+						return status(204);
+					},
+				},
+			),
+			(error) => error === paused,
+		);
+		assert.equal(
+			requests.some((request) => request.headers.has("Doc-Link-Work")),
+			false,
+		);
+		assert.deepEqual(
+			requests.map((request) => request.headers.get("Doc-Link-Readiness")),
+			variant === "signed-out" || variant === "unsupported"
+				? [expectedReadiness]
+				: [],
+		);
+	});
+}
+
+test("Codex config needs an absolute binary path", async () => {
+	await using directory = await mkdtempDisposable(
+		join(process.cwd(), ".scratch."),
+	);
+	const path = join(directory.path, "config.json");
+	const config = { engine, credential, backend: "codex", binary: codex };
+	await writeFile(path, JSON.stringify(config), { mode: 0o600 });
+	assert.deepEqual(await readDocLinkConfig(path), config);
+	await writeFile(path, JSON.stringify({ ...config, binary: "codex" }));
+	await assert.rejects(
+		readDocLinkConfig(path),
+		/could not read its configuration/,
+	);
+});
+
+test("The Codex runner pauses before polling if managed settings are present", async () => {
+	await using directory = await mkdtempDisposable(
+		join(process.cwd(), ".scratch."),
+	);
+	const policy = join(directory.path, "requirements.toml");
+	await writeFile(policy, "");
+	const paused = Symbol("polling paused");
+	await assert.rejects(
+		runDocLink(
+			{ backend: "codex", binary: codex, engine, credential },
+			{
+				managedCodexPolicy: [policy],
+				codexAccountAllowed: async () => true,
+				fetch: async () => assert.fail("polled despite managed settings"),
+				now: () => 60_000,
+				wait: async () => {
+					throw paused;
+				},
+			},
+		),
+		(error) => error === paused,
+	);
+});
+
+test("Codex refuses to start outside its dedicated standard account", async () => {
+	await assert.rejects(
+		runDocLink(
+			{ backend: "codex", binary: codex, engine, credential },
+			{
+				codexAccountAllowed: async () => false,
+				fetch: async () => assert.fail("polled from another account"),
+				now: () => 60_000,
+				wait: async () => assert.fail("runner did not stop"),
+			},
+		),
+		/dedicated standard macOS account/,
+	);
+});
+
+test("Codex advertises no work with a missing or altered isolation catalog", async () => {
+	await using directory = await mkdtempDisposable(
+		join(process.cwd(), ".scratch."),
+	);
+	const catalog = join(directory.path, "catalog.json");
+	for (const invalid of [undefined, "{", '{"models":[]}']) {
+		if (invalid !== undefined) await writeFile(catalog, invalid);
+		const paused = Symbol("polling paused");
+		const work: (string | null)[] = [];
+		await assert.rejects(
+			runDocLink(
+				{ backend: "codex", binary: codex, engine, credential },
+				{
+					codexAccountAllowed: async () => true,
+					codexCatalog: catalog,
+					fetch: async (_url, init) => {
+						work.push(new Headers(init?.headers).get("Doc-Link-Work"));
+						return status(204);
+					},
+					now: () => 60_000,
+					wait: async () => {
+						throw paused;
+					},
+				},
+			),
+			(error) => error === paused,
+		);
+		assert.deepEqual(work, []);
+	}
+});
+
+for (const [question, reset] of [
+	["Plan limit with reset", Date.UTC(1970, 0, 2, 16, 40)],
+	["Plan limit", 360_000],
+] as const) {
+	test(`Codex waits to reclaim work after ${question}`, async () => {
+		assert.deepEqual(
+			await runLink(
+				[
+					claimed(question),
+					status(204),
+					{ reply: status(204), now: reset - 60_000 },
+					{ reply: status(204), now: reset },
+					status(204),
+				],
+				codex,
+				undefined,
+				"codex",
+			),
+			[
+				poll("ready"),
+				result({ claim_id: firstClaim, kind: "plan_limited" }),
+				poll("plan_limited"),
+				poll("plan_limited"),
+				poll("ready"),
+				poll("ready"),
+			],
+		);
+	});
+}
