@@ -72,13 +72,12 @@
 | [next.deal_phase_change](next.deal_phase_change.md)                                         | 11      |         | BASE TABLE |
 | [next.deal_property](next.deal_property.md)                                                 | 7       |         | BASE TABLE |
 | [next.deal_reason](next.deal_reason.md)                                                     | 6       |         | BASE TABLE |
-| [next.deal_star](next.deal_star.md)                                                         | 7       |         | BASE TABLE |
 | [next.design_template](next.design_template.md)                                             | 7       |         | BASE TABLE |
 | [next.do_not_contact](next.do_not_contact.md)                                               | 8       |         | BASE TABLE |
 | [next.doc_conversation](next.doc_conversation.md)                                           | 4       |         | BASE TABLE |
 | [next.doc_judgment_destination](next.doc_judgment_destination.md)                           | 6       |         | BASE TABLE |
 | [next.doc_judgment_job](next.doc_judgment_job.md)                                           | 13      |         | BASE TABLE |
-| [next.doc_link](next.doc_link.md)                                                           | 6       |         | BASE TABLE |
+| [next.doc_link](next.doc_link.md)                                                           | 7       |         | BASE TABLE |
 | [next.doc_turn](next.doc_turn.md)                                                           | 17      |         | BASE TABLE |
 | [next.document](next.document.md)                                                           | 18      |         | BASE TABLE |
 | [next.document_extraction](next.document_extraction.md)                                     | 16      |         | BASE TABLE |

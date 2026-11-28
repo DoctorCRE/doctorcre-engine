@@ -76,20 +76,24 @@ type Turn = {
 	context: unknown;
 	draft_review: unknown;
 	waiting_reason: string | null;
+	waiting_reason_code: string | null;
+	backend: "claude" | "codex" | null;
 	confirmation: unknown;
 };
 type Body<Path> = { error?: string } & (Path extends "/turns"
 	? { conversation_id: string; turn: Turn }
-	: Path extends `/conversations/${string}`
-		? { conversation: Chat; turns: Turn[] }
-		: Path extends `/turns/${string}/confirmation`
-			? {
-					result: unknown;
-					replayed?: true;
-					next_step_id?: string;
-					href?: string;
-				}
-			: { conversations: Chat[]; next_before: string | null });
+	: Path extends `/records?${string}`
+		? { records: { ref: { kind: string; id: string }; label: string }[] }
+		: Path extends `/conversations/${string}`
+			? { conversation: Chat; turns: Turn[] }
+			: Path extends `/turns/${string}/confirmation`
+				? {
+						result: unknown;
+						replayed?: true;
+						next_step_id?: string;
+						href?: string;
+					}
+				: { conversations: Chat[]; next_before: string | null });
 
 function client(user = "joe", writer = connectionString) {
 	const api = docRoutes();
@@ -146,6 +150,7 @@ const poll = async (
 	credential: string,
 	readiness: string | null = "ready",
 	work?: "judgment",
+	backend?: "claude" | "codex",
 ) =>
 	mac.request(
 		"/claim",
@@ -155,6 +160,7 @@ const poll = async (
 				Authorization: `Bearer ${credential}`,
 				...(readiness === null ? {} : { "Doc-Link-Readiness": readiness }),
 				...(work && { "Doc-Link-Work": work }),
+				...(backend && { "Doc-Link-Backend": backend }),
 			},
 		},
 		{ DATABASE_WRITER: { connectionString } },
@@ -639,6 +645,26 @@ test("backup answers an unready partner's turn using Doc's read tools", async (t
 	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
 });
 
+test("a backend-only Codex poll clears stale presence so backup can take fresh work", async (t) => {
+	const credential = await issue(owner);
+	assert.equal((await poll(credential)).status, 204);
+	const { conversation_id } = await askDoc();
+	assert.equal(
+		(await chatTurn(conversation_id))?.waiting_reason_code,
+		"doc_ready",
+	);
+
+	assert.equal((await poll(credential, null, undefined, "codex")).status, 204);
+	const waiting = await chatTurn(conversation_id);
+	assert.equal(waiting?.waiting_reason_code, "doc_mac_off");
+	assert.equal(waiting?.backend, "codex");
+
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
+});
+
 test("backup waits for the ready Mac and a Mac takeover retains its answer", async (t) => {
 	const { conversation_id, turn } = await askDoc();
 	const credential = await issue(owner);
@@ -850,6 +876,38 @@ test("keeps a question and its key while a Mac has never connected", async () =>
 	assert.equal((await client("dell")(chat, 404)).error, "not_found");
 });
 
+test("picks a canonical lead for a follow-up question", async () => {
+	const lead = await exampleLead("Example Picker Lead");
+	const send = client();
+	const { records } = await send("/records?query=Example+Picker+Lead", 200);
+	assert.deepEqual(records[0], {
+		...lead,
+		label: "Example Picker Lead",
+		city: null,
+	});
+	const credential = await issue(owner);
+	const { conversation_id } = await askDoc();
+	const first = await claim(credential);
+	assert.equal(
+		(
+			await complete(credential, {
+				kind: "answered",
+				claim_id: first.claim_id,
+				answer: refusal,
+			})
+		).status,
+		204,
+	);
+	const followUp = await send("/turns", 202, {
+		conversation_id,
+		idempotency_key: randomUUID(),
+		question: "What should I check next?",
+		context: records[0]?.ref,
+	});
+	assert.deepEqual(followUp.turn.context, lead.ref);
+	assert.deepEqual((await claim(credential)).turn.context, lead.ref);
+});
+
 test("simultaneous first asks with the same key share a queued turn", async () => {
 	const send = client();
 	const ask = { ...question, idempotency_key: randomUUID() };
@@ -1026,12 +1084,21 @@ test("reports why a question waits and claims it when ready", async () => {
 		(await current())?.waiting_reason,
 		"Doc answers when your Mac is on.",
 	);
-	assert.equal((await poll(credential, "signed_out")).status, 204);
+	assert.equal((await current())?.backend, null);
+	assert.equal((await current())?.waiting_reason_code, "doc_mac_off");
+	assert.equal(
+		(await poll(credential, "signed_out", undefined, "codex")).status,
+		204,
+	);
+	assert.equal((await current())?.backend, "codex");
+	assert.equal((await current())?.waiting_reason_code, "doc_signed_out");
 	assert.equal(
 		(await current())?.waiting_reason,
 		"Sign in to Claude Code on your Mac.",
 	);
 	assert.equal((await poll(credential, "plan_limited")).status, 204);
+	assert.equal((await current())?.backend, "codex");
+	assert.equal((await current())?.waiting_reason_code, "doc_plan_limit");
 	assert.equal(
 		(await current())?.waiting_reason,
 		"Doc is paused until your Claude plan resets.",
@@ -1047,6 +1114,8 @@ test("reports why a question waits and claims it when ready", async () => {
 	const picked = await claim(credential);
 	assert.equal(picked.turn.id, turn.id);
 	assert.equal((await current())?.waiting_reason, null);
+	assert.equal((await current())?.waiting_reason_code, null);
+	assert.equal((await current())?.backend, "codex");
 });
 
 const complete = (credential: string, body: object) =>
@@ -1258,8 +1327,41 @@ test("lists chats by their newest message and marks busy or waiting chats", asyn
 		(await marks(`/conversations?before=${waiting}`)).map(({ id }) => id),
 		[idle],
 	);
+	const selected = `/conversations?ids=${waiting},${idle}` as const;
+	const summaries = await send(selected, 200);
+	assert.deepEqual(
+		summaries.conversations.map(({ id, state }) => ({ id, state })),
+		[
+			{ id: waiting, state: "waiting_ok" },
+			{ id: idle, state: null },
+		],
+	);
+	assert.equal(summaries.next_before, null);
+	assert.deepEqual((await client("dell")(selected, 200)).conversations, []);
+	assert.equal(
+		(await send(`/conversations?ids=${Array(31).fill(working).join(",")}`, 400))
+			.error,
+		"invalid_field_value",
+	);
 	const { conversation } = await send(`/conversations/${working}`, 200);
 	assert.equal(conversation.state, "working");
+
+	await db.query(
+		"update doc_turn set state = 'answered', answer = $2 where conversation_id = $1",
+		[
+			idle,
+			{
+				kind: "clarification",
+				text: "Which record did you mean?",
+				sources: [],
+				proposal: null,
+			},
+		],
+	);
+	assert.equal(
+		(await send(`/conversations/${idle}`, 200)).conversation.state,
+		"waiting_ok",
+	);
 });
 
 test("the database enforces private ownership and valid turn rows", async () => {
@@ -1547,6 +1649,11 @@ test("a first question and follow-ups cite the exact records and ask which lead 
 	const south = await exampleLead("Example Juniper", "person");
 	await db.query(
 		`with stamp as (select set_config('engine.job', 'old_system', true))
+		insert into deal_party (deal_id, party_id, role) select $1, $2, 'lead' from stamp`,
+		[shared.ref.id, south.ref.id],
+	);
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
 		update party set city = case id when $1 then 'Sample North' else 'Sample South' end
 		from stamp where id in ($1, $2)`,
 		[north.ref.id, south.ref.id],
@@ -1660,14 +1767,26 @@ test("a first question and follow-ups cite the exact records and ask which lead 
 		kind: "clarification",
 		text: "Which of these records did you mean?",
 		sources: [
-			{ ...north, label: "Example Juniper (Sample North)" },
-			{ ...south, label: "Example Juniper (Sample South)" },
+			{
+				...north,
+				label: "Example Juniper",
+				city: "Sample North",
+				deal_count: 0,
+			},
+			{
+				...south,
+				label: "Example Juniper",
+				city: "Sample South",
+				deal_count: 1,
+			},
 		].sort((a, b) => (a.ref.id < b.ref.id ? -1 : 1)),
 		proposal: null,
 	});
 
 	const picked = await ask("The one in Sample South.", async (tool, cited) => {
-		const chosen = cited.find(({ label }) => label.endsWith("(Sample South)"));
+		const chosen = cited.find(
+			(record) => "city" in record && record.city === "Sample South",
+		);
 		const [match] = await tool("find", {
 			query: chosen?.ref.id,
 			kind: "lead",
@@ -1682,6 +1801,44 @@ test("a first question and follow-ups cite the exact records and ask which lead 
 		kind: "answer",
 		text: "Sample",
 		sources: [{ ...south, label: "Example Juniper" }],
+		proposal: null,
+	});
+
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		update party set name = case id when $1 then 'Juniper Medical' else 'Juniper Clinic' end
+		from stamp where id in ($1, $2)`,
+		[north.ref.id, south.ref.id],
+	);
+	const differentNames = await ask(
+		"Which Juniper is this about?",
+		async (tool) => {
+			const matches = await tool("find", { query: "Juniper", kind: "lead" });
+			assert.ok(Array.isArray(matches));
+			return tool("validate_answer", {
+				kind: "clarification",
+				text: "Which Juniper did you mean?",
+				sources: matches.map((match) => match.source),
+			});
+		},
+	);
+	assert.deepEqual(differentNames, {
+		kind: "clarification",
+		text: "Which Juniper did you mean?",
+		sources: [
+			{
+				...south,
+				label: "Juniper Clinic",
+				city: "Sample South",
+				deal_count: 1,
+			},
+			{
+				...north,
+				label: "Juniper Medical",
+				city: "Sample North",
+				deal_count: 0,
+			},
+		],
 		proposal: null,
 	});
 });
