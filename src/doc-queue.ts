@@ -4,7 +4,13 @@ import {
 	filingDestination,
 	saveFilingJudgment,
 } from "./activity/filing-judgment.ts";
+import {
+	introductionMail,
+	saveIntroductions,
+	validateIntroductions,
+} from "./activity/introduction-judgment.ts";
 import { recentDocTurns } from "./doc.ts";
+import type { judgmentClaimSchema } from "./doc-judgment-prompt.ts";
 import { docLinkState, recordDocPoll } from "./doc-link.ts";
 import { type DocClaimState, validateDocAnswer } from "./doc-tools.ts";
 import type { DB } from "./next-database.d.ts";
@@ -62,7 +68,7 @@ async function claimDocTurn(
 	};
 }
 
-type JudgmentKind = "email_summary" | "email_filing" | "email_split";
+type JudgmentKind = z.infer<typeof judgmentClaimSchema>["kind"];
 type JudgmentInput = {
 	kind: JudgmentKind;
 	activity_id: string;
@@ -78,19 +84,27 @@ const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
 	) order by position) from doc_judgment_destination where job_id = j.id), '[]') as destinations`;
 
 const mail = ["email_summary", "email_filing"] satisfies JudgmentKind[];
-// Splits run only on the partner's own Mac, once its runner asks for them.
-const mailKinds = {
-	mac: [],
-	mac_with_judgment: mail,
-	mac_with_split: [...mail, "email_split"],
-	backup: [],
-	backup_mail: mail,
-} satisfies Record<string, JudgmentKind[]>;
+// Optional jobs require a capable Mac on the partner's plan. Keep suffixes in their established order.
+const optionalMacWork = [
+	["split", "email_split"],
+	["introduction", "introduction"],
+] as const satisfies readonly [string, JudgmentKind][];
+const macPrefix = "mac_with_";
+type MacRunner = "mac" | `${typeof macPrefix}${string}`;
+
+export function macRunner(asked: ReadonlySet<string>): MacRunner {
+	if (!asked.has("judgment")) return "mac";
+	const suffix = optionalMacWork
+		.filter(([, kind]) => asked.has(kind))
+		.map(([name]) => name)
+		.join("_and_");
+	return `${macPrefix}${suffix || "judgment"}`;
+}
 
 export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
-	runner: keyof typeof mailKinds,
+	runner: MacRunner | "backup" | "backup_mail",
 ) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
@@ -100,7 +114,18 @@ export async function claimDocWork(
 			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
 				or (select status from ${docLinkState(owner)} link) <> 'ready'`
 			: sql`true`;
-	const kinds: JudgmentKind[] = mailKinds[runner];
+	const suffixes = runner.startsWith(macPrefix)
+		? runner.slice(macPrefix.length).split("_and_")
+		: [];
+	const kinds =
+		runner === "mac" || runner === "backup"
+			? []
+			: [
+					...mail,
+					...optionalMacWork
+						.filter(([name]) => suffixes.includes(name))
+						.map(([, kind]) => kind),
+				];
 	const turnQueuedAt = sql`coalesce(requeued_at, created_at)`;
 	const mailQueuedAt = sql`created_at`;
 	// Turns still run before the separate judgment storage migration.
@@ -178,9 +203,19 @@ export async function claimDocWork(
 			where j.id = ${candidate.id} and j.owner_user_id = ${owner}
 		`.execute(tx);
 		if (!job) continue;
+		const { kind, destinations, activity_id, subject, body } = job;
+		const payload =
+			kind === "introduction"
+				? await introductionMail(tx, activity_id).then(
+						(context) => context && { kind, context },
+					)
+				: kind === "email_filing"
+					? { kind, destinations }
+					: { kind };
 		const valid =
-			job.subject !== null &&
-			(job.kind === "email_filing") === Boolean(job.destinations.length);
+			payload &&
+			subject !== null &&
+			(kind === "email_filing") === Boolean(destinations.length);
 		const claim_id = crypto.randomUUID();
 		const claimed = await tx
 			.updateTable("doc_judgment_job")
@@ -198,11 +233,7 @@ export async function claimDocWork(
 			.returning(claimUntilText)
 			.executeTakeFirst();
 		if (!valid || !claimed) continue;
-		const { kind, destinations, activity_id, subject, body } = job;
-		const work = { activity_id, subject, body, claim_id, ...claimed };
-		return kind === "email_filing"
-			? { ...work, kind, destinations }
-			: { ...work, kind };
+		return { activity_id, subject, body, claim_id, ...claimed, ...payload };
 	}
 }
 
@@ -252,9 +283,17 @@ function splitBody(body: string, paragraphs: string[]) {
 	};
 }
 
-function validateJudgment(outcome: unknown, work: JudgmentInput) {
+async function validateJudgment(
+	tx: Transaction<DB>,
+	outcome: unknown,
+	work: JudgmentInput,
+) {
 	const quotesEmail = (quote: string) =>
 		work.body.includes(quote) || work.subject.includes(quote);
+	if (work.kind === "introduction") {
+		const context = await introductionMail(tx, work.activity_id);
+		return context && validateIntroductions(outcome, context, quotesEmail);
+	}
 	if (work.kind === "email_split") {
 		const result = splitResult.safeParse(outcome).data;
 		return result && splitBody(work.body, result.authored);
@@ -319,7 +358,9 @@ export async function saveDocJudgment(
 	`.execute(tx);
 	if (!job) return 404;
 	const result =
-		outcome.kind === "answered" ? validateJudgment(outcome.result, job) : null;
+		outcome.kind === "answered"
+			? await validateJudgment(tx, outcome.result, job)
+			: null;
 	if (result === undefined) {
 		if (job.kind === "email_filing") await saveFilingJudgment(tx, job, []);
 		return 422;
@@ -357,6 +398,8 @@ export async function saveDocJudgment(
 			job,
 			result && "facts" in result ? result.facts : [],
 		);
+	if (result && "introductions" in result)
+		await saveIntroductions(tx, job.id, result);
 	if (summary || split)
 		await sql`select set_config('engine.job', 'mail_capture', true)`.execute(
 			tx,

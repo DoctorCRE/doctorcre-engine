@@ -85,6 +85,8 @@ Vendors opens on a tile for each vendor category.
 - [ ] Contact status shows only when it is not Active, and reads "Nurture", "Paused" or "Do not contact", never the stored code.
 - [ ] A section with nothing to show is not drawn. A vendor with no deal history and no note has no Partnership block. A deal count of zero is hidden, because the engine sends zero when no deal history is recorded.
 
+Mail capture can save an unconfirmed introduction with source **Found in email**. The Relationships lists and counts include only confirmed introductions.
+
 ## On a phone
 
 - [ ] One column, and the page scrolls. Text is 16px and every button is 44px.

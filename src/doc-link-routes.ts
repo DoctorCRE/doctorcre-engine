@@ -9,7 +9,12 @@ import {
 	revokeDocLink,
 	withDocLink,
 } from "./doc-link.ts";
-import { claimDocWork, finishDocJudgment, finishDocTurn } from "./doc-queue.ts";
+import {
+	claimDocWork,
+	finishDocJudgment,
+	finishDocTurn,
+	macRunner,
+} from "./doc-queue.ts";
 import type { DB } from "./next-database.d.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
 import type { WriterEnv } from "./save.ts";
@@ -92,15 +97,7 @@ export function claimDocLink(c: Context<WriterEnv>) {
 		);
 		const work =
 			readiness === "ready"
-				? await claimDocWork(
-						tx,
-						owner,
-						asked.has("judgment")
-							? asked.has("email_split")
-								? "mac_with_split"
-								: "mac_with_judgment"
-							: "mac",
-					)
+				? await claimDocWork(tx, owner, macRunner(asked))
 				: null;
 		return work
 			? Response.json(work, { headers: noStore })

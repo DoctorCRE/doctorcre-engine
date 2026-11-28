@@ -25,10 +25,10 @@ CREATE VIEW vendor_track_record AS (
     count(DISTINCT w.deal_id) FILTER (WHERE (w.phase = 'dead'::text)) AS deals_dead,
     ( SELECT count(DISTINCT introduction.deal_id) AS count
            FROM introduction
-          WHERE ((introduction.vendor_id = v.party_id) AND (introduction.made_by = 'vendor'::text))) AS deals_it_introduced,
+          WHERE (introduction.confirmed AND (introduction.vendor_id = v.party_id) AND (introduction.made_by = 'vendor'::text))) AS deals_it_introduced,
     ( SELECT count(DISTINCT introduction.deal_id) AS count
            FROM introduction
-          WHERE ((introduction.vendor_id = v.party_id) AND (introduction.made_by = 'team'::text))) AS deals_we_introduced
+          WHERE (introduction.confirmed AND (introduction.vendor_id = v.party_id) AND (introduction.made_by = 'team'::text))) AS deals_we_introduced
    FROM (party_role v
      LEFT JOIN worked w USING (party_id))
   WHERE (v.role = 'vendor'::text)
@@ -56,7 +56,7 @@ CREATE VIEW vendor_track_record AS (
 | [next.deal_phase_change](next.deal_phase_change.md) | 11      |         | BASE TABLE |
 | [next.deal_party](next.deal_party.md)               | 9       |         | BASE TABLE |
 | [next.role](next.role.md)                           | 7       |         | BASE TABLE |
-| [next.introduction](next.introduction.md)           | 14      |         | BASE TABLE |
+| [next.introduction](next.introduction.md)           | 17      |         | BASE TABLE |
 | [next.party_role](next.party_role.md)               | 25      |         | BASE TABLE |
 
 ---
