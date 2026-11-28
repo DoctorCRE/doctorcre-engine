@@ -196,7 +196,7 @@ flowchart LR
   a-website["Client websites"]
   a-deals ---|1| a-website
   a-users-jobs["Users and jobs"]
-  a-deals ---|26| a-users-jobs
+  a-deals ---|29| a-users-jobs
   click a-deals href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-deals.md"
   click a-imported-deals href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-imported-deals.md"
   click a-property href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-property.md"

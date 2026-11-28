@@ -22,6 +22,7 @@ const FOLLOWS = new Map([
 	["loi_expiry", "loi_grid"],
 	["lease_commencement", "commencement_letter"],
 ]);
+export const forecastDateKinds = [...FOLLOWS.keys()];
 // Prospective Client has no to-dos; its typical stay leads the chain without a row.
 const BEFORE_RESEARCH = "before_research";
 const OFF_CHAIN = new Set(["move_in", "check_in_90_day"]);
@@ -33,6 +34,9 @@ const DAY_MS = 86_400_000;
 const timeOf = (day: string) => Date.parse(`${day}T00:00:00Z`);
 const addDays = (day: string, days: number) =>
 	new Date(timeOf(day) + days * DAY_MS).toISOString().slice(0, 10);
+const lastForecastDay = timeOf("9999-12-31");
+const forecastAfter = (day: string, days: number) =>
+	timeOf(day) + days * DAY_MS <= lastForecastDay ? addDays(day, days) : null;
 const daysBetween = (from: string, to: string) =>
 	Math.round((timeOf(to) - timeOf(from)) / DAY_MS);
 const latest = (...days: (string | null)[]) =>
@@ -72,6 +76,7 @@ type PlanFacts = {
 		status: string;
 	}[];
 	lengths: Record<string, number>;
+	own_dates?: Record<string, string>;
 	today: string;
 };
 type TodoBase = {
@@ -161,7 +166,7 @@ export function planOf(facts: PlanFacts) {
 						...base,
 						state: "expected",
 						expected_from_on: null,
-						expected_to_on: addDays(movedOn, CHECK_IN_DAYS),
+						expected_to_on: forecastAfter(movedOn, CHECK_IN_DAYS),
 					});
 				else chain.push({ ...base, state: "undated" });
 			} else if (FINISHED.has(item.status)) {
@@ -183,9 +188,12 @@ export function planOf(facts: PlanFacts) {
 				if (sat !== null && sat > 2 * typical_days) {
 					stale = { phase, days: sat };
 					cursor = null;
-				} else if (cursor)
-					cursor = latest(addDays(from ?? today, typical_days), today);
-				else cursor = null;
+				} else if (cursor) {
+					const end =
+						facts.own_dates?.[item.id] ??
+						forecastAfter(from ?? today, typical_days);
+					cursor = end && latest(end, today);
+				} else cursor = null;
 				chain.push({
 					...base,
 					state: "current",
@@ -195,7 +203,9 @@ export function planOf(facts: PlanFacts) {
 				});
 			} else if (cursor && typical_days) {
 				const from = cursor;
-				cursor = addDays(from, typical_days);
+				const end =
+					facts.own_dates?.[item.id] ?? forecastAfter(from, typical_days);
+				cursor = end && latest(end, from);
 				chain.push({
 					...base,
 					state: "expected",
@@ -289,7 +299,49 @@ export function planOf(facts: PlanFacts) {
 		phases,
 		rows: [...todos, ...steps, ...dates],
 		arrows,
-		expected_signing_on: recordedOrExpectedEnd(signing),
+		expected_signing_on: stale ? null : recordedOrExpectedEnd(signing),
 		stale,
+	};
+}
+
+const forecastDay = new Intl.DateTimeFormat("en-US", {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+	timeZone: "UTC",
+});
+
+export function forecastAttention(
+	concrete: { reason: string; since: string } | null,
+	facts: PlanFacts,
+	plan: ReturnType<typeof planOf>,
+) {
+	if (concrete) return concrete;
+	const phase = phaseOf(facts.phase);
+	const entered = facts.phase_spans.findLast(
+		(span) => phaseOf(span.phase) === phase,
+	)?.from_on;
+	const risk = plan.rows
+		.filter((row) => row.kind === "critical_date")
+		.filter((row) => row.at_risk)
+		.sort((a, b) => a.on.localeCompare(b.on) || a.id.localeCompare(b.id))[0];
+	if (!entered || entered > facts.today || !risk) return null;
+	let first = 0;
+	let last = daysBetween(entered, facts.today);
+	while (first < last) {
+		const mid = Math.floor((first + last) / 2);
+		const prior = planOf({ ...facts, today: addDays(entered, mid) });
+		if (
+			prior.rows.some(
+				(row) =>
+					row.kind === "critical_date" && row.id === risk.id && row.at_risk,
+			)
+		)
+			last = mid;
+		else first = mid + 1;
+	}
+	return {
+		reason: `On pace to miss ${risk.label} (${forecastDay.format(timeOf(risk.on))}).`,
+		since: addDays(entered, first),
 	};
 }

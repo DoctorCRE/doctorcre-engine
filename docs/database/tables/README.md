@@ -70,6 +70,7 @@
 | [next.deal_open_name](next.deal_open_name.md)                                               | 2       |         | BASE TABLE |
 | [next.deal_party](next.deal_party.md)                                                       | 9       |         | BASE TABLE |
 | [next.deal_phase_change](next.deal_phase_change.md)                                         | 11      |         | BASE TABLE |
+| [next.deal_plan_date](next.deal_plan_date.md)                                               | 7       |         | BASE TABLE |
 | [next.deal_property](next.deal_property.md)                                                 | 7       |         | BASE TABLE |
 | [next.deal_reason](next.deal_reason.md)                                                     | 6       |         | BASE TABLE |
 | [next.design_template](next.design_template.md)                                             | 7       |         | BASE TABLE |
@@ -191,6 +192,7 @@
 | next.candidate_review                         | trigger       |                                                                                                                                                              | FUNCTION |
 | next.carry_weekly_review                      | void          | prospect_id uuid, new_deal_id uuid                                                                                                                           | FUNCTION |
 | next.cash_dist                                | money         | money, money                                                                                                                                                 | FUNCTION |
+| next.check_deal_plan_todo                     | trigger       |                                                                                                                                                              | FUNCTION |
 | next.commission_adds_up                       | trigger       |                                                                                                                                                              | FUNCTION |
 | next.commission_ladder_holds                  | trigger       |                                                                                                                                                              | FUNCTION |
 | next.confirm_lead_client_link                 | trigger       |                                                                                                                                                              | FUNCTION |
@@ -475,6 +477,7 @@
 | next.tstz_dist                                | interval      | timestamp with time zone, timestamp with time zone                                                                                                           | FUNCTION |
 | next.vendor_reason_not_recorded_only_imported | trigger       |                                                                                                                                                              | FUNCTION |
 | next.weekly_review_undo_by_partner            | trigger       |                                                                                                                                                              | FUNCTION |
+| next.write_deal_plan_date                     | void          | for_deal uuid, plan_todo text, end_on date                                                                                                                   | FUNCTION |
 
 ---
 

@@ -47,6 +47,7 @@ erDiagram
     string deal_kind
     string deal_party
     string deal_phase_change
+    string deal_plan_date
     string deal_reason
     string phase
     string stage
@@ -254,6 +255,9 @@ erDiagram
   "Deals (area)" }o--o| "App user" : "Deal phase change: changed by user ID"
   "Deals (area)" }o--o| "App user" : "Deal phase change: changed for user ID"
   "Deals (area)" }o--o| "Job" : "Deal phase change: changed by job"
+  "Deals (area)" }o--o| "App user" : "Deal plan date: changed by user ID"
+  "Deals (area)" }o--o| "App user" : "Deal plan date: changed for user ID"
+  "Deals (area)" }o--o| "Job" : "Deal plan date: changed by job"
   "Property (area)" }o--o| "App user" : "Deal property: changed by user ID"
   "Property (area)" }o--o| "App user" : "Deal property: changed for user ID"
   "Property (area)" }o--o| "Job" : "Deal property: changed by job"
@@ -513,7 +517,7 @@ erDiagram
 
 Numbers count foreign keys between the two areas.
 
-[Activity](viewpoint-activity.md) (12) · [Changes and preferences](viewpoint-changes-preferences.md) (10) · [Client websites](viewpoint-website.md) (4) · [Clients](viewpoint-clients.md) (26) · [Commissions](viewpoint-commissions.md) (14) · [Deals](viewpoint-deals.md) (26) · [Doc](viewpoint-doc.md) (3) · [Documents](viewpoint-documents.md) (12) · [Email](viewpoint-email.md) (21) · [Home and calendar](viewpoint-home-calendar.md) (20) · [Imported deals](viewpoint-imported-deals.md) (15) · [Invoices](viewpoint-invoices.md) (6) · [Leads](viewpoint-leads.md) (15) · [Leases](viewpoint-leases.md) (17) · [Marketing categories](viewpoint-marketing-categories.md) (6) · [Marketing posts](viewpoint-marketing-posts.md) (6) · [Marketing review](viewpoint-marketing-review.md) (6) · [Offers](viewpoint-offers.md) (14) · [People](viewpoint-people.md) (22) · [Property](viewpoint-property.md) (18) · [Relationships](viewpoint-relationships.md) (26) · [Social accounts](viewpoint-social-accounts.md) (4) · [Tours](viewpoint-tours.md) (6) · [Vendors and territories](viewpoint-vendors-territories.md) (30)
+[Activity](viewpoint-activity.md) (12) · [Changes and preferences](viewpoint-changes-preferences.md) (10) · [Client websites](viewpoint-website.md) (4) · [Clients](viewpoint-clients.md) (26) · [Commissions](viewpoint-commissions.md) (14) · [Deals](viewpoint-deals.md) (29) · [Doc](viewpoint-doc.md) (3) · [Documents](viewpoint-documents.md) (12) · [Email](viewpoint-email.md) (21) · [Home and calendar](viewpoint-home-calendar.md) (20) · [Imported deals](viewpoint-imported-deals.md) (15) · [Invoices](viewpoint-invoices.md) (6) · [Leads](viewpoint-leads.md) (15) · [Leases](viewpoint-leases.md) (17) · [Marketing categories](viewpoint-marketing-categories.md) (6) · [Marketing posts](viewpoint-marketing-posts.md) (6) · [Marketing review](viewpoint-marketing-review.md) (6) · [Offers](viewpoint-offers.md) (14) · [People](viewpoint-people.md) (22) · [Property](viewpoint-property.md) (18) · [Relationships](viewpoint-relationships.md) (26) · [Social accounts](viewpoint-social-accounts.md) (4) · [Tours](viewpoint-tours.md) (6) · [Vendors and territories](viewpoint-vendors-territories.md) (30)
 
 ## Tables
 
