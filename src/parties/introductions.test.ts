@@ -7,6 +7,7 @@ const { db, setup, cleanup, save } = doorTest();
 const joe = { user: "joe" };
 const key = () => ({ idempotency_key: randomUUID() });
 const joeId = randomUUID();
+const dellId = randomUUID();
 const vendor = randomUUID();
 const avery = randomUUID();
 const notVendor = randomUUID();
@@ -16,9 +17,10 @@ before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
 		insert into party (id, kind, name) values
-			('${joeId}', 'person', 'Example Partner One'), ('${vendor}', 'company', 'Example Lending'),
+			('${joeId}', 'person', 'Example Partner One'), ('${dellId}', 'person', 'Example Partner Two'),
+			('${vendor}', 'company', 'Example Lending'),
 			('${avery}', 'person', 'Avery Example'), ('${notVendor}', 'person', 'Blake Example');
-		insert into app_user (id, slug) values ('${joeId}', 'joe');
+		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
 		insert into role (slug, label) values ('vendor', 'Vendor') on conflict do nothing;
 		insert into party_role (party_id, role) values ('${vendor}', 'vendor');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${joeId}');
@@ -85,7 +87,8 @@ test("an introduction is with a vendor, of someone else, about a deal that exist
 		[{ introduced_party_id: randomUUID() }, 404],
 		[{ deal_id: randomUUID() }, 404],
 		[{ note: "   " }, 400],
-		[{ note: undefined }, 400],
+		[{ introduced_by: "dell" }, 400],
+		[{ made_by: "team", introduced_by: "avery" }, 400],
 		[{ introduced_on: undefined }, 400],
 		[{ made_by: "requested" }, 400],
 	] as const) {
@@ -93,6 +96,27 @@ test("an introduction is with a vendor, of someone else, about a deal that exist
 		assert.equal(actual, status, JSON.stringify(fields));
 		if (rule) assert.equal(refusal.rule, rule);
 	}
+});
+
+test("a partner records the other partner's introduction, with no note", async () => {
+	const [status, added] = await introduce({
+		made_by: "team",
+		introduced_by: "dell",
+		note: undefined,
+		deal_id: deal,
+	});
+	assert.equal(status, 201, JSON.stringify(added));
+	assert.partialDeepStrictEqual(added, {
+		made_by: "team",
+		introduced_by: "dell",
+		note: null,
+	});
+	const { rows } = await db.query(
+		`select u.slug from change c join app_user u on u.id = c.changed_by_user_id
+		where c.table_name = 'introduction' and c.record ->> 'id' = $1`,
+		[added.introduction_id],
+	);
+	assert.deepEqual(rows, [{ slug: "joe" }]);
 });
 
 test("an introduction's date, deal and note change from what the partner saw", async () => {
