@@ -93,6 +93,9 @@ const markers = {
 	one_or_more: ["}|", "|{"],
 } as const;
 
+// A blank Mermaid title reserves space for GitHub's expand and copy controls.
+const controlsSpacer = 'title: "\\u00a0"';
+
 function areaPage(area: Area) {
 	const boxes = area.tables.map((table) => `  "${tableName(table)}"`);
 	const lines = area.relations.map((link) => {
@@ -106,14 +109,26 @@ function areaPage(area: Area) {
 	const tables = area.tables.map(
 		(table) => `- [${tableName(table)}](${table}.md)`,
 	);
+	const connections =
+		area.id === "deals"
+			? [...area.neighbors]
+					.sort(([a], [b]) => a.name.localeCompare(b.name, "en"))
+					.map(
+						([other, count]) =>
+							`[${other.name}](viewpoint-${other.id}.md) (${count})`,
+					)
+			: [];
+	const reserveControls = area.id === "people";
 	return [
 		`# ${area.name}`,
 		"",
 		"```mermaid",
 		"---",
+		...(reserveControls ? [controlsSpacer] : []),
 		"config:",
 		"  layout: elk",
 		"  er:",
+		...(reserveControls ? ["    titleTopMargin: 56"] : []),
 		"    nodeSpacing: 22",
 		"    rankSpacing: 44",
 		"---",
@@ -121,6 +136,16 @@ function areaPage(area: Area) {
 		...boxes,
 		...lines,
 		"```",
+		...(connections.length
+			? [
+					"",
+					"## Connects to",
+					"",
+					"Numbers count foreign keys between the two areas.",
+					"",
+					connections.join(" · "),
+				]
+			: []),
 		"",
 		"## Tables",
 		"",
@@ -189,7 +214,8 @@ function masterDrawing(areas: Area[]) {
 	const boxes = groups.flatMap(({ name, areas }, index) =>
 		areas.length > 0
 			? [
-					`  subgraph group${index}["${name}"]`,
+					`  subgraph group${index}[" "]`,
+					`    heading-group${index}["${name}"]:::heading`,
 					...areas.map(({ id, name }) => `    a-${id}["${name}"]`),
 					"  end",
 				]
@@ -208,14 +234,19 @@ function masterDrawing(areas: Area[]) {
 	const links = areas.map(
 		({ id }) => `  click a-${id} href "${areaUrl}/viewpoint-${id}.md"`,
 	);
+	// ELK routes through subgraph titles, so give each heading a node it can route around.
+	const headingOrder = groups.flatMap(({ areas: [first] }, index) =>
+		first ? [`  heading-group${index} ~~~ a-${first.id}`] : [],
+	);
 	const omittedNames = [...omitted]
 		.filter(({ id }) => id !== "users-jobs")
 		.map(({ name }) => name);
 	const notes = [];
-	if ([...omitted].some(({ id }) => id === "users-jobs")) {
+	const users = [...omitted].find(({ id }) => id === "users-jobs");
+	if (users) {
 		notes.push(
 			"",
-			"Almost every area records who made each row (Users and jobs).",
+			`The Users and jobs area connects to ${users.neighbors.size} other areas, mostly through audit fields. Some links record ownership, such as who owns a Doc conversation.`,
 		);
 	}
 	if (omittedNames.length) {
@@ -224,12 +255,31 @@ function masterDrawing(areas: Area[]) {
 		);
 		notes.push("", `The same rule omits lines to ${names}.`);
 	}
+	const deals = [...omitted].find(({ id }) => id === "deals");
+	if (deals) {
+		const keyIds = ["imported-deals", "offers", "leases"];
+		const keyConnections = [...deals.neighbors]
+			.filter(([area]) => keyIds.includes(area.id))
+			.sort(([a], [b]) => keyIds.indexOf(a.id) - keyIds.indexOf(b.id))
+			.map(([area, count]) => `${area.name} (${count})`);
+		if (keyConnections.length) {
+			const names = new Intl.ListFormat("en", { type: "conjunction" }).format(
+				keyConnections,
+			);
+			notes.push(
+				"",
+				`Deals connects to ${names}. See [Deals](tables/viewpoint-deals.md#connects-to) for all its connections.`,
+			);
+		}
+	}
 	return [
 		"```mermaid",
 		"---",
+		controlsSpacer,
 		"config:",
 		"  layout: elk",
 		"  flowchart:",
+		"    titleTopMargin: 56",
 		"    htmlLabels: false",
 		"    diagramPadding: 8",
 		"    nodeSpacing: 25",
@@ -239,6 +289,8 @@ function masterDrawing(areas: Area[]) {
 		...boxes,
 		...lines,
 		...links,
+		...headingOrder,
+		"  classDef heading fill:none,stroke:none,font-weight:bold",
 		"```",
 		...notes,
 	].join("\n");

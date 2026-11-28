@@ -92,12 +92,43 @@ test("the master omits widely shared links and keeps all area boxes", () => {
 	assert.match(master, /a-people\["people"\]/);
 	assert.match(
 		master,
-		/Almost every area records who made each row \(Users and jobs\)/,
+		/Users and jobs area connects to 6 other areas, mostly through audit fields/,
 	);
 	assert.match(master, /The same rule omits lines to people\./);
 	assert.deepEqual(master.match(/^ {2}.+ ---\|.+$/gm), [
 		"  a-deals ---|1| a-doc",
 	]);
+});
+
+test("the master names key Deals connections and the area page links to every neighbor", () => {
+	const viewpoints = [
+		["deals", "Deals"],
+		["imported-deals", "Imported deals"],
+		["offers", "Offers"],
+		["leases", "Leases"],
+		["people", "People"],
+	].map(([id, name]) => ({ id, name, tables: [`next.${id}`] }));
+	const tables = viewpoints.flatMap(({ tables }) =>
+		tables.map((name) => ({ name, type: "BASE TABLE" })),
+	);
+	const relations = [
+		...["imported-deals", "offers", "leases", "people"].map((id) =>
+			foreignKey(id, "deals", "deal_id"),
+		),
+		foreignKey("deals", "offers", "accepted_offer_id"),
+	];
+	const { master, pages } = drawDatabase({ tables, viewpoints, relations });
+	assert.match(
+		master,
+		/Deals connects to Imported deals \(1\), Offers \(2\), and Leases \(1\)\./,
+	);
+	const deals = pages.find(
+		({ file }) => file === "viewpoint-deals.md",
+	)?.markdown;
+	assert(deals);
+	assert.match(deals, /## Connects to/);
+	assert.match(deals, /\[Offers\]\(viewpoint-offers\.md\) \(2\)/);
+	assert.match(deals, /\[People\]\(viewpoint-people\.md\) \(1\)/);
 });
 
 test("self-reference labels leave room for their cardinality markers", () => {

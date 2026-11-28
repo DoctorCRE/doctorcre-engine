@@ -5,23 +5,27 @@ Each box is an area of the database. The number on each line counts the foreign 
 <!-- Begin master drawing -->
 ```mermaid
 ---
+title: "\u00a0"
 config:
   layout: elk
   flowchart:
+    titleTopMargin: 56
     htmlLabels: false
     diagramPadding: 8
     nodeSpacing: 25
     rankSpacing: 35
 ---
 flowchart TB
-  subgraph group0["People and clients"]
+  subgraph group0[" "]
+    heading-group0["People and clients"]:::heading
     a-people["People"]
     a-relationships["Relationships"]
     a-clients["Clients"]
     a-vendors-territories["Vendors and territories"]
     a-leads["Leads"]
   end
-  subgraph group1["Deals and property"]
+  subgraph group1[" "]
+    heading-group1["Deals and property"]:::heading
     a-deals["Deals"]
     a-imported-deals["Imported deals"]
     a-property["Property"]
@@ -30,14 +34,16 @@ flowchart TB
     a-tours["Tours"]
     a-website["Client websites"]
   end
-  subgraph group2["Mail and activity"]
+  subgraph group2[" "]
+    heading-group2["Mail and activity"]:::heading
     a-email["Email"]
     a-documents["Documents"]
     a-activity["Activity"]
     a-home-calendar["Home and calendar"]
     a-doc["Doc"]
   end
-  subgraph group3["Marketing and billing"]
+  subgraph group3[" "]
+    heading-group3["Marketing and billing"]:::heading
     a-marketing-posts["Marketing posts"]
     a-marketing-categories["Marketing categories"]
     a-marketing-review["Marketing review"]
@@ -45,7 +51,8 @@ flowchart TB
     a-invoices["Invoices"]
     a-commissions["Commissions"]
   end
-  subgraph group4["Users and records"]
+  subgraph group4[" "]
+    heading-group4["Users and records"]:::heading
     a-users-jobs["Users and jobs"]
     a-changes-preferences["Changes and preferences"]
   end
@@ -111,11 +118,19 @@ flowchart TB
   click a-website href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-website.md"
   click a-users-jobs href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-users-jobs.md"
   click a-changes-preferences href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-changes-preferences.md"
+  heading-group0 ~~~ a-people
+  heading-group1 ~~~ a-deals
+  heading-group2 ~~~ a-email
+  heading-group3 ~~~ a-marketing-posts
+  heading-group4 ~~~ a-users-jobs
+  classDef heading fill:none,stroke:none,font-weight:bold
 ```
 
-Almost every area records who made each row (Users and jobs).
+The Users and jobs area connects to 24 other areas, mostly through audit fields. Some links record ownership, such as who owns a Doc conversation.
 
 The same rule omits lines to People and Deals.
+
+Deals connects to Imported deals (9), Offers (7), and Leases (4). See [Deals](tables/viewpoint-deals.md#connects-to) for all its connections.
 <!-- End master drawing -->
 
 Select a box to open its drawing on the main branch, or use the [area and table index](tables/README.md) to browse this version. Each area drawing labels its lines with the columns that link the tables. For columns, cross-area references, and constraints, open a table page or see [the schema](../../schema/next.sql).
