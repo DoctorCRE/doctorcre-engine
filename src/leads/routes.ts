@@ -8,6 +8,7 @@ import {
 } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readLeadBoard, readNextLeadBoard } from "./board.ts";
+import { readLeadCounts } from "./counts.ts";
 import {
 	historyCursors,
 	readLeadDetail,
@@ -58,6 +59,12 @@ leads.get("/leads", async (c) => {
 			? new Refusal(422, "unhandled_verb_failure")
 			: board;
 	});
+});
+
+leads.get("/leads/counts", async (c) => {
+	const refused = checkFields(new URL(c.req.url).searchParams, []);
+	if (refused) return refuse(c, refused);
+	return answerNextRead(c, "lead-counts", readLeadCounts);
 });
 
 leads.get("/quiet-follow-ups", async (c) => {

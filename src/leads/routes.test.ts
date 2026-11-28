@@ -19,6 +19,7 @@ const request = (path: string) => (search: string, connectionString: string) =>
 	);
 const board = request("leads");
 const quiet = request("quiet-follow-ups");
+const counts = request("leads/counts");
 
 async function refusal(response: Response) {
 	const { correlation_id, ...body } = (await response.json()) as {
@@ -37,6 +38,56 @@ const generic = {
 	error: "unhandled_verb_failure",
 	hint: "The operation failed. Quote the correlation_id when reporting it.",
 };
+
+test("lead counts take no fields and answer only a known partner", () =>
+	withSnapshot(async (url) => {
+		assert.deepEqual(
+			await refusal(
+				await counts("?owner_slug=joe", "postgres://made-up@127.0.0.1:1/none"),
+			),
+			[
+				400,
+				{
+					error: "unregistered_operation_fields",
+					hint: "Remove fields outside the documented input.",
+					fields: ["owner_slug"],
+				},
+			],
+		);
+		assert.deepEqual(await refusal(await counts("", url)), [
+			422,
+			{
+				error: "unauthenticated",
+				hint: "The authenticated actor could not be resolved.",
+			},
+		]);
+		const db = new pg.Client({
+			connectionString: url,
+			options: "-c search_path=next",
+		});
+		await db.connect();
+		try {
+			await db.query(`select set_config('engine.job', 'old_system', false);
+				with p as (insert into party (kind, name) values ('person', 'Example Partner') returning id)
+				insert into app_user (id, slug) select id, 'leads-route-partner' from p;
+				insert into how_found (slug, label) values ('referral', 'Referral');
+				insert into role (slug, label) values ('lead', 'Lead');
+				insert into stage (role, slug, label) values ('lead', 'new', 'New');
+				with p as (insert into party (kind, name, how_found)
+					values ('person', 'Example', 'referral') returning id)
+				insert into party_role (party_id, role, stage, created_at)
+					select id, 'lead', 'new', '2020-01-01' from p`);
+		} finally {
+			await db.end();
+		}
+		const response = await counts("", url);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
+			schema_version: "lead-counts.v1",
+			new_from_email: 0,
+			follow_ups_late: 1,
+		});
+	}, process.env.TEST_COPY_SNAPSHOT));
 
 test("quiet follow-ups refuse reserved fields, then unknown fields, then bad numbers, then a bad owner, before any read", async () => {
 	const unread = "postgres://made-up@127.0.0.1:1/none";

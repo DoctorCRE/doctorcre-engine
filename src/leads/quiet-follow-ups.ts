@@ -40,11 +40,7 @@ const OPEN_STAGES = [
 
 const today = chicagoDay(sql`now()`);
 
-const proposals = (
-	db: Transaction<DB>,
-	cadence: Cadence,
-	ownerSlug: string | null,
-) =>
+export const quietProposals = (cadence: Cadence, ownerSlug: string | null) =>
 	sql<Proposal>`with subjects as (
 		select r.role as subject_type, coalesce(legacy.value, p.id::text) as subject_id, p.id as party_id,
 			coalesce(legacy.registry_ref, vendor.ref, legacy.value, p.id::text) as ref,
@@ -97,15 +93,15 @@ const proposals = (
 		${today} - d.due_on as days_overdue
 	from due d
 	where d.due_on <= ${today}
-	order by d.due_on, d.subject_type, d.subject_id
-	limit ${LIMIT + 1}`.execute(db);
+	order by d.due_on, d.subject_type, d.subject_id`;
 
 export async function readQuietFollowUps(
 	db: Transaction<DB>,
 	cadence: Cadence,
 	ownerSlug: string | null,
 ) {
-	const { rows } = await proposals(db, cadence, ownerSlug);
+	const { rows } = await sql<Proposal>`${quietProposals(cadence, ownerSlug)}
+		limit ${LIMIT + 1}`.execute(db);
 	if (rows.length > LIMIT) return { error: "limit_exceeded" } as const;
 	return {
 		schema_version: "quiet-follow-ups.v1",

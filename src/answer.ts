@@ -314,6 +314,7 @@ export type Verb =
 	| "get-deal-room"
 	| "ideal-client-profile"
 	| "lead-board"
+	| "lead-counts"
 	| "list-deal-tours"
 	| "list-practice-origination"
 	| "quiet-follow-ups"
