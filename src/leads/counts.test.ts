@@ -134,13 +134,15 @@ test("a quiet lead due today is not late yet", () =>
 	withRollback(async (tx) => {
 		await seed(tx);
 		await lead(tx, 10);
+		// Noon on a Chicago day, so no hour of the real clock or daylight saving moves it.
 		await sql`with contact as (insert into activity (kind, happened_at, summary)
-				values ('call', now() - interval '45 days', 'Example touch') returning id)
+				values ('call', ((now() at time zone 'America/Chicago')::date - 45 + time '12:00')
+					at time zone 'America/Chicago', 'Example touch') returning id)
 			insert into activity_about (activity_id, party_id) select id, ${uuid(10)} from contact`.execute(
 			tx,
 		);
 		assert.equal((await readLeadCounts(tx)).follow_ups_late, 0);
-		await sql`update activity set happened_at = now() - interval '46 days'`.execute(
+		await sql`update activity set happened_at = happened_at - interval '1 day'`.execute(
 			tx,
 		);
 		assert.equal((await readLeadCounts(tx)).follow_ups_late, 1);
