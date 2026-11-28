@@ -34,14 +34,14 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 The owner approved the timeline design on 2026-11-25, with every change it proposed. Timeline draws every open deal in time, using the same plan as each deal's [Plan](#plan) tab.
 
-- [ ] Timeline is a third view after Board and List. Its controls sit in the top bar, so the first deal starts 100px from the top. 14 deal rows fit at 1280x640 and 22 at 1440x900.
+- [ ] Timeline is a third view after Board and List. Its controls sit in the top bar, so the first deal starts 100px from the top. 14 deal rows fit at 1280x640 and 22 at 1440x900. Closed deals and Lost deals stay in the view picker.
 - [ ] One folded row per open deal shows its name, the "Needs attention" dot when there is one, its phase and its deal owner. The row's bar is the deal's phases end to end, each in its phase color: bright for time spent, dim for expected. A hollow diamond marks the expected lease signing with its date and "exp.".
 - [ ] Opening a deal's row shows its current phase's to-dos, steps and critical dates with the same bars and arrows as its Plan. The deal's name opens the deal page.
 - [ ] Deals sort furthest along first, Closing at the top. The other sorts are by deal owner and by expected signing. All, Joe and Dell choose whose deals show.
 - [ ] Week and Month zoom. The left list has Milestones (the next critical dates and expected signings, each with its deal's name) and the saved views My deals, At risk and Next two weeks.
 - [ ] A stale deal shows one solid bar and how long it has sat, such as "148 days in Prospective Client", with nothing expected.
 - [ ] Dragging a step's end there moves its due date, as on Plan.
-- [ ] On a phone the chart stays, with a narrow name column and no dragging.
+- [ ] On a phone the chart stays, with a narrow name column and no dragging. Deal names wrap to two lines. Opening the deal shows its full name.
 
 A Leases ending lane at the bottom waits until the first lease ending is recorded.
 
@@ -166,7 +166,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 
 ## Deal page
 
-The owner approved this design on 2026-11-25, with every change it proposed. On a computer the page does not scroll at 1280x640 or 1440x900; a long region scrolls inside itself. Every scrolling region shows no scroll bar at rest and a thin, faint thumb only while it scrolls, as the board's columns do.
+The owner approved this design on 2026-11-25, with every change it proposed. On a computer the page does not scroll at 1280x599, 1280x640 or 1440x900; a long region scrolls inside itself. Every scrolling region shows no scroll bar at rest and a thin, faint thumb only while it scrolls, as the board's columns do.
 
 ### Header
 
@@ -180,7 +180,7 @@ Overview answers four questions on one screen: which dates matter, where the dea
 
 - [ ] Critical dates are the first row under the tabs, soonest first, in one row that never wraps. Each tile shows the date's name in plain words, the date in words and how far off it is. Within 7 days the count turns amber, and past due it turns red. More dates than fit scroll the row sideways. The last tile is **+**, which adds a date; Phase effective date is one of its kinds. A deal with no dates shows one line with **Add date**.
 - [ ] A proposed date, such as one read from a lease, says "proposed" and has **Confirm** on its tile. Opening a tile offers Confirm or Drop for a proposed date, and Mark done, Drop or Passed for a confirmed one, each with a reason. Only a partner's click decides.
-- [ ] The path shows every phase as a tile, Prospective Client to Closed, left to right with an arrow between each. The current phase's tile is brighter and wider, has an orange top edge and counts its finished to-dos, such as "1 of 3". A finished phase has a check beside its name.
+- [ ] On a computer the path is one fixed-height row. It shows the current phase and its nearest earlier and later phases. A count on either side opens the remaining phases without resizing the row. The current phase's tile is brighter and wider, has an orange top edge and counts its finished to-dos, such as "1 of 3". A finished phase has a check beside its name.
 - [ ] Each tile lists that phase's to-dos from the checklist read. The read lists the eight phases and puts Invoice's items on Closed. A tile shows its first two unfinished to-dos and folds the rest under "N more", which opens them, so Overview fits one laptop screen (2026-11-28). Labels are plain words such as "Lease expiration for renewal", "Invoice" and "Commission received". To-dos tick themselves from what is filed and recorded; a partner never ticks one. A finished to-do has a green mark, one with a date shows it in words, and a late one is red and says why. Commission received is finished when every saved payment has a receipt date. Prospective Client and Due Diligence say "Nothing listed" until the partners' workflow table fills them. See [Checklist under the phases](../new-database.md#checklist-under-the-phases).
 - [ ] Clicking a to-do opens it: its document, its date, or what is still missing.
 - [ ] Clicking a phase name asks "Move this deal to Legal?" with an optional "What changed" line, **Move to Legal** and **Cancel**. Nothing moves without the second click. It asks for no next step and no critical date.
@@ -212,9 +212,9 @@ The redesign removed Mark needs attention, deal watch settings (every deal is wa
 
 ### Plan
 
-Plan answers "when, and are we on pace". It draws the deal's checklist and steps in time, one row each under its phase, with what is recorded solid and what is expected dashed. The engine lays it out; see [Deal plan](../new-database.md#deal-plan). On a computer it fills the page below the tabs and the chart scrolls both ways inside itself.
+Plan answers "when, and are we on pace". It draws the deal's checklist and steps in time, one row each under its phase, with what is recorded solid and what is expected dashed. The engine lays it out; see [Deal plan](../new-database.md#deal-plan). Plan fills the space below the tabs. The chart and the milestones list scroll inside their own columns, and the outer page stays in place.
 
-- [ ] Plan is the second tab, after Overview. Overview's path does not change.
+- [ ] Plan is the second tab, after Overview. It appears when the deal read supplies a plan.
 - [ ] The left list has one row per to-do, step and critical date under its phase, each with a mark, its name and a date: a green check for finished, a filled ring for the to-do the deal is on, a dashed ring for expected, the owner's initial for a step, a diamond for a critical date, and a red **!** for a late step or anything at risk.
 - [ ] Each phase row folds, shows its count such as "1 of 3" and a thin bar over the phase's days. Finished phases start folded. The fold is remembered on the device.
 - [ ] Time runs along the top with Day, Week and Month. Weekends are shaded. An orange pill and line mark today, and **Today** brings it back into view.
@@ -229,8 +229,8 @@ Plan answers "when, and are we on pace". It draws the deal's checklist and steps
 - [ ] Clicking a bar opens it on the right. A step offers Mark done and Change date. A critical date offers Confirm or Mark done, and Drop. A to-do shows its facts and offers Set your own date.
 - [ ] Dragging a step's end moves its due date through the same save Home and Calendar use. Dragging an expected bar's end sets the partner's own date for that to-do on this deal, and what follows moves with it while dragging. A dashed outline keeps the old place and a label gives the new date.
 - [ ] Letting go saves. The footer says what changed, such as "Terms comparison: expected by Mon, Dec 14. What follows moved with it.", with **Undo**. **Reset to typical** clears the deal's own dates after one confirmation.
-- [ ] A critical date, a bar's start, a finished bar and a phase bar never drag. A drag cannot set a past day. Dragging works at Day and Week zoom only. With the keyboard, a focused bar's end moves a day with the arrow keys and a week with Shift; Enter saves and Esc cancels.
-- [ ] Either partner can drag either partner's step. If the step changed since the page loaded, it says "This step changed. Review the latest version." and reloads.
+- [ ] A critical date, a bar's start, a finished bar and a phase bar never drag. A drag cannot set a past day. Dragging works at Day and Week zoom only. With the keyboard, a focused bar's end moves a day with the arrow keys and a week with Shift. Enter saves and Esc cancels. A filtered row keeps its focused grip until the save settles, then focus returns to the row in the chart.
+- [ ] Either partner can drag either partner's step. A conflicting step edit says "This step changed. Review the latest version." and reloads. Undo restores a step date only while that save is still the latest version of the step.
 - [ ] **Typical lengths**, bottom left, opens the table of typical days per to-do. A partner edits any number there and it saves; no confirmation step. Once a to-do has five finished examples, the measured number shows beside it with **Use measured**, and nothing changes without that click.
 - [ ] The current phase's tile on Overview gains one quiet line, such as "Lease signing expected Mar 5", which opens Plan.
 - [ ] Expected dates never show on Home or Calendar.

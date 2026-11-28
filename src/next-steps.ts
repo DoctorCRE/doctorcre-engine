@@ -89,6 +89,7 @@ const NEW_STEP = {
 const STEP_CHANGES = {
 	idempotency_key: isUuid,
 	seen_change_id: isChangeId,
+	strict_version: optional((value): value is true => value === true),
 	...STEP_FIELDS,
 	item_bullets: optional(isBullets),
 };
@@ -339,6 +340,7 @@ async function changeStep(
 		idempotency_key: _,
 		next_step_id,
 		seen_change_id,
+		strict_version,
 		item_bullets,
 		...fields
 	} = request;
@@ -347,6 +349,8 @@ async function changeStep(
 			? fields
 			: { ...fields, item_bullets: JSON.stringify(item_bullets) };
 	const step = await lockStep(tx, next_step_id);
+	if (strict_version)
+		await checkStepVersion(tx, next_step_id, seen_change_id, false);
 	const keys = Object.keys(changes);
 	const unseen = await unseenChanges(
 		tx,
@@ -371,15 +375,24 @@ async function changeStep(
 				.where("id", "=", next_step_id)
 				.execute(),
 	);
+	const answer = await seenAnswer(
+		tx,
+		"next_step",
+		next_step_id,
+		seen_change_id,
+		unseen,
+	);
+	const intervening = unseen.at(-1);
+	const written =
+		intervening === undefined
+			? null
+			: await latestChange(tx, "next_step", next_step_id);
 	return {
 		next_step_id,
-		...(await seenAnswer(
-			tx,
-			"next_step",
-			next_step_id,
-			seen_change_id,
-			unseen,
-		)),
+		...answer,
+		...(written !== null && intervening !== undefined && written > intervening
+			? { write_change_id: written }
+			: {}),
 	};
 }
 
