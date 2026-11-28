@@ -169,13 +169,15 @@ before(async () => {
 		insert into commission_tier (user_id, from_deal, partner_user_id, closing_share)
 		values ('${id(2)}', 1, '${id(1)}', 0.8);
 		insert into commission (deal_id, expected, gross)
-		values ('${id(31)}', null, 200), ('${id(33)}', 20, 100), ('${id(34)}', null, 200);
+		values ('${id(31)}', null, 200), ('${id(33)}', 20, 100), ('${id(34)}', null, 300);
 		insert into commission_payment (id, deal_id, amount, invoiced_on, received_on)
 		values ('${id(87)}', '${id(31)}', 100, '2025-02-01', '2025-02-03'),
 			('${id(88)}', '${id(31)}', 100, '2025-02-02', '2025-02-03'),
 			('${id(89)}', '${id(33)}', 100, '2025-02-01', '2025-02-03'),
 			('${id(93)}', '${id(34)}', 100, '2025-02-01', '2025-02-03'),
 			('${id(94)}', '${id(34)}', 100, '2025-02-02', null);
+		insert into commission_payment (id, deal_id, amount, created_at)
+		values ('${id(96)}', '${id(34)}', 100, '2020-01-01');
 		insert into next_step (deal_id, what, resolution, created_at, done_at)
 		values ('${id(32)}', 'Example confirm terms', 'done', '2025-02-01T03:00:00Z', '2025-02-04T18:00:00Z');
 		update deal set closed_value = 1250, parking_reason = 'other', parking_note = 'Example waiting for plans'
@@ -888,6 +890,7 @@ test("the deal read dates each invoice from the signed lease or the purchase clo
 				payments: [
 					{ id: id(93), sent_on: "2025-02-01", paid_on: "2025-02-03" },
 					{ id: id(94), sent_on: "2025-02-02", paid_on: null },
+					{ id: id(96), sent_on: null, paid_on: null },
 				],
 			},
 		],

@@ -120,7 +120,7 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 						asText(eb.ref("payment.received_on")).as("received_on"),
 					])
 					.whereRef("payment.deal_id", "=", "d.id")
-					.orderBy("payment.invoiced_on", (o) => o.asc().nullsLast())
+					.orderBy("payment.invoiced_on")
 					.orderBy("payment.created_at")
 					.orderBy("payment.id"),
 			).as("commissions"),

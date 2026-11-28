@@ -1,6 +1,22 @@
-import { dealTypeOf, LEASED } from "./checklist.ts";
+import { type DealType, dealTypeOf } from "./checklist.ts";
 
-type InvoiceTrigger = "lease_signed" | "purchase_closed";
+const LEASE_SIGNED = {
+	trigger: "lease_signed",
+	fact: "lease_executed_on",
+} as const;
+const PURCHASE_CLOSED = {
+	trigger: "purchase_closed",
+	fact: "closed_on",
+} as const;
+const INVOICE_OF_TYPE = {
+	lease: LEASE_SIGNED,
+	renewal: LEASE_SIGNED,
+	purchase: PURCHASE_CLOSED,
+	land: PURCHASE_CLOSED,
+} satisfies Record<
+	DealType,
+	{ trigger: string; fact: "lease_executed_on" | "closed_on" }
+>;
 
 type Facts = {
 	type: string | null;
@@ -14,26 +30,12 @@ type Facts = {
 };
 
 // Triggered is read from saved facts, never stored: a lease deal's signed lease, or an owned deal's close.
-export function invoiceOf({
-	type,
-	lease_executed_on,
-	closed_on,
-	payments,
-}: Facts) {
+export function invoiceOf({ type, payments, ...facts }: Facts) {
 	const dealType = dealTypeOf(type);
-	const trigger: InvoiceTrigger | null = !dealType
-		? null
-		: LEASED.includes(dealType)
-			? "lease_signed"
-			: "purchase_closed";
+	const invoice = dealType ? INVOICE_OF_TYPE[dealType] : null;
 	return {
-		trigger,
-		triggered_on:
-			trigger === "lease_signed"
-				? lease_executed_on
-				: trigger === "purchase_closed"
-					? closed_on
-					: null,
+		trigger: invoice?.trigger ?? null,
+		triggered_on: invoice ? facts[invoice.fact] : null,
 		payments: payments.map(({ id, invoiced_on, received_on }) => ({
 			id,
 			sent_on: invoiced_on,

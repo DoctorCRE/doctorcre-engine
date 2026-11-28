@@ -24,7 +24,7 @@ export const SOURCES = [
 
 const [KIT, KIT_TOURS, DILIGENCE, LAND, SELLER] = SOURCES;
 const ANY = null;
-export const LEASED: DealType[] = ["lease", "renewal"];
+const LEASED: DealType[] = ["lease", "renewal"];
 const OWNED: DealType[] = ["purchase", "land"];
 type Source = (typeof SOURCES)[number];
 type RecordSource = { request?: string; record_verb: string };
