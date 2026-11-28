@@ -145,11 +145,11 @@ The engine owns the [conversation and turn contract](../new-database.md#doc-conv
 
 App files are in `doctorcre-app`. Tables below are in `next`. Paths in the table start at `/api/engine/doc`.
 
-| Screen part | App file | Engine door | Tables |
-| --- | --- | --- | --- |
-| Chat list, heading, timestamps and marks | `doc-chats.html`, `src/ui/doc-chat.tsx`, `css/doc-chats.css` | `GET /conversations` | `doc_conversation`, `doc_turn` |
-| Conversation, waiting line, source and match chips | `src/ui/doc-chat.tsx`, `css/doc-chats.css` | `GET /conversations/{id}` | `doc_conversation`, `doc_turn`, `doc_link`, `save_receipt`, `reply_draft`, `email_mailbox` |
-| Typing box, Send and Retry | `src/ui/doc-chat.tsx`, `src/ui/device-text.ts` | `POST /turns` | `doc_conversation`, `doc_turn`, `doc_link`, `reply_draft`, `email_mailbox` |
-| Record picker | `src/ui/doc-chat.tsx`, `css/doc-chats.css` | `GET /records?query=` | `deal`, `party`, `party_role`, `client`, `outside_id`, `deal_party`, `party_company`, `party_email` |
-| Save card and receipt | `src/ui/doc-chat.tsx` | `POST /turns/{id}/confirmation` | `doc_turn`, `save_receipt`, `activity`, `activity_about`, `next_step`, `reply_draft`, `email_mailbox` |
-| Mac status and Settings link code | `src/ui/doc-link.ts`, `src/ui/doc-link-settings.tsx`, `src/ui/doc-chat.tsx` | `GET /link`, `POST /link`, `POST /link/revoke` | `doc_link` |
+| Screen part                                        | App file                                                                    | Engine door                                    | Tables                                                                                                |
+| -------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Chat list, heading, timestamps and marks           | `doc-chats.html`, `src/ui/doc-chat.tsx`, `css/doc-chats.css`                | `GET /conversations`                           | `doc_conversation`, `doc_turn`                                                                        |
+| Conversation, waiting line, source and match chips | `src/ui/doc-chat.tsx`, `css/doc-chats.css`                                  | `GET /conversations/{id}`                      | `doc_conversation`, `doc_turn`, `doc_link`, `save_receipt`, `reply_draft`, `email_mailbox`            |
+| Typing box, Send and Retry                         | `src/ui/doc-chat.tsx`, `src/ui/device-text.ts`                              | `POST /turns`                                  | `doc_conversation`, `doc_turn`, `doc_link`, `reply_draft`, `email_mailbox`                            |
+| Record picker                                      | `src/ui/doc-chat.tsx`, `css/doc-chats.css`                                  | `GET /records?query=`                          | `deal`, `party`, `party_role`, `client`, `outside_id`, `deal_party`, `party_company`, `party_email`   |
+| Save card and receipt                              | `src/ui/doc-chat.tsx`                                                       | `POST /turns/{id}/confirmation`                | `doc_turn`, `save_receipt`, `activity`, `activity_about`, `next_step`, `reply_draft`, `email_mailbox` |
+| Mac status and Settings link code                  | `src/ui/doc-link.ts`, `src/ui/doc-link-settings.tsx`, `src/ui/doc-chat.tsx` | `GET /link`, `POST /link`, `POST /link/revoke` | `doc_link`                                                                                            |
