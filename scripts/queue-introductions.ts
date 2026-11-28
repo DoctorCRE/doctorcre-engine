@@ -21,15 +21,37 @@ export async function main() {
 	try {
 		const tx = await db.startTransaction().execute();
 		try {
-			await sql`select set_config('engine.job', 'mail_capture', true)`.execute(
-				tx,
-			);
-			const {
-				rows: [ownership],
-			} = await sql<{ owner: boolean }>`
-				select current_user = pg_get_userbyid(relowner) as owner from pg_class where oid = 'next.email'::regclass
-			`.execute(tx);
-			if (!ownership?.owner) throw new Error("Schema owner required");
+			if (dryRun) {
+				await sql`set transaction read only`.execute(tx);
+				const {
+					rows: [access],
+				} = await sql<{
+					restricted: boolean;
+				}>`select row_security_active('next.doc_judgment_job') as restricted`.execute(
+					tx,
+				);
+				if (access?.restricted)
+					throw new Error(
+						"Dry run needs read access to all introduction jobs.",
+					);
+			} else {
+				const {
+					rows: [installed],
+				} = await sql<{ present: boolean }>`
+					select to_regprocedure('next.queue_introduction(uuid)') is not null as present
+				`.execute(tx);
+				if (!installed?.present)
+					throw new Error("Install schema/add-introduction-job.sql first.");
+				const {
+					rows: [ownership],
+				} = await sql<{ owner: boolean }>`
+					select current_user = pg_get_userbyid(relowner) as owner from pg_class where oid = 'next.email'::regclass
+				`.execute(tx);
+				if (!ownership?.owner) throw new Error("Schema owner required.");
+				await sql`select set_config('engine.job', 'mail_capture', true)`.execute(
+					tx,
+				);
+			}
 			let cursor = "00000000-0000-0000-0000-000000000000";
 			let eligible = 0;
 			let queued = 0;
@@ -64,9 +86,10 @@ export async function main() {
 				for (const row of rows) {
 					if (!matches.has(row.activity_id)) continue;
 					eligible++;
-					await sql`select pg_advisory_xact_lock(hashtextextended('email ' || ${row.lock_key}, 0))`.execute(
-						tx,
-					);
+					if (!dryRun)
+						await sql`select pg_advisory_xact_lock(hashtextextended('email ' || ${row.lock_key}, 0))`.execute(
+							tx,
+						);
 					const {
 						rows: [existing],
 					} = await sql<{ queued: boolean }>`select exists (
@@ -76,17 +99,18 @@ export async function main() {
 						alreadyQueued++;
 						continue;
 					}
-					await sql`select set_config('engine.user_id', ${row.user_id}, true)`.execute(
-						tx,
-					);
-					await sql`select queue_introduction(${row.activity_id}::uuid)`.execute(
-						tx,
-					);
+					if (!dryRun) {
+						await sql`select set_config('engine.user_id', ${row.user_id}, true)`.execute(
+							tx,
+						);
+						await sql`select queue_introduction(${row.activity_id}::uuid)`.execute(
+							tx,
+						);
+					}
 					queued++;
 				}
 			}
-			if (dryRun) await tx.rollback().execute();
-			else await tx.commit().execute();
+			await tx.commit().execute();
 			process.stdout.write(
 				`eligible,queued,already_queued\n${eligible},${queued},${alreadyQueued}\n${dryRun ? "dry_run" : "applied"}\n`,
 			);
@@ -94,8 +118,17 @@ export async function main() {
 			await tx.rollback().execute();
 			throw error;
 		}
-	} catch {
-		console.error("Introduction queue failed.");
+	} catch (error) {
+		console.error(
+			error instanceof Error &&
+				[
+					"Install schema/add-introduction-job.sql first.",
+					"Schema owner required.",
+					"Dry run needs read access to all introduction jobs.",
+				].includes(error.message)
+				? error.message
+				: "Introduction queue failed.",
+		);
 		process.exitCode = 1;
 	} finally {
 		await db.destroy();
