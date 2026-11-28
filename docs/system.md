@@ -157,6 +157,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Partner sign-in, sessions, and page gates                | [Partner sign-in](sign-in.md)                                                                                                       |
 | Lasting decisions, numbered                              | `docs/decisions.md`                                                                                                                 |
 | Running the check, local database, comparing old and new | `README.md`                                                                                                                         |
+| Database tables and foreign key drawings                 | [Database drawings](database/README.md)                                                                                             |
 | The new database's tables, one line each                 | `docs/new-database.md` § "Records"                                                                                                  |
 | Users, jobs and save stamps                              | § "Users, jobs and who changed what"; § "Change history"                                                                            |
 | Rules the database enforces                              | § "Rules the database enforces"; `schema/next.sql`                                                                                  |

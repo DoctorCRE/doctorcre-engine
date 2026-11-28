@@ -17,12 +17,12 @@ Code, issues, pull requests, commit messages and CI logs are visible to anyone. 
 5. Once the review passes, the coordinator turns on auto-merge, pinned to the head that was reviewed. The merge queue merges the pull request when the check is green. Never push to main.
 6. Work is done when it is merged and you have checked the result where it runs. Say what you checked in the pull request.
 
-Large work is a parent issue with sub-issues. Each sub-issue is one pull request.
+Large work is a parent issue with sub-issues. Each sub-issue gets its own pull request unless it is part of a screen batch. A screen batch puts the remaining approved units of one screen on one branch, in one pull request, with one review.
 
 ## Stay on the task
 
 - Do what the issue says and nothing else. If you notice something else worth doing, open an issue for it and keep going.
-- Keep a pull request under about 400 changed lines, not counting lockfiles and generated files. Split bigger work into sub-issues.
+- Keep a pull request under about 400 changed lines, or about 1,200 for a screen batch. Leave lockfiles and generated files out of both counts. Split bigger work into sub-issues. Fix failing tests inside the batch before review and never skip them.
 - If the check fails on main, fixing it comes before any other work.
 
 ## Choosing how to do something
