@@ -26,13 +26,14 @@ type ModelTask = {
 };
 
 type Backend = {
-	signIn: (binary: string) => Promise<SignInStatus>;
+	signIn: (binary: string, allowTools: boolean) => Promise<SignInStatus>;
 	run: (
 		binary: string,
 		timeout: number,
 		task: ModelTask,
 	) => Promise<LinkOutcome>;
 	personalPlanMessage: string;
+	settingsMessage: string;
 	policyMessage: string;
 };
 
@@ -497,6 +498,7 @@ export const backends = {
 		run: async (binary, timeout, task) =>
 			claudeOutcome(await runClaude(binary, timeout, task.allowTools, task)),
 		personalPlanMessage: ownClaudePlanMessage,
+		settingsMessage: "Check your Claude Code settings, then rerun setup.",
 		policyMessage: "Doc link needs a Mac without managed Claude Code settings.",
 	},
 	codex: {
@@ -506,6 +508,8 @@ export const backends = {
 		},
 		run: runCodex,
 		personalPlanMessage: "Doc needs your own ChatGPT plan.",
+		settingsMessage:
+			"Codex could not check your settings. Fix or reset them, then rerun setup.",
 		policyMessage:
 			"Mail judgment needs a Mac without managed Codex settings or Codex home instructions.",
 	},

@@ -4,6 +4,9 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
+const path = join(import.meta.dirname, "user-settings.json");
+const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+const isolated = args.includes("--setting-sources");
 const emit = (event: unknown) =>
 	process.stdout.write(`${JSON.stringify(event)}\n`);
 const finished = (result: unknown) =>
@@ -17,11 +20,6 @@ const finished = (result: unknown) =>
 if (args.includes("auth")) {
 	const capture = join(import.meta.dirname, "auth-args.json");
 	if (existsSync(capture)) appendFileSync(capture, `${JSON.stringify(args)}\n`);
-	const path = join(import.meta.dirname, "user-settings.json");
-	const settings = existsSync(path)
-		? JSON.parse(readFileSync(path, "utf8"))
-		: {};
-	const isolated = args.includes("--setting-sources");
 	emit({
 		loggedIn: !(isolated && settings.fixtureIsolatedSignedOut),
 		authMethod:
@@ -32,9 +30,10 @@ if (args.includes("auth")) {
 	});
 } else {
 	const input = JSON.parse(readFileSync(0, "utf8"));
+	const probe = input.readiness === true;
 	const question = input.turn?.question ?? input.subject;
 	let prompt = "";
-	if (!input.turn) {
+	if (probe ? isolated : !input.turn) {
 		const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
 		assert.equal(valueAfter("--setting-sources"), "");
 		assert.deepEqual(JSON.parse(valueAfter("--settings") ?? ""), {
@@ -50,10 +49,15 @@ if (args.includes("auth")) {
 		});
 		assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
 		prompt = valueAfter("--system-prompt") ?? "";
-		assert.match(prompt, /untrusted data/);
-		assert.ok(!prompt.includes(input.body));
+		if (!probe) {
+			assert.match(prompt, /untrusted data/);
+			assert.ok(!prompt.includes(input.body));
+		}
 	}
-	if (question === "Expired sign-in") {
+	if (probe) {
+		assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
+		finished({ ready: true });
+	} else if (question === "Expired sign-in") {
 		emit({ type: "assistant", error: "authentication_failed" });
 		emit({ type: "result", subtype: "error_during_execution", is_error: true });
 		process.exitCode = 1;

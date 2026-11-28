@@ -175,7 +175,11 @@ test("Doc link migration, private credentials and Mac polling", {
 		await db.query(await readSchema("add-doc-link.sql"));
 		await db.query(await readSchema("add-doc-link-readiness.sql"));
 		await db.query(await readSchema("add-doc-link-backend.sql"));
-		await db.query(await readSchema("add-doc-link-readiness-by-kind.sql"));
+		const readinessMigration = await readSchema(
+			"add-doc-link-readiness-by-kind.sql",
+		);
+		await db.query(readinessMigration);
+		await db.query(readinessMigration);
 
 		assert.equal((await send({})).status, 401);
 		assert.equal((await send(first, "POST")).status, 403);

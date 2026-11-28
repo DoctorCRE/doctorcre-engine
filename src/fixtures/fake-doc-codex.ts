@@ -17,6 +17,13 @@ if (command === "--version") {
 	assert.equal(args[0], "status");
 	assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
 	assert.equal(process.env.OPENAI_API_KEY, undefined);
+	if (variant === "malformed-config") {
+		assert.equal(
+			readFileSync(join(process.env.CODEX_HOME ?? "", "config.toml"), "utf8"),
+			"[features\n",
+		);
+		process.exit(1);
+	}
 	console.error(
 		variant === "signed-out"
 			? "Not logged in"
@@ -47,6 +54,8 @@ if (command === "--version") {
 } else {
 	assert.equal(command, "exec");
 	const input = JSON.parse(readFileSync(0, "utf8"));
+	const probe = input.readiness === true;
+	const isolated = probe ? process.cwd() === "/" : !input.turn;
 	const prompt =
 		args.find((arg) => arg.startsWith("developer_instructions=")) ?? "";
 	assert.ok(args.includes("--ephemeral"));
@@ -61,13 +70,13 @@ if (command === "--version") {
 		"project_doc_max_bytes=0",
 	];
 	for (const flag of isolationFlags)
-		assert.equal(args.includes(flag), !input.turn, flag);
-	assert.equal(args.includes("--sandbox"), !input.turn);
+		assert.equal(args.includes(flag), isolated, flag);
+	assert.equal(args.includes("--sandbox"), isolated);
 	const disabled = args.flatMap((arg, index) =>
 		arg === "--disable" ? [args[index + 1]] : [],
 	);
 	for (const feature of ["shell_tool", "apps", "plugins", "hooks"])
-		assert.equal(disabled.includes(feature), !input.turn, feature);
+		assert.equal(disabled.includes(feature), isolated, feature);
 	assert.ok(!args.includes("--enable"));
 
 	if (variant === "partner-config") {
@@ -79,7 +88,13 @@ if (command === "--version") {
 	}
 
 	const mcp = args.find((arg) => arg.startsWith("mcp_servers"));
-	if (input.turn) {
+	if (probe) {
+		assert.equal(mcp, isolated ? "mcp_servers={}" : undefined);
+		assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
+		assert.match(prompt, /Doc readiness check/);
+		if (variant === (isolated ? "mail-probe-fails" : "chat-probe-fails"))
+			process.exit(1);
+	} else if (input.turn) {
 		assert.match(prompt, /Use validate_answer/);
 		assert.match(
 			mcp ?? "",
@@ -123,28 +138,30 @@ if (command === "--version") {
 		process.exitCode = 1;
 	} else {
 		message(JSON.stringify({ ignored: "intermediate" }));
-		const answer = input.turn
-			? {
-					kind: "answer",
-					text: "The requested record is open.",
-					sources: ["deal:example"],
-					proposal: null,
-				}
-			: input.destinations
+		const answer = probe
+			? { ready: true }
+			: input.turn
 				? {
-						facts: [
-							{
-								destination: input.destinations[0],
-								text: input.body,
-								quote: input.body,
-							},
-						],
+						kind: "answer",
+						text: "The requested record is open.",
+						sources: ["deal:example"],
+						proposal: null,
 					}
-				: input.candidates
-					? { introductions: [] }
-					: prompt.includes("List the paragraphs")
-						? { authored: input.body.split("\n\n") }
-						: { summary: input.body, action_title: null, quote: input.body };
+				: input.destinations
+					? {
+							facts: [
+								{
+									destination: input.destinations[0],
+									text: input.body,
+									quote: input.body,
+								},
+							],
+						}
+					: input.candidates
+						? { introductions: [] }
+						: prompt.includes("List the paragraphs")
+							? { authored: input.body.split("\n\n") }
+							: { summary: input.body, action_title: null, quote: input.body };
 		message(
 			input.turn?.question === "Invalid format"
 				? "not JSON"
