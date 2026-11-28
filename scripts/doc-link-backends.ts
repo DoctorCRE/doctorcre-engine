@@ -330,7 +330,7 @@ export function codexHome() {
 }
 
 // Review the tool surface against the new release before adding a version.
-const codexVersion = "codex-cli 0.172.0";
+export const codexVersion = "0.172.0";
 const codexAuthConfig = [
 	"-c",
 	'model_provider="openai"',
@@ -398,8 +398,8 @@ export async function isCodexCatalogValid(path = codexCatalog) {
 	}
 }
 
-function codexEnvironment() {
-	return { ...childEnvironment(), CODEX_HOME: codexHome(), TZ: "UTC" };
+function codexEnvironment(home = codexHome()) {
+	return { ...childEnvironment(), CODEX_HOME: home, TZ: "UTC" };
 }
 
 const codexAccount = z.object({
@@ -485,10 +485,14 @@ function codexPlan(
 	});
 }
 
-async function codexSignIn(binary: string): Promise<SignInStatus> {
-	const env = codexEnvironment();
+export async function checkCodexSignIn(
+	binary: string,
+	home?: string,
+): Promise<SignInStatus | "wrong_version"> {
+	const env = codexEnvironment(home);
 	const version = await runCli(binary, ["--version"], 5_000, { env, cwd: "/" });
-	if (!version.ok || version.stdout.trim() !== codexVersion) return undefined;
+	if (!version.ok || version.stdout.trim() !== `codex-cli ${codexVersion}`)
+		return "wrong_version";
 	const status = await runCli(
 		binary,
 		["login", "status", ...codexAuthConfig, ...codexIsolationConfig],
@@ -622,7 +626,10 @@ export const backends = {
 		policyMessage: "Doc link needs a Mac without managed Claude Code settings.",
 	},
 	codex: {
-		signIn: codexSignIn,
+		signIn: async (binary) => {
+			const status = await checkCodexSignIn(binary);
+			return status === "wrong_version" ? undefined : status;
+		},
 		run: runCodex,
 		personalPlanMessage: "Doc needs your own ChatGPT plan.",
 		settingsMessage:

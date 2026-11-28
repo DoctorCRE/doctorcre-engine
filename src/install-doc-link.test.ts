@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
 	mkdirSync,
 	mkdtempDisposableSync,
 	readFileSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -42,7 +44,6 @@ function fakeMac(
 	const bin = join(scratch, "bin");
 	const claude = join(home, ".local/bin/claude");
 	const commands = join(scratch, "commands");
-	const managed = join(scratch, "managed");
 	const agent = join(home, "Library", "LaunchAgents", `${label}.plist`);
 	const config = join(
 		home,
@@ -52,6 +53,12 @@ function fakeMac(
 		"link.json",
 	);
 	const loaded = join(scratch, "loaded");
+	const rejectBootstrap = join(scratch, "reject-bootstrap");
+	const oldConfig = join(scratch, "old-config");
+	const oldAgent = join(scratch, "old-agent");
+	let invocationNumber = 0;
+	const codex = join(bin, "codex cli");
+	const codexHome = join(home, ".codex");
 
 	mkdirSync(bin);
 	mkdirSync(join(home, ".local/bin"), { recursive: true });
@@ -72,6 +79,23 @@ exit ${signedIn ? 0 : 1}
 	function command(name: string, body: string) {
 		writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
 	}
+	const plistFixture = join(scratch, "plutil.mjs");
+	writeFileSync(
+		plistFixture,
+		String.raw`
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+assert.deepEqual(process.argv.slice(2), [
+	"-extract", "EnvironmentVariables.CODEX_HOME", "raw", "-o", "-", "--", "-",
+]);
+const plist = readFileSync(0, "utf8");
+const value = /<key>EnvironmentVariables<\/key>\s*<dict>[^]*?<key>CODEX_HOME<\/key>\s*<string>(.*?)<\/string>/s.exec(plist)?.[1];
+if (value === undefined) process.exit(1);
+const entities = { amp: "&", lt: "<", gt: ">" };
+console.log(value.replace(/&(amp|lt|gt);/g, (_, name) => entities[name]));
+`,
+	);
+	command("plutil", `exec "${process.execPath}" "${plistFixture}" "$@"`);
 	command("uname", "printf '%s\\n' Darwin");
 	command(
 		"curl",
@@ -85,7 +109,11 @@ case "$1" in
 	print) case "$2" in */${label}) test -f "${loaded}";; *) exit 0;; esac ;;
 	enable) exit 0 ;;
 	bootout) unlink "${loaded}" ;;
-	bootstrap) [ ! -f "${loaded}" ] && [ "$3" = "${agent}" ] && : > "${loaded}" ;;
+	bootstrap)
+		if [ -f "${rejectBootstrap}" ]; then
+			cmp -s "${config}" "${oldConfig}" && cmp -s "${agent}" "${oldAgent}" || exit 7
+		fi
+		[ ! -f "${loaded}" ] && [ "$3" = "${agent}" ] && : > "${loaded}" ;;
 	*) exit 3 ;;
 esac`,
 	);
@@ -109,41 +137,455 @@ esac`,
 		ACTIVITY_READ_SCHEMA: "next",
 		RELATIONSHIPS_READ_SCHEMA: "next",
 	} as const;
-	function run(input = firstCredential) {
-		const invocation = join(scratch, "run-installer.mjs");
+	function prepareRun(
+		input = firstCredential,
+		{
+			args = [engine],
+			codexDirectory,
+			polls,
+			revokeOnNew = false,
+			pauseAtPoll = false,
+		}: {
+			args?: string[];
+			codexDirectory?: string | undefined;
+			polls?: [string, number, string?][] | undefined;
+			revokeOnNew?: boolean;
+			pauseAtPoll?: boolean;
+		} = {},
+	) {
+		const invocation = join(scratch, `run-installer-${++invocationNumber}.mjs`);
 		writeFileSync(
 			invocation,
 			`
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { appendFileSync } from "node:fs";
 import { installDocLink } from ${JSON.stringify(installer.href)};
+const polls = ${JSON.stringify(polls ?? null)};
+let revoked = false;
+let fetchError;
+let paused = false;
 globalThis.fetch = async (url, init) => {
+	try {
 	const request = new Request(url, init);
-	assert.equal(request.url, ${JSON.stringify(`${engine}/api/engine/doc/link/claim`)});
 	assert.equal(request.method, "POST");
-	assert.equal(request.headers.get("Authorization"), ${JSON.stringify(`Bearer ${input}`)});
+	const credential = request.headers.get("Authorization")?.slice(7);
+	if (${pauseAtPoll} && !paused) {
+		paused = true;
+		const proceed = once(process, "message");
+		process.send("poll");
+		await proceed;
+		process.disconnect();
+	}
+	const requestOrigin = new URL(request.url).origin;
+	if (${pauseAtPoll} && requestOrigin !== ${JSON.stringify(args.at(-1))})
+		return new Response(null, { status: 204 });
+	const [expectedCredential, status, origin] = polls?.shift() ?? [];
+	if (polls) assert.equal(credential, expectedCredential);
+	else assert.ok([${JSON.stringify(firstCredential)}, ${JSON.stringify(secondCredential)}].includes(credential));
+	assert.equal(request.url, new URL("/api/engine/doc/link/claim", origin ?? ${JSON.stringify(args.at(-1))}).href);
+	if (${revokeOnNew} && credential === ${JSON.stringify(secondCredential)}) revoked = true;
 	assert.equal(request.headers.get("Doc-Link-Readiness"), null);
 	assert.equal(request.headers.get("Cookie"), null);
 	assert.equal(request.redirect, "error");
 	appendFileSync(${JSON.stringify(commands)}, "engine credential checked\\n");
-	return new Response(null, { status: ${engineStatus} });
+	return new Response(null, {
+		status: revoked && credential === ${JSON.stringify(firstCredential)} ? 401 : (status ?? ${engineStatus}),
+	});
+	} catch (error) {
+		fetchError = error;
+		throw error;
+	}
 };
-await installDocLink(process.argv[2], {
-	directory: process.argv[3],
-	preferences: [process.argv[3] + ".plist"],
-	cache: process.env.HOME + "/.claude/remote-settings.json"
-});
+await installDocLink(process.argv.slice(2), { plutil: ${JSON.stringify(join(bin, "plutil"))} });
+if (fetchError) throw fetchError;
+if (polls) assert.equal(polls.length, 0);
 `,
 		);
-		return spawnSync(process.execPath, [invocation, engine, managed], {
-			env,
+		return {
+			argv: [invocation, ...args],
+			env: { ...env, CODEX_HOME: codexDirectory },
 			input: `${input}\n`,
+		};
+	}
+	function run(...args: Parameters<typeof prepareRun>) {
+		const prepared = prepareRun(...args);
+		return spawnSync(process.execPath, prepared.argv, {
+			env: prepared.env,
+			input: prepared.input,
 			encoding: "utf8",
 			timeout: 5_000,
 		});
 	}
-	return { run, home, bin, env, claude, agent, config, commands };
+	function start(...args: Parameters<typeof prepareRun>) {
+		const prepared = prepareRun(...args);
+		const child = spawn(process.execPath, prepared.argv, {
+			env: prepared.env,
+			stdio: ["pipe", "pipe", "pipe", "ipc"],
+		});
+		assert.ok(child.stdin && child.stdout && child.stderr);
+		let stderr = "";
+		child.stdout.resume();
+		child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+			stderr += chunk;
+		});
+		const done = new Promise<{ status: number | null; stderr: string }>(
+			(done) => child.once("close", (status) => done({ status, stderr })),
+		);
+		child.stdin.end(prepared.input);
+		t.after(async () => {
+			if (child.exitCode === null) child.kill();
+			await done;
+		});
+		return { child, done };
+	}
+	function runCodex({
+		codexDirectory,
+		defaultBackend = "codex",
+		input = firstCredential,
+		polls,
+		version = "codex-cli 0.172.0",
+		plan = "plus",
+		signedIn = true,
+	}: {
+		codexDirectory?: string;
+		defaultBackend?: "claude" | "codex";
+		input?: string;
+		polls?: [string, number, string?][];
+		version?: string;
+		plan?: string;
+		signedIn?: boolean;
+	} = {}) {
+		writeFileSync(
+			codex,
+			`#!/bin/sh
+printf 'codex %s\n' "$1" >> "${commands}"
+[ "$CODEX_HOME" = "${codexDirectory ?? codexHome}" ] || exit 3
+case "$1" in
+	--version) printf '%s\n' '${version}' ;;
+	login)
+		[ "$2" = status ] || exit 3
+		case "$*" in *'cli_auth_credentials_store="auto"'*) ;; *) exit 3;; esac
+		printf '%s\n' '${signedIn ? "Logged in using ChatGPT" : "Not logged in"}' >&2
+		exit ${signedIn ? 0 : 1} ;;
+	app-server)
+		while IFS= read -r request; do
+			case "$request" in
+				*'"method":"account/read"'*)
+					printf '%s\n' '{"id":2,"result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt","planType":"${plan}"}}}'
+					;;
+			esac
+		done ;;
+	*) exit 3 ;;
+esac
+`,
+			{ mode: 0o700 },
+		);
+		if (defaultBackend === "claude") {
+			symlinkSync(codex, join(bin, "codex"));
+			return run(input, { codexDirectory, polls });
+		}
+		return run(input, {
+			args: ["--codex", codex, engine],
+			codexDirectory,
+			polls,
+		});
+	}
+	return {
+		run,
+		start,
+		runCodex,
+		home,
+		bin,
+		env,
+		claude,
+		codex,
+		agent,
+		config,
+		commands,
+		loaded,
+		rejectBootstrap(preserve = false) {
+			writeFileSync(rejectBootstrap, "");
+			if (preserve) {
+				writeFileSync(oldConfig, readFileSync(config), { mode: 0o600 });
+				writeFileSync(oldAgent, readFileSync(agent), { mode: 0o600 });
+			}
+		},
+	};
 }
+
+test("Codex setup verifies the credential and loads the same job without using Claude", (t) => {
+	const mac = fakeMac(t, { installed: false });
+	mkdirSync(join(mac.home, ".claude"));
+	writeFileSync(join(mac.home, ".claude", "remote-settings.json"), "{}");
+	const result = mac.runCodex();
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stdout.trim(), "Doc link is ready.");
+	assert.equal(statSync(mac.config).mode & 0o777, 0o600);
+	assert.deepEqual(JSON.parse(readFileSync(mac.config, "utf8")), {
+		engine,
+		credential: firstCredential,
+		default_backend: "codex",
+		backends: [{ backend: "codex", binary: mac.codex }],
+		codex_home: join(mac.home, ".codex"),
+	});
+	const commands = readFileSync(mac.commands, "utf8");
+	assert.match(
+		commands,
+		/codex app-server\n[\s\S]*engine credential checked\n[\s\S]*launchctl bootstrap/,
+	);
+	assert.doesNotMatch(commands, /claude|curl/);
+});
+
+for (const defaultBackend of ["claude", "codex"] as const) {
+	test(`setup registers both signed-in CLIs with ${defaultBackend} as default`, async (t) => {
+		const mac = fakeMac(t);
+		const codexDirectory = join(mac.home, "Codex & tools");
+		const result = mac.runCodex({
+			defaultBackend,
+			codexDirectory,
+		});
+		assert.equal(result.status, 0, result.stderr);
+		const codex =
+			defaultBackend === "claude" ? join(mac.bin, "codex") : mac.codex;
+		const entries = {
+			claude: { backend: "claude", binary: mac.claude },
+			codex: { backend: "codex", binary: codex },
+		};
+		assert.deepEqual(await readDocLinkConfig(mac.config), {
+			engine,
+			credential: firstCredential,
+			default_backend: defaultBackend,
+			backends: [
+				entries[defaultBackend],
+				entries[defaultBackend === "claude" ? "codex" : "claude"],
+			],
+			codex_home: codexDirectory,
+		});
+		const plist = readFileSync(mac.agent, "utf8");
+		assert.match(
+			plist,
+			/<key>CODEX_HOME<\/key>\s*<string>[^<]+\/Codex &amp; tools<\/string>/,
+		);
+		assert.ok(plist.includes(`<string>${mac.env.PATH}</string>`));
+	});
+}
+
+test("switching to Claude from a fresh shell keeps the saved custom Codex home", async (t) => {
+	const mac = fakeMac(t);
+	const codexDirectory = join(mac.home, "Codex & tools");
+	assert.equal(mac.runCodex({ codexDirectory }).status, 0);
+	const result = mac.run();
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(await readDocLinkConfig(mac.config), {
+		engine,
+		credential: firstCredential,
+		default_backend: "claude",
+		backends: [
+			{ backend: "claude", binary: mac.claude },
+			{ backend: "codex", binary: mac.codex },
+		],
+		codex_home: codexDirectory,
+	});
+});
+
+test("a rejected new launch restores both files and reloads the working job", (t) => {
+	const mac = fakeMac(t);
+	assert.equal(mac.run().status, 0);
+	const config = readFileSync(mac.config, "utf8");
+	const agent = readFileSync(mac.agent, "utf8");
+	mac.rejectBootstrap(true);
+	const result = mac.runCodex();
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /Could not start Doc link/);
+	assert.equal(readFileSync(mac.config, "utf8"), config);
+	assert.equal(readFileSync(mac.agent, "utf8"), agent);
+	assert.ok(statSync(mac.loaded).isFile());
+});
+
+test("a failed switch leaves Doc signed out when the old credential is revoked", async (t) => {
+	const mac = fakeMac(t);
+	assert.equal(mac.runCodex().status, 0);
+	const agent = readFileSync(mac.agent, "utf8");
+	mac.rejectBootstrap(true);
+
+	const result = mac.run(secondCredential, { revokeOnNew: true });
+
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /Setup didn't finish; run it again/);
+	for (const path of [mac.config, mac.loaded])
+		assert.throws(() => statSync(path), { code: "ENOENT" });
+	assert.equal(readFileSync(mac.agent, "utf8"), agent);
+});
+
+test("switching a legacy Codex link preserves the home saved only in launchd", async (t) => {
+	const mac = fakeMac(t);
+	const codexDirectory = join(mac.home, "Codex & tools");
+	assert.equal(mac.runCodex({ codexDirectory }).status, 0);
+	writeFileSync(
+		mac.config,
+		JSON.stringify({
+			engine,
+			backend: "codex",
+			binary: mac.codex,
+			credential: firstCredential,
+		}),
+	);
+
+	const result = mac.run();
+
+	assert.equal(result.status, 0, result.stderr);
+	const config = await readDocLinkConfig(mac.config);
+	assert.ok("backends" in config);
+	assert.deepEqual(config.backends, [
+		{ backend: "claude", binary: mac.claude },
+		{ backend: "codex", binary: mac.codex },
+	]);
+	assert.equal(config.codex_home, codexDirectory);
+	assert.match(
+		readFileSync(mac.agent, "utf8"),
+		/<key>CODEX_HOME<\/key>\s*<string>[^<]+Codex &amp; tools<\/string>/,
+	);
+});
+
+test("a rejected first launch removes both new files", (t) => {
+	const mac = fakeMac(t);
+	mac.rejectBootstrap();
+	const result = mac.runCodex();
+	assert.equal(result.status, 1);
+	for (const path of [mac.config, mac.agent, mac.loaded])
+		assert.throws(() => statSync(path), { code: "ENOENT" });
+});
+
+test("an overlapping setup exits before touching the holder's snapshot or job", async (t) => {
+	const mac = fakeMac(t);
+	assert.equal(mac.run().status, 0);
+	const config = readFileSync(mac.config, "utf8");
+	const agent = readFileSync(mac.agent, "utf8");
+	const first = mac.start(secondCredential, {
+		args: ["https://other-engine.example.test"],
+		pauseAtPoll: true,
+	});
+	await Promise.race([
+		once(first.child, "message"),
+		first.done.then(({ stderr }) =>
+			assert.fail(`Setup exited before its validation poll. ${stderr}`),
+		),
+	]);
+	const before = readFileSync(mac.commands, "utf8");
+	try {
+		const second = mac.run(secondCredential);
+		assert.equal(second.status, 1, second.stderr);
+		assert.equal(
+			second.stderr.trim(),
+			"Doc setup is already running on this Mac",
+		);
+		assert.equal(readFileSync(mac.commands, "utf8"), before);
+		assert.equal(readFileSync(mac.config, "utf8"), config);
+		assert.equal(readFileSync(mac.agent, "utf8"), agent);
+		assert.ok(statSync(mac.loaded).isFile());
+		mac.rejectBootstrap(true);
+	} finally {
+		first.child.send("continue");
+	}
+	const result = await first.done;
+	assert.equal(result.status, 1, result.stderr);
+	assert.match(result.stderr, /Could not start Doc link/);
+	assert.equal(readFileSync(mac.config, "utf8"), config);
+	assert.equal(readFileSync(mac.agent, "utf8"), agent);
+	assert.ok(statSync(mac.loaded).isFile());
+	assert.throws(() => statSync(join(mac.home, ".doctorcre-doc-setup.lock")), {
+		code: "ENOENT",
+	});
+});
+
+test("setup takes over a lock whose installer process has exited", (t) => {
+	const mac = fakeMac(t);
+	const exited = spawnSync(process.execPath, ["--version"]);
+	assert.equal(exited.status, 0);
+	assert.ok(exited.pid > 0);
+	const lock = join(mac.home, ".doctorcre-doc-setup.lock");
+	mkdirSync(lock);
+	writeFileSync(join(lock, `${exited.pid}-0000`), "");
+	const result = mac.run();
+	assert.equal(result.status, 0, result.stderr);
+	assert.ok(statSync(mac.loaded).isFile());
+	assert.throws(() => statSync(lock), { code: "ENOENT" });
+});
+
+test("Claude setup skips an optional signed-out Codex", async (t) => {
+	const mac = fakeMac(t);
+	const result = mac.runCodex({ defaultBackend: "claude", signedIn: false });
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(await readDocLinkConfig(mac.config), {
+		engine,
+		credential: firstCredential,
+		default_backend: "claude",
+		backends: [{ backend: "claude", binary: mac.claude }],
+	});
+});
+
+for (const { name, options, message, expectedCommands } of [
+	{
+		name: "with a different CLI version",
+		options: { version: "codex-cli 0.173.0" },
+		message: /Codex CLI 0\.172\.0/,
+		expectedCommands: "codex --version\n",
+	},
+	{
+		name: "when signed out",
+		options: { signedIn: false },
+		message:
+			/CODEX_HOME=.*codex.* login -c 'cli_auth_credentials_store="auto"'/,
+		expectedCommands: "codex --version\ncodex login\n",
+	},
+	{
+		name: "with a team plan",
+		options: { plan: "team" },
+		message: /personal ChatGPT plan/,
+		expectedCommands: "codex --version\ncodex login\ncodex app-server\n",
+	},
+]) {
+	test(`Codex setup refuses ${name}`, (t) => {
+		const mac = fakeMac(t);
+		const result = mac.runCodex(options);
+		assert.equal(result.status, 1, result.stderr);
+		assert.match(result.stderr, message);
+		assert.equal(
+			readFileSync(mac.commands, "utf8").replace(
+				/^launchctl print [^\n]*\n/,
+				"",
+			),
+			expectedCommands,
+		);
+		assert.throws(() => statSync(mac.config), { code: "ENOENT" });
+	});
+}
+
+test("the setup command forwards the Codex flag and absolute path intact", (t) => {
+	const mac = fakeMac(t);
+	writeFileSync(
+		join(mac.bin, "node"),
+		`#!/bin/sh
+if [ "$1" = --version ]; then
+	printf '%s\n' v26.0.0
+	exit 0
+fi
+printf '%s\n' "$@"
+`,
+		{ mode: 0o700 },
+	);
+	const args = ["--codex", mac.codex, engine];
+	const result = spawnSync("/bin/bash", [wrapper, ...args], {
+		env: mac.env,
+		encoding: "utf8",
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(
+		result.stdout,
+		[fileURLToPath(installer), ...args, ""].join("\n"),
+	);
+});
 
 test("first setup installs official Claude Code and loads Doc link from private config", async (t) => {
 	const mac = fakeMac(t, { installed: false });
@@ -153,8 +595,9 @@ test("first setup installs official Claude Code and loads Doc link from private 
 	assert.equal(statSync(mac.config).mode & 0o777, 0o600);
 	assert.deepEqual(await readDocLinkConfig(mac.config), {
 		engine,
-		claude: mac.claude,
 		credential: firstCredential,
+		default_backend: "claude",
+		backends: [{ backend: "claude", binary: mac.claude }],
 	});
 	const plist = readFileSync(mac.agent, "utf8");
 	assert.ok(plist.includes(process.execPath));
@@ -257,14 +700,13 @@ test("setup tells a signed-out partner how to sign in and does not load the job"
 	);
 });
 
-test("managed Claude settings block setup before installing or running Claude", (t) => {
+test("managed Claude settings allow Claude chat setup", (t) => {
 	const mac = fakeMac(t, { installed: false });
 	mkdirSync(join(mac.home, ".claude"));
 	writeFileSync(join(mac.home, ".claude", "remote-settings.json"), "{}");
 	const result = mac.run();
-	assert.equal(result.status, 1);
-	assert.match(result.stderr, /without managed Claude Code settings/);
-	assert.equal(readFileSync(mac.commands, "utf8"), "");
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stdout.trim(), "Doc link is ready.");
 });
 
 for (const subscriptionType of ["team", "enterprise"]) {
@@ -273,7 +715,10 @@ for (const subscriptionType of ["team", "enterprise"]) {
 		const result = mac.run();
 		assert.equal(result.status, 1, result.stderr);
 		assert.match(result.stderr, /Doc needs your own Claude plan/);
-		assert.doesNotMatch(readFileSync(mac.commands, "utf8"), /launchctl|engine/);
+		assert.doesNotMatch(
+			readFileSync(mac.commands, "utf8"),
+			/launchctl (?:bootout|bootstrap)|engine/,
+		);
 	});
 }
 

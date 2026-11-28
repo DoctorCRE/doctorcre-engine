@@ -38,15 +38,36 @@ const absoluteBinary = z.string().refine(isAbsolute);
 const backendName = z.custom<keyof typeof backends>(
 	(value) => typeof value === "string" && Object.hasOwn(backends, value),
 );
+const backendRegistration = z.strictObject({
+	backend: backendName,
+	binary: absoluteBinary,
+});
+const registeredConfig = z
+	.strictObject({
+		...configFields,
+		default_backend: backendName,
+		backends: z.array(backendRegistration),
+		codex_home: absoluteBinary.optional(),
+	})
+	.refine(
+		({ default_backend, backends }) =>
+			backends.some(({ backend }) => backend === default_backend) &&
+			new Set(backends.map(({ backend }) => backend)).size === backends.length,
+	);
 export const docLinkConfigSchema = z.union([
 	z.strictObject({ ...configFields, claude: absoluteBinary }),
-	z.strictObject({
-		...configFields,
-		backend: backendName,
-		binary: absoluteBinary,
-	}),
+	z.strictObject({ ...configFields, ...backendRegistration.shape }),
+	registeredConfig,
 ]);
 type Config = z.infer<typeof docLinkConfigSchema>;
+export type RegisteredBackend = z.infer<typeof backendRegistration>;
+
+export function configuredBackends(config: Config): RegisteredBackend[] {
+	if ("backends" in config) return config.backends;
+	return "claude" in config
+		? [{ backend: "claude", binary: config.claude }]
+		: [{ backend: config.backend, binary: config.binary }];
+}
 
 const claimSchema = z.discriminatedUnion("kind", [
 	z.object({
@@ -262,9 +283,14 @@ export async function runDocLink(
 		managedCodexPolicy: macCodexPolicyPaths(),
 	},
 ) {
-	const name = "backend" in config ? config.backend : "claude";
+	const registrations = configuredBackends(config);
+	const selected =
+		"default_backend" in config
+			? registrations.find(({ backend }) => backend === config.default_backend)
+			: registrations[0];
+	if (!selected) throw new Error("Choose a registered Doc link backend.");
+	const { backend: name, binary } = selected;
 	const backend = backends[name];
-	const binary = "binary" in config ? config.binary : config.claude;
 	let policyError: string | undefined;
 	async function mailAllowed() {
 		if (allowMailTools) return true;
@@ -468,7 +494,7 @@ export async function runDocLink(
 	}
 }
 
-export async function readDocLinkConfig(path: string) {
+export async function readDocLinkConfigFile(path: string) {
 	await using file = await open(
 		path,
 		constants.O_RDONLY | constants.O_NONBLOCK,
@@ -483,12 +509,18 @@ export async function readDocLinkConfig(path: string) {
 			`Doc link needs a private configuration file. Run chmod 600 "${path}".`,
 		);
 	}
+	const contents = await file.readFile();
 	const config = docLinkConfigSchema.safeParse(
-		readJson(await file.readFile("utf8")),
+		readJson(contents.toString("utf8")),
 	);
-	if (!config.success)
+	return { contents, mode: info.mode & 0o777, config: config.data };
+}
+
+export async function readDocLinkConfig(path: string) {
+	const { config } = await readDocLinkConfigFile(path);
+	if (!config)
 		throw new Error("Doc link could not read its configuration file.");
-	return config.data;
+	return config;
 }
 
 if (import.meta.main) {
