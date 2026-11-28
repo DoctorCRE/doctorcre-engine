@@ -12,11 +12,15 @@ import {
 import { DEFAULT_CADENCE } from "../leads/quiet-follow-ups.ts";
 import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
+import { vendorMarkets, vendorTerritories } from "./markets.ts";
 
 type Counts = {
 	count: number;
 	relationship: Record<VendorRelationship, number>;
 	quiet: number;
+	markets: { id: string; name: string; count: number }[];
+	elsewhere: number;
+	no_territory: number;
 };
 type Counted = Counts & { across: boolean; category: string | null };
 const EMPTY: Counts = {
@@ -25,6 +29,9 @@ const EMPTY: Counts = {
 		VENDOR_RELATIONSHIPS.map(({ word }) => [word, 0]),
 	) as Counts["relationship"],
 	quiet: 0,
+	markets: [],
+	elsewhere: 0,
+	no_territory: 0,
 };
 
 const OWNERS = ["all", ...PARTNERS] as const;
@@ -45,16 +52,32 @@ const tiles = (db: Transaction<DB>, owner: Owner) =>
 		left join app_user u on u.id = pr.owner_user_id
 		left join (${lastRecordedContacts}) recorded on recorded.party_id = pr.party_id
 		where pr.role = 'vendor' and (${owner}::text = 'all' or u.slug = ${owner}::text)
+	), coverage as (
+		select v.*, m.id as market_id, m.name as market_name,
+			exists (${vendorTerritories(sql.ref("v.party_id"))}) as has_territory
+		from vendor v left join lateral (${vendorMarkets(sql.ref("v.party_id"))}) m on true
 	), placed as (
-		select v.*, cr.role as category from vendor v
+		select v.*, cr.role as category from coverage v
 		left join (party_role cr join role r on r.slug = cr.role and r.category_of = 'vendor')
 			on cr.party_id = v.party_id
+	), market_counts as (
+		select grouping(category) = 1 as across, category, market_id as id, market_name as name,
+			count(distinct party_id)::int as count
+		from placed where market_id is not null
+		group by grouping sets ((market_id, market_name), (category, market_id, market_name))
+	), counts as (
+		select grouping(category) = 1 as across, category,
+			count(distinct party_id)::int as count,
+			json_build_object(${byRelationship}) as relationship,
+			count(distinct party_id) filter (where quiet)::int as quiet,
+			count(distinct party_id) filter (where market_id is null and has_territory)::int as elsewhere,
+			count(distinct party_id) filter (where not has_territory)::int as no_territory
+		from placed group by grouping sets ((), (category))
 	)
-	select grouping(category) = 1 as across, category,
-		count(distinct party_id)::int as count,
-		json_build_object(${byRelationship}) as relationship,
-		count(distinct party_id) filter (where quiet)::int as quiet
-	from placed group by grouping sets ((), (category))`.execute(db);
+	select c.*, coalesce((select jsonb_agg(
+		jsonb_build_object('id', m.id, 'name', m.name, 'count', m.count) order by m.name
+	) from market_counts m where m.across = c.across and m.category is not distinct from c.category), '[]') as markets
+	from counts c`.execute(db);
 
 async function readVendorSummary(db: Transaction<DB>, owner: Owner) {
 	const { rows } = await tiles(db, owner);
@@ -65,10 +88,11 @@ async function readVendorSummary(db: Transaction<DB>, owner: Owner) {
 		.orderBy("label")
 		.orderBy("slug")
 		.execute();
-	const countsOf = (row?: Counted): Counts =>
-		row
-			? { count: row.count, relationship: row.relationship, quiet: row.quiet }
-			: EMPTY;
+	const countsOf = (row?: Counted): Counts => {
+		if (!row) return EMPTY;
+		const { across, category, ...counts } = row;
+		return counts;
+	};
 	const inCategory = (slug: string | null) =>
 		countsOf(rows.find((row) => !row.across && row.category === slug));
 	return {
