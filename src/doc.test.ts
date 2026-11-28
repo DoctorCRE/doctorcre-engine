@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
 import { setTimeout } from "node:timers/promises";
 import { Hono } from "hono";
-import { sql } from "kysely";
+import { type CompiledQuery, PostgresDriver, sql } from "kysely";
 import pg from "pg";
 import { docRoutes, recentDocTurns } from "./doc.ts";
 import { dispatchDocBackup } from "./doc-backup.ts";
@@ -539,7 +539,7 @@ test("backup skips a chat turn that the Mac is committing as failed", async (t) 
 });
 
 for (const queue of ["chat", "mail"] as const) {
-	test(`backup keeps the expired ${queue} claim when the Mac comes online during the lock wait`, async (t) => {
+	test(`backup keeps the expired ${queue} claim when the Mac comes online after the row is locked`, async (t) => {
 		const table = queue === "chat" ? "doc_turn" : "doc_judgment_job";
 		const { id } =
 			queue === "chat" ? (await askDoc()).turn : await queueMailJudgment();
@@ -563,25 +563,47 @@ for (const queue of ["chat", "mail"] as const) {
 			reply(queue === "chat" ? refusal : summaryAnswer),
 		);
 
-		await db.query("begin");
-		let dispatch: Promise<void> | undefined;
-		try {
-			await db.query(`select id from ${table} where id = $1 for update`, [id]);
-			dispatch = tick();
-			void dispatch.catch(() => {});
-			await waitForBlockedTransaction(db);
-			assert.equal((await poll(credential, null)).status, 204);
-			const { rows } = await db.query<{ readiness: string; online: boolean }>(
-				`select readiness, last_seen_at >= statement_timestamp() - interval '30 seconds' as online
+		let heartbeatStatus: number | undefined;
+		const acquireConnection = PostgresDriver.prototype.acquireConnection;
+		t.mock.method(
+			PostgresDriver.prototype,
+			"acquireConnection",
+			async function (
+				this: PostgresDriver,
+				...args: Parameters<typeof acquireConnection>
+			) {
+				const connection = await acquireConnection.apply(this, args);
+				const executeQuery = connection.executeQuery.bind(connection);
+				t.mock.method(
+					connection,
+					"executeQuery",
+					async <Row>(query: CompiledQuery) => {
+						const result = await executeQuery<Row>(query);
+						if (
+							query.sql.endsWith(" for no key update") &&
+							query.parameters.includes(id)
+						) {
+							// Commit the heartbeat before backup can recheck eligibility.
+							heartbeatStatus = (await poll(credential, null)).status;
+						}
+						return result;
+					},
+				);
+				return connection;
+			},
+		);
+
+		await tick();
+		assert.equal(heartbeatStatus, 204);
+		const { rows: presence } = await db.query<{
+			readiness: string;
+			online: boolean;
+		}>(
+			`select readiness, last_seen_at >= statement_timestamp() - interval '30 seconds' as online
 				from doc_link where owner_user_id = $1`,
-				[owner],
-			);
-			assert.deepEqual(rows, [{ readiness: "ready", online: true }]);
-			await waitForBlockedTransaction(db);
-		} finally {
-			await db.query("rollback");
-			await dispatch;
-		}
+			[owner],
+		);
+		assert.deepEqual(presence, [{ readiness: "ready", online: true }]);
 		const { rows } = await db.query<{
 			state: string;
 			claim_id: string | null;

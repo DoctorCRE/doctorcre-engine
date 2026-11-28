@@ -216,14 +216,21 @@ test("capture and Mac judgment save exact unconfirmed introductions without chan
 		select merge_party('${duplicatePerson}', '${pat}');
 		commit;`);
 	const pending = await db.query(
-		"select id, source_job_id from introduction where not confirmed and vendor_id = $1 and introduced_party_id = $2",
+		"select id, source_job_id, xmin::text as version from introduction where not confirmed and vendor_id = $1 and introduced_party_id = $2",
 		[vendor, pat],
 	);
 	assert.equal(pending.rowCount, 1);
 	const sourced = pending.rows[0];
 	assert.ok(sourced);
+	const remove = () =>
+		save({ user: "joe" }, `introductions/${sourced.id}/remove`, {
+			idempotency_key: randomUUID(),
+			version: sourced.version,
+		});
+	assert.equal((await remove())[0], 404);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		update introduction set confirmed = true where id = '${sourced.id}'; commit;`);
+	assert.equal((await remove())[0], 404);
 	await assert.rejects(
 		db.query("delete from doc_judgment_job where id = $1", [
 			sourced.source_job_id,

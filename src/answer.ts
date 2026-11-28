@@ -92,6 +92,8 @@ const HINTS = {
 		"The engine does not finish this save. Send it to the old system unchanged.",
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
 	invalid_json: "Send the arguments as one JSON object.",
+	introduction_already_recorded:
+		"Open the vendor on the deal to see who brought them in.",
 	unknown_job: "Name a job the engine knows in the Engine-Job header.",
 	step_ended: "The step was ended elsewhere; count it as closed.",
 	agenda_too_large: "Trim the agenda to at most 262144 JSON characters.",
