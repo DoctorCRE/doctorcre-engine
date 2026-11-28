@@ -1,20 +1,25 @@
-import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open, readdir } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
 import { z } from "zod";
 import {
 	judgmentClaimSchema,
 	judgmentTask,
 } from "../src/doc-judgment-prompt.ts";
-import { docPrompt } from "../src/doc-prompt.ts";
+import type {
+	DocLinkReadiness,
+	DocWorkKind,
+	DocWorkReadiness,
+} from "../src/doc-link.ts";
+import { macDocPrompt } from "../src/doc-prompt.ts";
 import {
 	backends,
 	codexHome,
 	isCodexCatalogValid,
+	type LinkOutcome,
+	type ModelTask,
 	readJson,
 } from "./doc-link-backends.ts";
 
@@ -56,9 +61,35 @@ const claimSchema = z.discriminatedUnion("kind", [
 	judgmentClaimSchema,
 ]);
 
-type Readiness = "ready" | "signed_out" | "plan_limited";
-const checkSignInEvery = 30_000;
+type ReadinessCheck = {
+	status: DocLinkReadiness | null;
+	reason?: string;
+	checkAt: number;
+};
+const retryReadinessAfter = 30_000;
+const checkReadyEvery = 300_000;
 const pollEvery = 2_000;
+const allowMailTools = false;
+const probePrompt =
+	'This is a Doc readiness check. Return exactly {"ready":true} as JSON. Do not use any tools.';
+
+function chatTask(
+	config: Config,
+	claimId: string,
+	input: string,
+	prompt = macDocPrompt,
+): ModelTask {
+	return {
+		input,
+		prompt,
+		allowTools: true,
+		chat: {
+			url: new URL("/api/engine/doc/mcp", config.engine).href,
+			claimId,
+			credential: config.credential,
+		},
+	};
+}
 // https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy
 // https://code.claude.com/docs/en/server-managed-settings
 function macManagedSettingsPaths() {
@@ -140,37 +171,10 @@ function macCodexPolicyPaths() {
 		"/etc/codex/requirements.toml",
 		join(preferences, userInfo().username, domain),
 		join(preferences, domain),
-		...["config.toml", "AGENTS.md", "AGENTS.override.md"].map((file) =>
+		...["AGENTS.md", "AGENTS.override.md"].map((file) =>
 			join(codexHome(), file),
 		),
 	];
-}
-
-async function isDedicatedCodexAccount() {
-	if (process.platform !== "darwin") return false;
-	try {
-		const login = userInfo();
-		if (
-			login.username !== "doctorcre-doc" ||
-			login.homedir !== "/Users/doctorcre-doc" ||
-			homedir() !== login.homedir ||
-			login.uid < 501 ||
-			login.uid !== process.geteuid?.()
-		)
-			return false;
-		const home = await lstat(login.homedir);
-		if (!home.isDirectory() || home.uid !== login.uid) return false;
-		const { stdout } = await promisify(execFile)("/usr/bin/id", ["-Gn"], {
-			timeout: 5_000,
-		});
-		const groups = stdout.trim().split(/\s+/);
-		return (
-			Boolean(groups[0]) &&
-			!groups.some((group) => ["admin", "wheel", "sudo"].includes(group))
-		);
-	} catch {
-		return false;
-	}
 }
 
 type LinkRuntime = {
@@ -179,7 +183,6 @@ type LinkRuntime = {
 	wait: () => Promise<void>;
 	managedSettings?: Parameters<typeof hasManagedPolicy>[0];
 	managedCodexPolicy?: string[];
-	codexAccountAllowed?: () => Promise<boolean>;
 	codexCatalog?: string;
 };
 
@@ -200,6 +203,48 @@ export function postDocLink(
 	}).catch(() => undefined);
 }
 
+async function connectsToDocMcp(
+	{ url, claimId, credential }: NonNullable<ModelTask["chat"]>,
+	fetch: typeof globalThis.fetch,
+) {
+	try {
+		const response = await fetch(url, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${credential}`,
+				"Doc-Claim-Id": claimId,
+				"Content-Type": "application/json",
+				Accept: "application/json, text/event-stream",
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "initialize",
+				params: {
+					protocolVersion: "2025-11-25",
+					capabilities: {},
+					clientInfo: { name: "doctorcre-doc", version: "1.0.0" },
+				},
+			}),
+			redirect: "error",
+			signal: AbortSignal.timeout(5_000),
+		});
+		return (
+			response.ok &&
+			z
+				.object({
+					id: z.literal(1),
+					result: z.object({
+						serverInfo: z.object({ name: z.literal("doctorcre-doc") }),
+					}),
+				})
+				.safeParse(await response.json()).success
+		);
+	} catch {
+		return false;
+	}
+}
+
 export async function runDocLink(
 	config: Config,
 	{
@@ -208,7 +253,6 @@ export async function runDocLink(
 		wait,
 		managedSettings,
 		managedCodexPolicy,
-		codexAccountAllowed = isDedicatedCodexAccount,
 		codexCatalog,
 	}: LinkRuntime = {
 		fetch: globalThis.fetch,
@@ -219,14 +263,11 @@ export async function runDocLink(
 	},
 ) {
 	const name = "backend" in config ? config.backend : "claude";
-	if (name === "codex" && !(await codexAccountAllowed()))
-		throw new Error(
-			"Run Codex Doc link in the dedicated standard macOS account doctorcre-doc.",
-		);
 	const backend = backends[name];
 	const binary = "binary" in config ? config.binary : config.claude;
 	let policyError: string | undefined;
-	async function policyAllowsTurns() {
+	async function mailAllowed() {
+		if (allowMailTools) return true;
 		let error: string | undefined;
 		if (name === "codex") {
 			if (await hasPolicyFiles(managedCodexPolicy ?? []))
@@ -237,76 +278,160 @@ export async function runDocLink(
 		} else if (managedSettings && (await hasManagedPolicy(managedSettings))) {
 			error = backend.policyMessage;
 		}
-		if (error && error !== policyError) console.error(error);
+		if (error && error !== policyError)
+			console.error(`Mail judgment is paused. ${error}`);
 		policyError = error;
 		return !error;
 	}
 
-	let readiness: Readiness | "personal_plan_required" | undefined;
-	let checkAt = 0;
-	async function checkSignIn() {
-		const status = await backend.signIn(binary);
-		if (status === "personal_plan_required" && readiness !== status)
-			console.error(backend.personalPlanMessage);
-		readiness = status;
-		checkAt = now() + checkSignInEvery;
-		return status;
+	const kinds = ["chat", "mail"] as const;
+	const checks: Record<DocWorkKind, ReadinessCheck> = {
+		chat: { status: null, checkAt: 0 },
+		mail: { status: null, checkAt: 0 },
+	};
+	const usesTools = (kind: DocWorkKind) => kind === "chat" || allowMailTools;
+	function remember(kind: DocWorkKind, next: ReadinessCheck) {
+		if (next.reason && next.reason !== checks[kind].reason)
+			console.error(`Doc ${kind}: ${next.reason}`);
+		checks[kind] = next;
 	}
-
+	async function verifyPlan(kind: DocWorkKind) {
+		const status = await backend.signIn(binary, usesTools(kind));
+		if (status === "ready") return true;
+		remember(kind, {
+			status: status ? "signed_out" : null,
+			reason: status ? backend.personalPlanMessage : backend.settingsMessage,
+			checkAt: now() + retryReadinessAfter,
+		});
+		return false;
+	}
+	function rememberBlocker(kind: DocWorkKind, outcome: LinkOutcome) {
+		if (outcome.kind === "startup_failed" || outcome.readinessIssue)
+			remember(kind, {
+				status: null,
+				reason:
+					(outcome.kind === "startup_failed"
+						? outcome.reason
+						: outcome.readinessIssue) ?? backend.settingsMessage,
+				checkAt: now() + retryReadinessAfter,
+			});
+		if (outcome.kind === "signed_out")
+			remember(kind, {
+				status: "signed_out",
+				reason: backend.personalPlanMessage,
+				checkAt: now() + retryReadinessAfter,
+			});
+		if (outcome.kind === "plan_limited")
+			remember(kind, {
+				status: "plan_limited",
+				reason: "The plan is at its usage limit.",
+				checkAt:
+					outcome.resetsAt && outcome.resetsAt * 1_000 > now()
+						? outcome.resetsAt * 1_000
+						: now() + checkReadyEvery,
+			});
+	}
+	async function probe(kind: DocWorkKind) {
+		if (!(await verifyPlan(kind))) return;
+		const input = '{"readiness":true}';
+		const task =
+			kind === "chat"
+				? chatTask(config, "readiness", input, probePrompt)
+				: {
+						allowTools: allowMailTools,
+						prompt: probePrompt,
+						input,
+					};
+		const outcome = await backend.run(binary, 15_000, task);
+		if (
+			outcome.kind === "answered" &&
+			outcome.answer.ready === true &&
+			!outcome.readinessIssue
+		)
+			remember(kind, { status: "ready", checkAt: now() + checkReadyEvery });
+		else
+			rememberBlocker(
+				kind,
+				!outcome.readinessIssue &&
+					(outcome.kind === "answered" || outcome.kind === "failed")
+					? { kind: "startup_failed" }
+					: outcome,
+			);
+	}
 	for (; ; await wait()) {
-		if (!(await policyAllowsTurns())) continue;
-		if (now() >= checkAt) {
-			await checkSignIn();
-			if (!(await policyAllowsTurns())) continue;
-		}
-		if (readiness === "personal_plan_required") continue;
-		const headers = new Headers({ "Doc-Link-Backend": name });
-		if (readiness) headers.set("Doc-Link-Readiness", readiness);
-		if (readiness === "ready")
+		const mailPolicy = await mailAllowed();
+		if (!mailPolicy) checks.mail = { status: null, checkAt: 0 };
+		await Promise.all(
+			kinds
+				.filter(
+					(kind) =>
+						(kind === "chat" || mailPolicy) && now() >= checks[kind].checkAt,
+				)
+				.map(probe),
+		);
+		const readiness: DocWorkReadiness = {
+			chat: checks.chat.status,
+			mail: checks.mail.status,
+		};
+		const headers = new Headers({
+			"Doc-Link-Backend": name,
+			"Doc-Link-Work-Readiness": JSON.stringify(readiness),
+		});
+		if (readiness.chat) headers.set("Doc-Link-Readiness", readiness.chat);
+		if (readiness.mail === "ready")
 			headers.set("Doc-Link-Work", "judgment, email_split, introduction");
 		const poll = await postDocLink(config, "claim", { headers }, fetch);
 		if (poll?.status === 401) return;
-		if (poll?.status !== 200 || readiness !== "ready") continue;
+		if (poll?.status !== 200) continue;
 
 		const claim = claimSchema.safeParse(
 			await poll.json().catch(() => undefined),
 		).data;
 		if (!claim) continue;
-		if (!(await policyAllowsTurns())) continue;
-		if ((await checkSignIn()) !== "ready" || !(await policyAllowsTurns()))
+		const chat = claim.kind === "turn";
+		const kind = chat ? "chat" : "mail";
+		if (readiness[kind] !== "ready" || (!chat && !(await mailAllowed())))
+			continue;
+		if (!(await verifyPlan(kind)) || (!chat && !(await mailAllowed())))
 			continue;
 		const expires = Date.parse(claim.claim_until);
 		const timeout = Math.min(45_000, expires - 15_000 - now());
 		if (!(timeout > 0)) continue;
 
 		const heartbeat = setInterval(async () => {
-			if (await policyAllowsTurns())
+			if (chat || (await mailAllowed()))
 				void postDocLink(config, "claim", {}, fetch);
 		}, 10_000);
-		const task =
-			claim.kind === "turn"
-				? {
-						input: JSON.stringify({ turn: claim.turn, history: claim.history }),
-						prompt: docPrompt,
-						chat: {
-							url: new URL("/api/engine/doc/mcp", config.engine).href,
-							claimId: claim.claim_id,
-							credential: config.credential,
-						},
-					}
-				: judgmentTask(claim);
+		const task: ModelTask = chat
+			? chatTask(
+					config,
+					claim.claim_id,
+					JSON.stringify({ turn: claim.turn, history: claim.history }),
+				)
+			: { ...judgmentTask(claim), allowTools: allowMailTools };
+		if (task.chat)
+			task.beforePrompt = async () => {
+				if (
+					name === "codex" &&
+					task.chat &&
+					!(await connectsToDocMcp(task.chat, fetch))
+				)
+					return false;
+				const begun = await postDocLink(
+					config,
+					"result",
+					{
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ claim_id: claim.claim_id, kind: "started" }),
+					},
+					fetch,
+				);
+				return begun?.status === 204;
+			};
 		let outcome = await backend
 			.run(binary, timeout, task)
 			.finally(() => clearInterval(heartbeat));
-		if (outcome.kind === "signed_out" || outcome.kind === "plan_limited") {
-			readiness = outcome.kind;
-			const reset = outcome.kind === "plan_limited" && outcome.resetsAt;
-			checkAt =
-				reset && reset * 1_000 > now()
-					? reset * 1_000
-					: now() +
-						(outcome.kind === "plan_limited" ? 300_000 : checkSignInEvery);
-		}
+		rememberBlocker(kind, outcome);
 		const { claim_id } = claim;
 		while (now() < expires) {
 			const { kind } = outcome;

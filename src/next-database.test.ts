@@ -2646,6 +2646,7 @@ const CHANGEABLE: Record<string, string[]> = {
 		"issued_at",
 		"last_seen_at",
 		"readiness",
+		"readiness_by_kind",
 	],
 	doc_turn: [
 		"answer",

@@ -5,6 +5,7 @@ import {
 	docLinkOwnerTransaction,
 	docLinkPresence,
 	docLinkReadiness,
+	docWorkReadiness,
 	issueDocLink,
 	recordDocPoll,
 	revokeDocLink,
@@ -15,6 +16,7 @@ import {
 	finishDocJudgment,
 	finishDocTurn,
 	macRunner,
+	startDocTurn,
 } from "./doc-queue.ts";
 import type { DB } from "./next-database.d.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
@@ -82,8 +84,16 @@ async function withMac(
 export function claimDocLink(c: Context<WriterEnv>) {
 	return withMac(c, async (tx, owner) => {
 		const header = c.req.header("Doc-Link-Readiness");
-		const readiness = docLinkReadiness.find((value) => value === header);
-		if (header !== undefined && !readiness)
+		const legacy = docLinkReadiness.find((value) => value === header);
+		const readinessByKind = c.req.header("Doc-Link-Work-Readiness");
+		const readiness =
+			readinessByKind === undefined
+				? legacy && { chat: legacy, mail: legacy }
+				: docWorkReadiness.safeParse(parseReadiness(readinessByKind)).data;
+		if (
+			(header !== undefined && !legacy) ||
+			(readinessByKind !== undefined && !readiness)
+		)
 			return Response.json(
 				{ error: "invalid_readiness" },
 				{ status: 400, headers: noStore },
@@ -104,13 +114,21 @@ export function claimDocLink(c: Context<WriterEnv>) {
 				.map((token) => token.trim()),
 		);
 		const work =
-			readiness === "ready"
-				? await claimDocWork(tx, owner, macRunner(asked))
+			readiness && (readiness.chat === "ready" || readiness.mail === "ready")
+				? await claimDocWork(tx, owner, macRunner(asked), readiness)
 				: null;
 		return work
 			? Response.json(work, { headers: noStore })
 			: new Response(null, { status: 204, headers: noStore });
 	});
+}
+
+function parseReadiness(value: string): unknown {
+	try {
+		return JSON.parse(value);
+	} catch {
+		return undefined;
+	}
 }
 
 export async function completeDocLink(c: Context<WriterEnv>) {
@@ -121,6 +139,11 @@ export async function completeDocLink(c: Context<WriterEnv>) {
 
 		const { claim_id, kind } = body;
 		const fields = Object.keys(body).length;
+		if (kind === "started" && fields === 2)
+			return new Response(null, {
+				status: await startDocTurn(tx, owner, claim_id),
+				headers: noStore,
+			});
 		if (kind === "judgment" && fields === 3 && Object.hasOwn(body, "outcome")) {
 			const status = await finishDocJudgment(tx, owner, claim_id, body.outcome);
 			return new Response(null, { status, headers: noStore });
@@ -129,6 +152,7 @@ export async function completeDocLink(c: Context<WriterEnv>) {
 			kind === "answered" && fields === 3 && Object.hasOwn(body, "answer")
 				? { claim_id, kind, answer: body.answer }
 				: (kind === "failed" ||
+							kind === "startup_failed" ||
 							kind === "signed_out" ||
 							kind === "plan_limited") &&
 						fields === 2

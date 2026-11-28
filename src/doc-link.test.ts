@@ -3,6 +3,8 @@ import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { type TestContext, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runDocLink } from "../scripts/doc-link.ts";
+import { docLinkOwnerTransaction } from "./doc-link.ts";
+import { claimDocWork } from "./doc-queue.ts";
 import { withPartnerAuth } from "./partner-auth.ts";
 import { isArguments } from "./save-door.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
@@ -180,6 +182,11 @@ test("Doc link migration, private credentials and Mac polling", async (t) => {
 		await db.query(await readSchema("add-doc-link.sql"));
 		await db.query(await readSchema("add-doc-link-readiness.sql"));
 		await db.query(await readSchema("add-doc-link-backend.sql"));
+		const readinessMigration = await readSchema(
+			"add-doc-link-readiness-by-kind.sql",
+		);
+		await db.query(readinessMigration);
+		await db.query(readinessMigration);
 
 		assert.equal((await send({})).status, 401);
 		assert.equal((await send(first, "POST")).status, 403);
@@ -269,8 +276,8 @@ test("Doc link migration, private credentials and Mac polling", async (t) => {
 			claim_id: claim,
 			kind: "answered",
 			answer: {
-				kind: "refusal",
-				text: "I could not find that deal.",
+				kind: "answer",
+				text: "The local checklist is ready.",
 				sources: [],
 			},
 		};
@@ -290,6 +297,15 @@ test("Doc link migration, private credentials and Mac polling", async (t) => {
 			401,
 		);
 		assert.equal((await result({ ...first, ...proof }, appOrigin)).status, 404);
+		assert.equal(
+			(
+				await result(bearer, engineOrigin, {
+					...completion,
+					answer: { ...completion.answer, sources: [`deal:${randomUUID()}`] },
+				})
+			).status,
+			422,
+		);
 		const done = await result(bearer);
 		assert.equal(done.status, 204);
 		assert.equal(done.headers.get("Cache-Control"), "no-store");
@@ -669,6 +685,156 @@ test("Doc link migration, private credentials and Mac polling", async (t) => {
 
 				await runSubtest(
 					t,
+					"the Mac claims only kinds it reports ready",
+					async () => {
+						const conversation = randomUUID();
+						const turn = randomUUID();
+						const activity = randomUUID();
+						const job = randomUUID();
+						await db.query(
+							`with conversation as (
+							insert into next.doc_conversation (id, owner_user_id) values ($1, $5) returning id
+						), turn as (
+							insert into next.doc_turn (id, conversation_id, owner_user_id, position, idempotency_key, request_hash, question, state)
+							select $2, id, $5, 1, gen_random_uuid(), 'readiness-fixture', 'Ready fixture', 'queued' from conversation
+						), source as (
+							insert into next.activity (id, kind, happened_at) values ($3, 'email', now()) returning id
+								), about as (
+									insert into next.activity_about (activity_id, deal_id) select id, $6 from source
+						), message as (
+							insert into next.email (activity_id, sender, message_id, subject, body)
+							select id, 'sam@example.test', 'readiness-fixture', 'Tour', 'A tour is planned.' from source returning activity_id
+						), mailbox as (
+							insert into next.email_mailbox (activity_id, user_id) select activity_id, $5 from message
+						)
+						insert into next.doc_judgment_job (id, activity_id, owner_user_id, idempotency_key, kind)
+						select $4, activity_id, $5, gen_random_uuid(), 'email_summary' from message`,
+							[conversation, turn, activity, job, appUserId, deal.id],
+						);
+						try {
+							for (const [chat, mail, expected] of [
+								["signed_out", "ready", ["email_summary"]],
+								["ready", "signed_out", ["turn"]],
+								["ready", "ready", ["turn", "email_summary"]],
+								["signed_out", "signed_out", []],
+							] as const) {
+								await db.query(
+									"update next.doc_turn set state = 'queued' where id = $1",
+									[turn],
+								);
+								await db.query(
+									"update next.doc_judgment_job set state = 'queued' where id = $1",
+									[job],
+								);
+								const headers = {
+									"Doc-Link-Work-Readiness": JSON.stringify({ chat, mail }),
+									"Doc-Link-Work": "judgment",
+								};
+								for (const kind of expected) {
+									const claimed = await fetchClaim(headers);
+									assert.equal(claimed.work.kind, kind);
+									if (kind === "turn") {
+										const response = await result(bearer, engineOrigin, {
+											kind: "failed",
+											claim_id: claimed.claim_id,
+										});
+										assert.equal(response.status, 204);
+									} else {
+										await complete(claimed.claim_id, { kind: "failed" }, 204);
+									}
+								}
+								assert.equal((await poll(credential, headers)).status, 204);
+								assert.equal((await presence(first)).status, chat);
+								const saved = await db.query(
+									"select readiness_by_kind from next.doc_link where owner_user_id = $1",
+									[appUserId],
+								);
+								assert.deepEqual(saved.rows, [
+									{ readiness_by_kind: { chat, mail } },
+								]);
+							}
+							const headers = {
+								"Doc-Link-Work-Readiness": '{"chat":"ready","mail":"ready"}',
+							};
+							const chat = await fetchClaim(headers);
+							assert.equal(chat.work.kind, "turn");
+							assert.equal(
+								(
+									await result(bearer, engineOrigin, {
+										kind: "startup_failed",
+										claim_id: chat.claim_id,
+									})
+								).status,
+								204,
+							);
+							const saved = await db.query(
+								"select readiness_by_kind from next.doc_link where owner_user_id = $1",
+								[appUserId],
+							);
+							assert.deepEqual(saved.rows, [
+								{ readiness_by_kind: { chat: null, mail: "ready" } },
+							]);
+							const backup = await docLinkOwnerTransaction(
+								connectionString,
+								appUserId,
+								(tx) => claimDocWork(tx, appUserId, "backup"),
+							);
+							assert.ok(backup?.kind === "turn");
+							assert.equal(backup.turn.id, turn);
+							for (const expireClaim of [false, true]) {
+								await db.query(
+									"update next.doc_turn set state = 'queued', claim_id = null, claim_until = null, claim_state = null where id = $1",
+									[turn],
+								);
+								const work = await fetchClaim(headers);
+								assert.equal(work.work.kind, "turn");
+								const complete = (kind: string) =>
+									result(bearer, engineOrigin, {
+										claim_id: work.claim_id,
+										kind,
+									});
+								assert.equal((await complete("started")).status, 204);
+								if (expireClaim)
+									await db.query(
+										"update next.doc_turn set claim_until = now() - interval '1 second' where id = $1",
+										[turn],
+									);
+								else
+									assert.equal((await complete("startup_failed")).status, 204);
+								assert.equal(
+									await docLinkOwnerTransaction(
+										connectionString,
+										appUserId,
+										(tx) => claimDocWork(tx, appUserId, "backup"),
+									),
+									null,
+								);
+								assert.deepEqual(
+									(
+										await db.query(
+											"select state, claim_id from next.doc_turn where id = $1",
+											[turn],
+										)
+									).rows,
+									[{ state: "failed", claim_id: null }],
+								);
+							}
+						} finally {
+							await db.query(
+								"delete from next.doc_judgment_job where id = $1",
+								[job],
+							);
+							await db.query("delete from next.doc_turn where id = $1", [turn]);
+							await db.query(
+								"delete from next.doc_conversation where id = $1",
+								[conversation],
+							);
+						}
+					},
+				);
+
+				await runSubtest(
+					t,
 					"the Mac completes a queued turn before both mail judgments",
 					async (mac) => {
 						mac.mock.timers.enable({ apis: ["setInterval"] });
@@ -731,7 +897,7 @@ test("Doc link migration, private credentials and Mac polling", async (t) => {
 									);
 								},
 								async fetch(url, init) {
-									if (requests++ >= 6)
+									if (requests++ >= 7)
 										return new Response(null, { status: 401 });
 									const incoming = new Request(url, init);
 									const response = await request(incoming);
@@ -756,6 +922,7 @@ test("Doc link migration, private credentials and Mac polling", async (t) => {
 						const saved = [`${linkPath}/result`, 204];
 						assert.deepEqual(observed, [
 							"turn",
+							saved,
 							saved,
 							"email_summary",
 							saved,

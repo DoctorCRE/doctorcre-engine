@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 
 const [command, ...args] = process.argv.slice(2);
@@ -17,6 +17,13 @@ if (command === "--version") {
 	assert.equal(args[0], "status");
 	assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
 	assert.equal(process.env.OPENAI_API_KEY, undefined);
+	if (variant === "malformed-config") {
+		assert.equal(
+			readFileSync(join(process.env.CODEX_HOME ?? "", "config.toml"), "utf8"),
+			"[features\n",
+		);
+		process.exit(1);
+	}
 	console.error(
 		variant === "signed-out"
 			? "Not logged in"
@@ -47,32 +54,53 @@ if (command === "--version") {
 } else {
 	assert.equal(command, "exec");
 	const input = JSON.parse(readFileSync(0, "utf8"));
+	const probe = input.readiness === true;
+	const isolated = probe ? process.cwd() === "/" : !input.turn;
 	const prompt =
 		args.find((arg) => arg.startsWith("developer_instructions=")) ?? "";
-	assert.ok(args.includes("--ignore-user-config"));
-	assert.ok(args.includes("--ignore-rules"));
 	assert.ok(args.includes("--ephemeral"));
 	assert.ok(args.includes("--json"));
-	assert.ok(args.includes("read-only"));
-	assert.ok(args.includes("project_doc_max_bytes=0"));
-	assert.ok(args.includes("shell_tool"));
-	assert.ok(args.includes("apps"));
-	assert.ok(args.includes("plugins"));
-	assert.ok(args.includes("hooks"));
 	assert.equal(process.env.OPENAI_API_KEY, undefined);
 	assert.equal(args.at(-1), "-");
 
+	const isolationFlags = [
+		"--ignore-user-config",
+		"--ignore-rules",
+		"read-only",
+		"project_doc_max_bytes=0",
+	];
+	for (const flag of isolationFlags)
+		assert.equal(args.includes(flag), isolated, flag);
+	assert.equal(args.includes("--sandbox"), isolated);
+	const disabled = args.flatMap((arg, index) =>
+		arg === "--disable" ? [args[index + 1]] : [],
+	);
+	for (const feature of ["shell_tool", "apps", "plugins", "hooks"])
+		assert.equal(disabled.includes(feature), isolated, feature);
+	assert.ok(!args.includes("--enable"));
+
+	if (variant === "partner-config") {
+		assert.ok(process.env.CODEX_HOME);
+		assert.match(
+			readFileSync(join(process.env.CODEX_HOME, "config.toml"), "utf8"),
+			/shell_tool = true/,
+		);
+	}
+
 	const mcp = args.find((arg) => arg.startsWith("mcp_servers"));
-	if (input.turn) {
-		assert.match(prompt, /Use validate_answer/);
+	if (!isolated && (!probe || mcp)) {
+		assert.match(prompt, probe ? /Doc readiness check/ : /Use validate_answer/);
 		assert.match(
 			mcp ?? "",
 			/^mcp_servers\.doc=\{url="https:\/\/engine\.example\.test\/api\/engine\/doc\/mcp"/,
 		);
 		assert.match(mcp ?? "", /bearer_token_env_var="DOC_LINK_CREDENTIAL"/);
+		assert.match(mcp ?? "", /required=true/);
 		assert.match(
 			mcp ?? "",
-			/"Doc-Claim-Id"="8b97c249-aee2-46a1-9cfb-3c5b9f9d84b6"/,
+			probe
+				? /"Doc-Claim-Id"="readiness"/
+				: /"Doc-Claim-Id"="8b97c249-aee2-46a1-9cfb-3c5b9f9d84b6"/,
 		);
 		assert.match(
 			mcp ?? "",
@@ -80,12 +108,26 @@ if (command === "--version") {
 		);
 		assert.equal(process.env.DOC_LINK_CREDENTIAL, "x".repeat(43));
 		assert.ok(args.every((arg) => !arg.includes("x".repeat(43))));
-	} else {
+	} else if (isolated) {
 		assert.equal(mcp, "mcp_servers={}");
 		assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
-		assert.match(prompt, /untrusted data/);
-		assert.ok(!prompt.includes(input.body));
+		assert.match(prompt, probe ? /Doc readiness check/ : /untrusted data/);
+		if (!probe) assert.ok(!prompt.includes(input.body));
 	}
+	if (probe && variant === (isolated ? "mail-probe-fails" : "chat-probe-fails"))
+		process.exit(1);
+	if (
+		!isolated &&
+		mcp &&
+		(variant === "doc-mcp-offline" || (!probe && variant === "doc-mcp-drops"))
+	) {
+		console.error(
+			"Error: thread/start: required MCP servers failed to initialize: doc",
+		);
+		process.exit(1);
+	}
+	if (!probe && isolated && variant === "mail-startup-fails") process.exit(1);
+	emit({ type: "thread.started" });
 
 	const message = (text: string) =>
 		emit({ type: "item.completed", item: { type: "agent_message", text } });
@@ -107,28 +149,30 @@ if (command === "--version") {
 		process.exitCode = 1;
 	} else {
 		message(JSON.stringify({ ignored: "intermediate" }));
-		const answer = input.turn
-			? {
-					kind: "answer",
-					text: "The requested record is open.",
-					sources: ["deal:example"],
-					proposal: null,
-				}
-			: input.destinations
+		const answer = probe
+			? { ready: true }
+			: input.turn
 				? {
-						facts: [
-							{
-								destination: input.destinations[0],
-								text: input.body,
-								quote: input.body,
-							},
-						],
+						kind: "answer",
+						text: "The requested record is open.",
+						sources: ["deal:example"],
+						proposal: null,
 					}
-				: input.candidates
-					? { introductions: [] }
-					: prompt.includes("List the paragraphs")
-						? { authored: input.body.split("\n\n") }
-						: { summary: input.body, action_title: null, quote: input.body };
+				: input.destinations
+					? {
+							facts: [
+								{
+									destination: input.destinations[0],
+									text: input.body,
+									quote: input.body,
+								},
+							],
+						}
+					: input.candidates
+						? { introductions: [] }
+						: prompt.includes("List the paragraphs")
+							? { authored: input.body.split("\n\n") }
+							: { summary: input.body, action_title: null, quote: input.body };
 		message(
 			input.turn?.question === "Invalid format"
 				? "not JSON"

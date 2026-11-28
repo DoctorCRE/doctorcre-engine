@@ -11,7 +11,12 @@ import {
 } from "./activity/introduction-judgment.ts";
 import { recentDocTurns } from "./doc.ts";
 import type { judgmentClaimSchema } from "./doc-judgment-prompt.ts";
-import { docLinkState, recordDocPoll } from "./doc-link.ts";
+import {
+	type DocWorkKind,
+	type DocWorkReadiness,
+	docLinkState,
+	recordDocPoll,
+} from "./doc-link.ts";
 import { type DocClaimState, validateDocAnswer } from "./doc-tools.ts";
 import type { DB } from "./next-database.d.ts";
 
@@ -23,6 +28,7 @@ const clearJudgmentClaim = {
 };
 const initialClaim = { reads: 0, sources: {} } satisfies DocClaimState;
 const unexpired = sql<boolean>`claim_until > clock_timestamp()`;
+const released = sql<boolean>`coalesce(claim_state @> '{"prompt_released":true}'::jsonb, false)`;
 const leaseEnd = sql<string>`clock_timestamp() + interval '60 seconds'`;
 const claimUntilText = sql<string>`to_jsonb(claim_until) #>> '{}'`.as(
 	"claim_until",
@@ -46,6 +52,7 @@ async function claimDocTurn(
 			claim_state: initialClaim,
 		})
 		.where(eligible)
+		.where(sql<boolean>`not ${released}`)
 		.returning([
 			"id",
 			"conversation_id",
@@ -105,15 +112,24 @@ export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
 	runner: MacRunner | "backup" | "backup_mail",
+	readiness?: DocWorkReadiness,
 ) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
 	);
-	const eligible = (queuedAt: RawBuilder<unknown>) =>
+	await tx
+		.updateTable("doc_turn")
+		.set({ state: "failed", ...clearClaim })
+		.where("owner_user_id", "=", owner)
+		.where("state", "=", "working")
+		.where(released)
+		.where(sql<boolean>`not ${unexpired}`)
+		.execute();
+	const eligible = (queuedAt: RawBuilder<unknown>, kind: DocWorkKind) =>
 		runner === "backup" || runner === "backup_mail"
 			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
-				or (select status from ${docLinkState(owner)} link) <> 'ready'`
-			: sql`true`;
+				or (select status from ${docLinkState(owner, kind)} link) <> 'ready'`
+			: sql`${readiness === undefined || readiness[kind] === "ready"}::boolean`;
 	const suffixes = runner.startsWith(macPrefix)
 		? runner.slice(macPrefix.length).split("_and_")
 		: [];
@@ -136,7 +152,7 @@ export async function claimDocWork(
 		? sql`
 		union all
 		select 'mail', kind, id, created_at, state, claim_id, claim_until,
-			(${eligible(mailQueuedAt)}) as eligible from doc_judgment_job
+			(${eligible(mailQueuedAt, "mail")}) as eligible from doc_judgment_job
 		where owner_user_id = ${owner} and state in ('queued', 'working')
 	`
 		: sql``;
@@ -152,7 +168,7 @@ export async function claimDocWork(
 		}>`
 			with pending as (
 				select 'turn' as queue, null as kind, id, created_at, state, claim_id, claim_until,
-					(${eligible(turnQueuedAt)}) as eligible from doc_turn
+					(${eligible(turnQueuedAt, "chat")} and not ${released}) as eligible from doc_turn
 				where owner_user_id = ${owner} and state in ('queued', 'working')
 				${mailQueue}
 			)
@@ -176,16 +192,19 @@ export async function claimDocWork(
 			.executeTakeFirst();
 		if (!locked) continue;
 
-		const stillEligible = (queuedAt: RawBuilder<unknown>) => sql<boolean>`
+		const stillEligible = (
+			queuedAt: RawBuilder<unknown>,
+			kind: DocWorkKind,
+		) => sql<boolean>`
 			id = ${candidate.id} and owner_user_id = ${owner}
 			and state in ('queued', 'working') and state = ${candidate.state}
 			and claim_id is not distinct from ${candidate.claim_id}::uuid
 			and claim_until is not distinct from ${candidate.claim_until}::timestamptz
 			and (claim_until is null or claim_until <= clock_timestamp())
-			and (${eligible(queuedAt)})
+			and (${eligible(queuedAt, kind)})
 		`;
 		if (candidate.queue === "turn") {
-			const turn = await claimDocTurn(tx, stillEligible(turnQueuedAt));
+			const turn = await claimDocTurn(tx, stillEligible(turnQueuedAt, "chat"));
 			if (turn) return turn;
 			continue;
 		}
@@ -219,7 +238,7 @@ export async function claimDocWork(
 		const claim_id = crypto.randomUUID();
 		const claimed = await tx
 			.updateTable("doc_judgment_job")
-			.where(stillEligible(mailQueuedAt))
+			.where(stillEligible(mailQueuedAt, "mail"))
 			.set(
 				valid
 					? {
@@ -239,7 +258,9 @@ export async function claimDocWork(
 
 const judgmentOutcome = z.discriminatedUnion("kind", [
 	z.strictObject({ kind: z.literal("answered"), result: z.unknown() }),
-	z.strictObject({ kind: z.enum(["failed", "signed_out", "plan_limited"]) }),
+	z.strictObject({
+		kind: z.enum(["failed", "startup_failed", "signed_out", "plan_limited"]),
+	}),
 ]);
 const text = z
 	.string()
@@ -374,7 +395,10 @@ export async function saveDocJudgment(
 		);
 
 	const { kind } = outcome;
-	const blocked = kind === "signed_out" || kind === "plan_limited";
+	const blocked =
+		kind === "startup_failed" ||
+		kind === "signed_out" ||
+		kind === "plan_limited";
 	const state = blocked ? "queued" : kind;
 	const saved = await tx
 		.updateTable("doc_judgment_job")
@@ -421,14 +445,42 @@ export async function saveDocJudgment(
 			where not exists (select from email_current_summary where activity_id = ${job.activity_id})
 		`.execute(tx);
 	}
-	if (blocked) await recordDocPoll(tx, owner, kind);
+	if (blocked)
+		await recordDocPoll(tx, owner, {
+			mail: kind === "startup_failed" ? null : kind,
+		});
 	return 204;
 }
 
 type DocResult = { claim_id: string } & (
 	| { kind: "answered"; answer: unknown; answered_by?: "backup" }
-	| { kind: "failed" | "signed_out" | "plan_limited" | "queued" }
+	| {
+			kind:
+				| "failed"
+				| "startup_failed"
+				| "signed_out"
+				| "plan_limited"
+				| "queued";
+	  }
 );
+
+export async function startDocTurn(
+	tx: Transaction<DB>,
+	owner: string,
+	claimId: string,
+) {
+	const saved = await tx
+		.updateTable("doc_turn")
+		.set({ claim_state: sql`claim_state || '{"prompt_released":true}'::jsonb` })
+		.where("claim_id", "=", claimId)
+		.where("owner_user_id", "=", owner)
+		.where("state", "=", "working")
+		.where(
+			sql<boolean>`not ${released} and claim_until > clock_timestamp() + interval '15 seconds'`,
+		)
+		.executeTakeFirst();
+	return saved.numUpdatedRows ? 204 : 404;
+}
 
 export async function finishDocTurn(
 	tx: Transaction<DB>,
@@ -456,11 +508,19 @@ export async function finishDocTurn(
 			return 422;
 		}
 	}
-	const blocked = kind === "signed_out" || kind === "plan_limited";
+	const blocked =
+		kind === "startup_failed" ||
+		kind === "signed_out" ||
+		kind === "plan_limited";
 	const saved = await tx
 		.updateTable("doc_turn")
 		.set({
-			state: blocked ? "queued" : kind,
+			state:
+				blocked || kind === "queued"
+					? turn.claim_state.prompt_released
+						? "failed"
+						: "queued"
+					: kind,
 			...clearClaim,
 			answer,
 			...(kind === "answered" &&
@@ -471,6 +531,9 @@ export async function finishDocTurn(
 		.where(unexpired)
 		.executeTakeFirst();
 	if (!saved.numUpdatedRows) return 404;
-	if (blocked) await recordDocPoll(tx, owner, kind);
+	if (blocked)
+		await recordDocPoll(tx, owner, {
+			chat: kind === "startup_failed" ? null : kind,
+		});
 	return 204;
 }

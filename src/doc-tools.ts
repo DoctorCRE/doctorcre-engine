@@ -50,6 +50,8 @@ type ClaimSource = Source | DocMatch | DraftSource | MailSource;
 export type DocClaimState = {
 	reads: number;
 	sources: Record<string, ClaimSource>;
+	returned_record?: true;
+	prompt_released?: true;
 	choices?: Source[];
 	failed?: true;
 };
@@ -156,8 +158,14 @@ export function validateDocAnswer(payload: unknown, state: DocClaimState) {
 					if (!record) throw new Error("Doc cited an unread record");
 					return record;
 				});
-	if (kind === "answer" && !cited.length)
-		throw new Error("Doc answer has no sources");
+	if (
+		kind === "answer" &&
+		!cited.length &&
+		(proposal != null ||
+			state.returned_record ||
+			Object.keys(state.sources).length > 0)
+	)
+		throw new Error("Doc record answer has no sources");
 	const unique = [...new Set(cited)];
 	return {
 		kind,
@@ -177,8 +185,9 @@ export function registerDocTools(
 	{ readConnection, partner, partnerId, draft, state, timeout }: ClaimRead,
 ) {
 	const deadline = Date.now() + timeout;
-	function remember(record: Source | DocMatch | MailSource) {
+	function remember(record: ClaimSource) {
 		const source = `${record.ref.kind}:${record.ref.id}`;
+		state.returned_record = true;
 		state.sources[source] = record;
 		return { ...record, source };
 	}
@@ -187,6 +196,7 @@ export function registerDocTools(
 		if (state.failed) throw new Error("A Doc read failed");
 		if (state.choices) throw new Error("Choose a record to continue");
 		if (state.reads >= 4) throw new Error("Doc read limit exceeded");
+		if (Object.keys(state.sources).length) state.returned_record = true;
 		state.reads++;
 		return nextTransaction(readConnection, "read", async (db) => {
 			const remaining = deadline - Date.now();
@@ -248,10 +258,8 @@ export function registerDocTools(
 						href: draftHref(draft.id),
 						version: draft.version,
 					};
-					state.sources[source] = target;
 					return {
-						source,
-						...target,
+						...remember(target),
 						draft: { subject: row.subject, body: row.body },
 						email: row.email,
 					};

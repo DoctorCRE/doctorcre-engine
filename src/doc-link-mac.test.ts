@@ -95,6 +95,7 @@ async function runLink(
 	binary = claude,
 	directory?: string,
 	backend: "claude" | "codex" = "claude",
+	claimMcpAvailable = true,
 ) {
 	let now = 60_000;
 	const maxWaits = replies.length;
@@ -111,7 +112,6 @@ async function runLink(
 						managedCodexPolicy: [join(directory, "requirements.toml")],
 					}
 				: {}),
-			codexAccountAllowed: async () => true,
 			now: () => now,
 			wait: async () => {
 				assert.ok(
@@ -121,7 +121,23 @@ async function runLink(
 				now += 2_000;
 			},
 			async fetch(url, init) {
-				requests.push(new Request(url, init));
+				const request = new Request(url, init);
+				const path = new URL(request.url).pathname;
+				if (path.endsWith("/mcp"))
+					return claimMcpAvailable
+						? Response.json({
+								id: 1,
+								result: { serverInfo: { name: "doctorcre-doc" } },
+							})
+						: status(503);
+				if (
+					path.endsWith("/result") &&
+					z
+						.object({ kind: z.literal("started") })
+						.safeParse(await request.clone().json()).success
+				)
+					return status(204);
+				requests.push(request);
 				const reply = replies.shift();
 				if (reply === "drop") throw new TypeError("connection dropped");
 				if (reply instanceof Response) return reply;
@@ -144,6 +160,9 @@ async function runLink(
 		requests.map(async (request) => ({
 			path: new URL(request.url).pathname,
 			readiness: request.headers.get("Doc-Link-Readiness"),
+			mailReadiness:
+				JSON.parse(request.headers.get("Doc-Link-Work-Readiness") ?? "null")
+					?.mail ?? null,
 			work: request.headers.get("Doc-Link-Work"),
 			body: request.body ? await request.json() : null,
 		})),
@@ -152,15 +171,21 @@ async function runLink(
 
 const link = (...replies: Reply[]) => runLink(replies);
 
-const poll = (readiness: string) => ({
+const poll = (
+	readiness: string | null,
+	mailReadiness: string | null = readiness,
+) => ({
 	path: "/api/engine/doc/link/claim",
 	readiness,
-	work: readiness === "ready" ? "judgment, email_split, introduction" : null,
+	mailReadiness,
+	work:
+		mailReadiness === "ready" ? "judgment, email_split, introduction" : null,
 	body: null,
 });
 const result = (body: unknown) => ({
 	path: "/api/engine/doc/link/result",
 	readiness: null,
+	mailReadiness: null,
 	work: null,
 	body,
 });
@@ -237,22 +262,13 @@ test("Doc link runs a private Claude print session and submits only the final an
 	observed.args[mcpIndex + 1] = "<MCP config>";
 	observed.args[promptIndex + 1] = "<fixed prompt>";
 	assert.deepEqual(observed.args, [
-		"--setting-sources",
-		"",
-		"--settings",
-		'{"disableAllHooks":true,"disableClaudeAiConnectors":true}',
 		"--no-session-persistence",
-		"--no-chrome",
-		"--disable-slash-commands",
-		"--strict-mcp-config",
-		"--permission-mode",
-		"dontAsk",
 		"-p",
 		"--output-format",
 		"stream-json",
 		"--verbose",
-		"--tools",
-		"",
+		"--input-format",
+		"stream-json",
 		"--mcp-config",
 		"<MCP config>",
 		"--allowedTools",
@@ -260,12 +276,15 @@ test("Doc link runs a private Claude print session and submits only the final an
 		"--system-prompt",
 		"<fixed prompt>",
 	]);
-	const authArgs = JSON.parse(await readFile(authArgsPath, "utf8"));
-	assert.deepEqual(authArgs, [
-		...observed.args.slice(0, observed.args.indexOf("-p")),
-		"auth",
-		"status",
-	]);
+	const authCalls = (await readFile(authArgsPath, "utf8"))
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	assert.ok(
+		authCalls.every((args) => args.slice(-2).join(" ") === "auth status"),
+	);
+	assert.ok(authCalls.some((args) => args.includes("--strict-mcp-config")));
+	assert.ok(authCalls.some((args) => !args.includes("--strict-mcp-config")));
 	assert.deepEqual(observed.input, {
 		turn: { question: "Inspect", context },
 		history,
@@ -275,6 +294,36 @@ test("Doc link runs a private Claude print session and submits only the final an
 	assert.equal(observed.user, "partner");
 	assert.equal(observed.logname, "partner");
 });
+
+for (const [name, settings, readiness, mailReadiness] of [
+	[
+		"refuses a configured token for chat",
+		{ env: { ANTHROPIC_AUTH_TOKEN: "fixture token" } },
+		"signed_out",
+		"ready",
+	],
+	[
+		"offers chat only when isolated mail is signed out",
+		{ fixtureIsolatedSignedOut: true },
+		"ready",
+		"signed_out",
+	],
+] as const) {
+	test(`Claude ${name}`, async () => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, "claude.ts");
+		await copyFile(claude, binary);
+		await writeFile(
+			join(directory.path, "user-settings.json"),
+			JSON.stringify(settings),
+		);
+		assert.deepEqual(await runLink([status(401)], binary), [
+			poll(readiness, mailReadiness),
+		]);
+	});
+}
 
 test("Doc link refuses a shared credential file and reads a private one", async (t) => {
 	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
@@ -313,7 +362,7 @@ const managedSources = [
 ] satisfies [string, string, string | null][];
 
 for (const [source, name, contents] of managedSources) {
-	test(`Doc link stops before polling when it finds ${source}`, async (t) => {
+	test(`Doc link offers chat-only polling when it finds ${source}`, async (t) => {
 		const directory = await mkdtemp(join(process.cwd(), ".scratch."));
 		const path = join(directory, name);
 		await mkdir(join(path, ".."), { recursive: true });
@@ -334,21 +383,8 @@ for (const [source, name, contents] of managedSources) {
 			await rmdir(directory);
 		});
 		const errors = t.mock.method(console, "error", () => {});
-		const stopped = new Error("End the test while polling is paused");
-		await assert.rejects(
-			runDocLink(
-				{ engine, claude, credential },
-				{
-					managedSettings: managedSettingsIn(directory),
-					now: () => 0,
-					wait: async () => {
-						throw stopped;
-					},
-					fetch: async () => status(401),
-				},
-			),
-			stopped,
-		);
+		const requests = await runLink([status(401)], claude, directory);
+		assert.deepEqual(requests, [poll("ready", null)]);
 		assert.equal(errors.mock.calls.length, 1);
 		assert.match(
 			String(errors.mock.calls[0]?.arguments[0]),
@@ -511,7 +547,7 @@ for (const [source, policy, arrange] of denyOnlyCases) {
 	});
 }
 
-test("Doc link refuses a turn when policy appears after a poll and resumes once it is removed", async (t) => {
+test("Doc link leaves a mail job unrun if policy appears after the poll", async (t) => {
 	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
 	const policy = join(directory, "managed-settings.json");
 	const errors = t.mock.method(console, "error", () => {});
@@ -520,31 +556,31 @@ test("Doc link refuses a turn when policy appears after a poll and resumes once 
 		if (policyPresent) await unlink(policy);
 		await rmdir(directory);
 	});
-	let waits = 0;
-	const requests: (string | null)[] = [];
+	const requests: Request[] = [];
 	await runDocLink(
 		{ engine, claude, credential },
 		{
 			managedSettings: managedSettingsIn(directory),
-			now: () => waits * 2_000,
-			wait: async () => {
-				waits++;
-				if (waits === 2) {
-					await unlink(policy);
-					policyPresent = false;
-				}
-			},
-			async fetch(_url, init) {
-				requests.push(new Headers(init?.headers).get("Doc-Link-Readiness"));
+			now: () => 0,
+			wait: async () => {},
+			async fetch(url, init) {
+				requests.push(new Request(url, init));
 				if (requests.length !== 1) return status(401);
 				await writeFile(policy, "{}");
 				policyPresent = true;
-				return claimed("Question");
+				return summaryClaim("Tour");
 			},
 		},
 	);
-	assert.equal(waits, 2);
-	assert.deepEqual(requests, ["ready", "ready"]);
+	assert.deepEqual(
+		requests.map((request) => new URL(request.url).pathname),
+		["/api/engine/doc/link/claim", "/api/engine/doc/link/claim"],
+	);
+	assert.equal(
+		requests[0]?.headers.get("Doc-Link-Work"),
+		"judgment, email_split, introduction",
+	);
+	assert.equal(requests[1]?.headers.get("Doc-Link-Work"), null);
 	assert.equal(errors.mock.calls.length, 1);
 	assert.match(
 		String(errors.mock.calls[0]?.arguments[0]),
@@ -577,7 +613,7 @@ test("Doc link releases a claim when sign-in expires and resumes the queued turn
 		[
 			poll("ready"),
 			result({ claim_id: firstClaim, kind: "signed_out" }),
-			poll("signed_out"),
+			poll("signed_out", "ready"),
 			poll("ready"),
 			answered(secondClaim),
 			poll("ready"),
@@ -598,8 +634,8 @@ test("Doc link reports a plan limit and waits for its reported reset before clai
 		[
 			poll("ready"),
 			result({ claim_id: firstClaim, kind: "plan_limited" }),
-			poll("plan_limited"),
-			poll("plan_limited"),
+			poll("plan_limited", "ready"),
+			poll("plan_limited", "ready"),
 			poll("ready"),
 			answered(secondClaim),
 			poll("ready"),
@@ -660,7 +696,12 @@ for (const [subject, kind] of [
 	test(`Doc link stops requesting jobs after mail reports ${kind}`, async () => {
 		assert.deepEqual(
 			await link(summaryClaim(subject), status(204), summaryClaim("Tour")),
-			[poll("ready"), judgment({ kind }), poll(kind), poll(kind)],
+			[
+				poll("ready"),
+				judgment({ kind }),
+				poll("ready", kind),
+				poll("ready", kind),
+			],
 		);
 	});
 }
@@ -680,8 +721,40 @@ test("a ready Doc link advertises all its mail jobs and finishes a split claim",
 });
 
 for (const backend of ["claude", "codex"] as const) {
-	const binary = backend === "claude" ? claude : codex;
-	test(`${backend} completes every job kind and keeps engine result validation`, async () => {
+	test(`${backend} completes every job kind and keeps engine result validation`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(
+			directory.path,
+			backend === "codex" ? "partner-config" : "claude.ts",
+		);
+		if (backend === "codex") {
+			await symlink(codex, binary);
+			await writeFile(
+				join(directory.path, "config.toml"),
+				'sandbox_mode = "danger-full-access"\n[features]\nshell_tool = true\n',
+			);
+			const previous = process.env.CODEX_HOME;
+			process.env.CODEX_HOME = directory.path;
+			t.after(() => {
+				if (previous === undefined) delete process.env.CODEX_HOME;
+				else process.env.CODEX_HOME = previous;
+			});
+		} else {
+			await copyFile(claude, binary);
+			await writeFile(
+				join(directory.path, "user-settings.json"),
+				JSON.stringify({
+					permissions: { allow: ["Bash"] },
+					hooks: {
+						PreToolUse: [
+							{ hooks: [{ type: "command", command: "fixture-hook" }] },
+						],
+					},
+				}),
+			);
+		}
 		const destination = { kind: "deal", id: context.id };
 		const mail = {
 			claim_id: firstClaim,
@@ -717,7 +790,7 @@ for (const backend of ["claude", "codex"] as const) {
 				status(204),
 			],
 			binary,
-			undefined,
+			join(directory.path, "managed"),
 			backend,
 		);
 		const summary = judgment({
@@ -779,7 +852,11 @@ for (const [question, kind] of [
 				undefined,
 				"codex",
 			),
-			[poll("ready"), result({ claim_id: firstClaim, kind }), poll(kind)],
+			[
+				poll("ready"),
+				result({ claim_id: firstClaim, kind }),
+				poll(kind, "ready"),
+			],
 		);
 	});
 }
@@ -793,12 +870,11 @@ for (const variant of ["signed-out", "api-key", "business", "unsupported"]) {
 		await symlink(codex, binary);
 		const requests: Request[] = [];
 		const paused = Symbol("polling paused");
-		const expectedReadiness = variant === "signed-out" ? "signed_out" : null;
+		const expectedReadiness = variant === "unsupported" ? null : "signed_out";
 		await assert.rejects(
 			runDocLink(
 				{ backend: "codex", binary, engine, credential },
 				{
-					codexAccountAllowed: async () => true,
 					now: () => 60_000,
 					wait: async () => {
 						throw paused;
@@ -817,12 +893,146 @@ for (const variant of ["signed-out", "api-key", "business", "unsupported"]) {
 		);
 		assert.deepEqual(
 			requests.map((request) => request.headers.get("Doc-Link-Readiness")),
-			variant === "signed-out" || variant === "unsupported"
-				? [expectedReadiness]
-				: [],
+			[expectedReadiness],
 		);
 	});
 }
+
+for (const [variant, chat, mail] of [
+	["chat-probe-fails", null, "ready"],
+	["mail-probe-fails", "ready", null],
+	["malformed-config", null, null],
+] as const) {
+	test(`Codex reports each work kind when ${variant}`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, variant);
+		await symlink(codex, binary);
+		const errors = t.mock.method(console, "error", () => {});
+		if (variant === "malformed-config") {
+			await writeFile(join(directory.path, "config.toml"), "[features\n");
+			const previous = process.env.CODEX_HOME;
+			process.env.CODEX_HOME = directory.path;
+			t.after(() => {
+				if (previous === undefined) delete process.env.CODEX_HOME;
+				else process.env.CODEX_HOME = previous;
+			});
+		}
+		const requests = await runLink([status(401)], binary, undefined, "codex");
+		assert.deepEqual(requests, [poll(chat, mail)]);
+		const reason =
+			"Codex could not check your settings. Fix or reset them, then rerun setup.";
+		assert.deepEqual(
+			errors.mock.calls.map((call) => String(call.arguments[0])).sort(),
+			[
+				...(chat ? [] : [`Doc chat: ${reason}`]),
+				...(mail ? [] : [`Doc mail: ${reason}`]),
+			],
+		);
+	});
+}
+
+for (const [variant, claim, expected] of [
+	["doc-mcp-offline", null, [poll(null, "ready")]],
+	[
+		"doc-mcp-drops",
+		claimed("Question"),
+		[
+			poll("ready"),
+			result({ claim_id: firstClaim, kind: "startup_failed" }),
+			poll(null, "ready"),
+		],
+	],
+	[
+		"mail-startup-fails",
+		summaryClaim("Tour"),
+		[poll("ready"), judgment({ kind: "startup_failed" }), poll("ready", null)],
+	],
+] as const) {
+	test(`Codex leaves the other kind ready when ${variant}`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, variant);
+		await symlink(codex, binary);
+		const errors = t.mock.method(console, "error", () => {});
+		const replies = claim ? [claim, status(204), status(401)] : [status(401)];
+		assert.deepEqual(
+			await runLink(
+				replies,
+				binary,
+				undefined,
+				"codex",
+				variant !== "doc-mcp-drops",
+			),
+			expected,
+		);
+		assert.equal(errors.mock.calls.length, 1);
+		assert.match(
+			String(errors.mock.calls[0]?.arguments[0]),
+			variant === "mail-startup-fails"
+				? /^Doc mail: .*settings/
+				: /^Doc chat: .*engine connection/,
+		);
+	});
+}
+
+for (const disconnectsAfterPrompt of [false, true]) {
+	test(`Claude preserves the execution boundary when Doc MCP disconnects ${disconnectsAfterPrompt ? "after" : "before"} the prompt`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, "claude.ts");
+		const action = join(directory.path, "action.log");
+		await copyFile(claude, binary);
+		await writeFile(
+			join(directory.path, "user-settings.json"),
+			JSON.stringify({
+				fixtureAction: true,
+				fixtureDisconnected: !disconnectsAfterPrompt,
+				fixtureDisconnectsAfterPrompt: disconnectsAfterPrompt,
+			}),
+		);
+		t.mock.method(console, "error", () => {});
+		assert.deepEqual(
+			await runLink([claimed("Question"), status(204), status(401)], binary),
+			[
+				poll("ready"),
+				disconnectsAfterPrompt
+					? answered(firstClaim)
+					: result({ claim_id: firstClaim, kind: "startup_failed" }),
+				poll(null, "ready"),
+			],
+		);
+		assert.equal(
+			await readFile(action, "utf8").catch(() => ""),
+			disconnectsAfterPrompt ? "ran\n" : "",
+		);
+	});
+}
+
+test("Codex treats startup failure after prompt release as a terminal result", async (t) => {
+	await using directory = await mkdtempDisposable(
+		join(process.cwd(), ".scratch."),
+	);
+	const binary = join(directory.path, "doc-mcp-drops");
+	await symlink(codex, binary);
+	t.mock.method(console, "error", () => {});
+	assert.deepEqual(
+		await runLink(
+			[claimed("Question"), status(204), status(401)],
+			binary,
+			undefined,
+			"codex",
+		),
+		[
+			poll("ready"),
+			result({ claim_id: firstClaim, kind: "failed" }),
+			poll(null, "ready"),
+		],
+	);
+});
 
 test("Codex config needs an absolute binary path", async () => {
 	await using directory = await mkdtempDisposable(
@@ -839,46 +1049,31 @@ test("Codex config needs an absolute binary path", async () => {
 	);
 });
 
-test("The Codex runner pauses before polling if managed settings are present", async () => {
-	await using directory = await mkdtempDisposable(
-		join(process.cwd(), ".scratch."),
-	);
-	const policy = join(directory.path, "requirements.toml");
-	await writeFile(policy, "");
-	const paused = Symbol("polling paused");
-	await assert.rejects(
-		runDocLink(
-			{ backend: "codex", binary: codex, engine, credential },
-			{
-				managedCodexPolicy: [policy],
-				codexAccountAllowed: async () => true,
-				fetch: async () => assert.fail("polled despite managed settings"),
-				now: () => 60_000,
-				wait: async () => {
-					throw paused;
-				},
-			},
-		),
-		(error) => error === paused,
-	);
-});
+for (const [backend, policy] of [
+	["claude", "managed-settings.json"],
+	["codex", "requirements.toml"],
+] as const) {
+	test(`Doc answers on ${backend} with managed settings and leaves mail available for backup`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		await writeFile(join(directory.path, policy), "{}");
+		t.mock.method(console, "error", () => {});
+		const requests = await runLink(
+			[claimed("Question"), status(204)],
+			backend === "codex" ? codex : claude,
+			directory.path,
+			backend,
+		);
+		assert.deepEqual(requests, [
+			poll("ready", null),
+			answered(firstClaim),
+			poll("ready", null),
+		]);
+	});
+}
 
-test("Codex refuses to start outside its dedicated standard account", async () => {
-	await assert.rejects(
-		runDocLink(
-			{ backend: "codex", binary: codex, engine, credential },
-			{
-				codexAccountAllowed: async () => false,
-				fetch: async () => assert.fail("polled from another account"),
-				now: () => 60_000,
-				wait: async () => assert.fail("runner did not stop"),
-			},
-		),
-		/dedicated standard macOS account/,
-	);
-});
-
-test("Codex advertises no work with a missing or altered isolation catalog", async () => {
+test("Codex offers chat only with a missing or altered mail catalog", async () => {
 	await using directory = await mkdtempDisposable(
 		join(process.cwd(), ".scratch."),
 	);
@@ -891,7 +1086,6 @@ test("Codex advertises no work with a missing or altered isolation catalog", asy
 			runDocLink(
 				{ backend: "codex", binary: codex, engine, credential },
 				{
-					codexAccountAllowed: async () => true,
 					codexCatalog: catalog,
 					fetch: async (_url, init) => {
 						work.push(new Headers(init?.headers).get("Doc-Link-Work"));
@@ -905,7 +1099,7 @@ test("Codex advertises no work with a missing or altered isolation catalog", asy
 			),
 			(error) => error === paused,
 		);
-		assert.deepEqual(work, []);
+		assert.deepEqual(work, [null]);
 	}
 });
 
@@ -930,8 +1124,8 @@ for (const [question, reset] of [
 			[
 				poll("ready"),
 				result({ claim_id: firstClaim, kind: "plan_limited" }),
-				poll("plan_limited"),
-				poll("plan_limited"),
+				poll("plan_limited", "ready"),
+				poll("plan_limited", "ready"),
 				poll("ready"),
 				poll("ready"),
 			],

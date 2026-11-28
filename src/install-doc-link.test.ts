@@ -277,28 +277,33 @@ for (const subscriptionType of ["team", "enterprise"]) {
 	});
 }
 
-test("Doc link pauses when Claude does not report its subscription type", async (t) => {
+test("Doc link offers neither kind without a verified Claude subscription", async (t) => {
 	const mac = fakeMac(t, { subscriptionType: null });
 	const errors = t.mock.method(console, "error", () => {});
-	const stopped = new Error("End the test while polling is paused");
-	await assert.rejects(
-		runDocLink(
-			{ engine, claude: mac.claude, credential: firstCredential },
-			{
-				fetch: async () => new Response(null, { status: 401 }),
-				now: () => 0,
-				wait: async () => {
-					throw stopped;
-				},
+	const polls: Headers[] = [];
+	await runDocLink(
+		{ engine, claude: mac.claude, credential: firstCredential },
+		{
+			fetch: async (_url, init) => {
+				polls.push(new Headers(init?.headers));
+				return new Response(null, { status: 401 });
 			},
-		),
-		stopped,
+			now: () => 0,
+			wait: async () => {
+				assert.fail("Doc should stop after a refused poll");
+			},
+		},
 	);
-	assert.equal(errors.mock.calls.length, 1);
-	assert.match(
-		String(errors.mock.calls[0]?.arguments[0]),
-		/Doc needs your own Claude plan/,
-	);
+	assert.equal(polls.length, 1);
+	assert.equal(polls[0]?.get("Doc-Link-Work"), null);
+	assert.deepEqual(JSON.parse(polls[0]?.get("Doc-Link-Work-Readiness") ?? ""), {
+		chat: "signed_out",
+		mail: "signed_out",
+	});
+	assert.deepEqual(errors.mock.calls.map((call) => call.arguments[0]).sort(), [
+		"Doc chat: Doc needs your own Claude plan.",
+		"Doc mail: Doc needs your own Claude plan.",
+	]);
 });
 
 for (const engineStatus of [401, 403]) {
