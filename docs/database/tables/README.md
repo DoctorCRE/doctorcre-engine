@@ -72,7 +72,6 @@
 | [next.deal_phase_change](next.deal_phase_change.md)                                         | 11      |         | BASE TABLE |
 | [next.deal_property](next.deal_property.md)                                                 | 7       |         | BASE TABLE |
 | [next.deal_reason](next.deal_reason.md)                                                     | 6       |         | BASE TABLE |
-| [next.deal_star](next.deal_star.md)                                                         | 7       |         | BASE TABLE |
 | [next.design_template](next.design_template.md)                                             | 7       |         | BASE TABLE |
 | [next.do_not_contact](next.do_not_contact.md)                                               | 8       |         | BASE TABLE |
 | [next.doc_conversation](next.doc_conversation.md)                                           | 4       |         | BASE TABLE |
