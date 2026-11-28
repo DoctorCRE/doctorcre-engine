@@ -22,7 +22,7 @@ Large work is a parent issue with sub-issues. Each sub-issue gets its own pull r
 ## Stay on the task
 
 - Do what the issue says and nothing else. If you notice something else worth doing, open an issue for it and keep going.
-- Keep a pull request under about 400 changed lines, or about 1,200 for a screen batch. A project batch has no fixed line cap, but must fit in one review. The pull request states its size. Leave lockfiles and generated files out of both counts. Split bigger work into sub-issues. Fix failing tests inside the batch before review and never skip them.
+- Keep a pull request as lean as it can be without leaving out what it needs, and state its size. Leave lockfiles and generated files out of that count. Split work that is really separate into sub-issues. Fix failing tests inside the batch before review and never skip them.
 - If the check fails on main, fixing it comes before any other work.
 
 ## Choosing how to do something
