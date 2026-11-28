@@ -59,14 +59,16 @@ if (command === "--version") {
 		"--ignore-rules",
 		"read-only",
 		"project_doc_max_bytes=0",
-		"shell_tool",
-		"apps",
-		"plugins",
-		"hooks",
 	];
 	for (const flag of isolationFlags)
 		assert.equal(args.includes(flag), !input.turn, flag);
 	assert.equal(args.includes("--sandbox"), !input.turn);
+	const disabled = args.flatMap((arg, index) =>
+		arg === "--disable" ? [args[index + 1]] : [],
+	);
+	for (const feature of ["shell_tool", "apps", "plugins", "hooks"])
+		assert.equal(disabled.includes(feature), !input.turn, feature);
+	assert.ok(!args.includes("--enable"));
 
 	if (variant === "partner-config") {
 		assert.ok(process.env.CODEX_HOME);

@@ -236,12 +236,19 @@ export async function runDocLink(
 	}
 
 	let readiness: Readiness | "personal_plan_required" | undefined;
+	let mailReady = false;
 	let checkAt = 0;
 	async function checkSignIn() {
 		const status = await backend.signIn(binary);
 		if (status === "personal_plan_required" && readiness !== status)
 			console.error(backend.personalPlanMessage);
 		readiness = status;
+		mailReady =
+			status === "ready" &&
+			(allowMailTools ||
+				name !== "claude" ||
+				((await mailAllowed()) &&
+					(await backends.claude.signIn(binary, false)) === "ready"));
 		checkAt = now() + checkSignInEvery;
 		return status;
 	}
@@ -251,7 +258,7 @@ export async function runDocLink(
 		if (readiness === "personal_plan_required") continue;
 		const headers = new Headers({ "Doc-Link-Backend": name });
 		if (readiness) headers.set("Doc-Link-Readiness", readiness);
-		if (readiness === "ready" && (await mailAllowed()))
+		if (readiness === "ready" && mailReady && (await mailAllowed()))
 			headers.set("Doc-Link-Work", "judgment, email_split, introduction");
 		const poll = await postDocLink(config, "claim", { headers }, fetch);
 		if (poll?.status === 401) return;
@@ -263,7 +270,10 @@ export async function runDocLink(
 		if (!claim) continue;
 		const chat = claim.kind === "turn";
 		if (!chat && !(await mailAllowed())) continue;
-		if ((await checkSignIn()) !== "ready" || (!chat && !(await mailAllowed())))
+		if (
+			(await checkSignIn()) !== "ready" ||
+			(!chat && (!mailReady || !(await mailAllowed())))
+		)
 			continue;
 		const expires = Date.parse(claim.claim_until);
 		const timeout = Math.min(45_000, expires - 15_000 - now());
