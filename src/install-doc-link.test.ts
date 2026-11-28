@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
 	mkdirSync,
 	mkdtempDisposableSync,
@@ -55,6 +56,7 @@ function fakeMac(
 	const rejectBootstrap = join(scratch, "reject-bootstrap");
 	const oldConfig = join(scratch, "old-config");
 	const oldAgent = join(scratch, "old-agent");
+	let invocationNumber = 0;
 	const codex = join(bin, "codex cli");
 	const codexHome = join(home, ".codex");
 
@@ -135,35 +137,49 @@ esac`,
 		ACTIVITY_READ_SCHEMA: "next",
 		RELATIONSHIPS_READ_SCHEMA: "next",
 	} as const;
-	function run(
+	function prepareRun(
 		input = firstCredential,
 		{
 			args = [engine],
 			codexDirectory,
 			polls,
 			revokeOnNew = false,
+			pauseAtPoll = false,
 		}: {
 			args?: string[];
 			codexDirectory?: string | undefined;
 			polls?: [string, number, string?][] | undefined;
 			revokeOnNew?: boolean;
+			pauseAtPoll?: boolean;
 		} = {},
 	) {
-		const invocation = join(scratch, "run-installer.mjs");
+		const invocation = join(scratch, `run-installer-${++invocationNumber}.mjs`);
 		writeFileSync(
 			invocation,
 			`
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { appendFileSync } from "node:fs";
 import { installDocLink } from ${JSON.stringify(installer.href)};
 const polls = ${JSON.stringify(polls ?? null)};
 let revoked = false;
 let fetchError;
+let paused = false;
 globalThis.fetch = async (url, init) => {
 	try {
 	const request = new Request(url, init);
 	assert.equal(request.method, "POST");
 	const credential = request.headers.get("Authorization")?.slice(7);
+	if (${pauseAtPoll} && !paused) {
+		paused = true;
+		const proceed = once(process, "message");
+		process.send("poll");
+		await proceed;
+		process.disconnect();
+	}
+	const requestOrigin = new URL(request.url).origin;
+	if (${pauseAtPoll} && requestOrigin !== ${JSON.stringify(args.at(-1))})
+		return new Response(null, { status: 204 });
 	const [expectedCredential, status, origin] = polls?.shift() ?? [];
 	if (polls) assert.equal(credential, expectedCredential);
 	else assert.ok([${JSON.stringify(firstCredential)}, ${JSON.stringify(secondCredential)}].includes(credential));
@@ -186,12 +202,42 @@ if (fetchError) throw fetchError;
 if (polls) assert.equal(polls.length, 0);
 `,
 		);
-		return spawnSync(process.execPath, [invocation, ...args], {
+		return {
+			argv: [invocation, ...args],
 			env: { ...env, CODEX_HOME: codexDirectory },
 			input: `${input}\n`,
+		};
+	}
+	function run(...args: Parameters<typeof prepareRun>) {
+		const prepared = prepareRun(...args);
+		return spawnSync(process.execPath, prepared.argv, {
+			env: prepared.env,
+			input: prepared.input,
 			encoding: "utf8",
 			timeout: 5_000,
 		});
+	}
+	function start(...args: Parameters<typeof prepareRun>) {
+		const prepared = prepareRun(...args);
+		const child = spawn(process.execPath, prepared.argv, {
+			env: prepared.env,
+			stdio: ["pipe", "pipe", "pipe", "ipc"],
+		});
+		assert.ok(child.stdin && child.stdout && child.stderr);
+		let stderr = "";
+		child.stdout.resume();
+		child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+			stderr += chunk;
+		});
+		const done = new Promise<{ status: number | null; stderr: string }>(
+			(done) => child.once("close", (status) => done({ status, stderr })),
+		);
+		child.stdin.end(prepared.input);
+		t.after(async () => {
+			if (child.exitCode === null) child.kill();
+			await done;
+		});
+		return { child, done };
 	}
 	function runCodex({
 		codexDirectory,
@@ -247,6 +293,7 @@ esac
 	}
 	return {
 		run,
+		start,
 		runCodex,
 		home,
 		bin,
@@ -408,6 +455,62 @@ test("a rejected first launch removes both new files", (t) => {
 	assert.equal(result.status, 1);
 	for (const path of [mac.config, mac.agent, mac.loaded])
 		assert.throws(() => statSync(path), { code: "ENOENT" });
+});
+
+test("an overlapping setup exits before touching the holder's snapshot or job", async (t) => {
+	const mac = fakeMac(t);
+	assert.equal(mac.run().status, 0);
+	const config = readFileSync(mac.config, "utf8");
+	const agent = readFileSync(mac.agent, "utf8");
+	const first = mac.start(secondCredential, {
+		args: ["https://other-engine.example.test"],
+		pauseAtPoll: true,
+	});
+	await Promise.race([
+		once(first.child, "message"),
+		first.done.then(({ stderr }) =>
+			assert.fail(`Setup exited before its validation poll. ${stderr}`),
+		),
+	]);
+	const before = readFileSync(mac.commands, "utf8");
+	try {
+		const second = mac.run(secondCredential);
+		assert.equal(second.status, 1, second.stderr);
+		assert.equal(
+			second.stderr.trim(),
+			"Doc setup is already running on this Mac",
+		);
+		assert.equal(readFileSync(mac.commands, "utf8"), before);
+		assert.equal(readFileSync(mac.config, "utf8"), config);
+		assert.equal(readFileSync(mac.agent, "utf8"), agent);
+		assert.ok(statSync(mac.loaded).isFile());
+		mac.rejectBootstrap(true);
+	} finally {
+		first.child.send("continue");
+	}
+	const result = await first.done;
+	assert.equal(result.status, 1, result.stderr);
+	assert.match(result.stderr, /Could not start Doc link/);
+	assert.equal(readFileSync(mac.config, "utf8"), config);
+	assert.equal(readFileSync(mac.agent, "utf8"), agent);
+	assert.ok(statSync(mac.loaded).isFile());
+	assert.throws(() => statSync(join(mac.home, ".doctorcre-doc-setup.lock")), {
+		code: "ENOENT",
+	});
+});
+
+test("setup takes over a lock whose installer process has exited", (t) => {
+	const mac = fakeMac(t);
+	const exited = spawnSync(process.execPath, ["--version"]);
+	assert.equal(exited.status, 0);
+	assert.ok(exited.pid > 0);
+	const lock = join(mac.home, ".doctorcre-doc-setup.lock");
+	mkdirSync(lock);
+	writeFileSync(join(lock, `${exited.pid}-0000`), "");
+	const result = mac.run();
+	assert.equal(result.status, 0, result.stderr);
+	assert.ok(statSync(mac.loaded).isFile());
+	assert.throws(() => statSync(lock), { code: "ENOENT" });
 });
 
 test("Claude setup skips an optional signed-out Codex", async (t) => {
