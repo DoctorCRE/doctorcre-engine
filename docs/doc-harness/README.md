@@ -17,7 +17,7 @@ The role tells Doc to use DoctorCRE tools for app facts, resolve the exact recor
 | [Current state](current-state.md) | What is on main, what is in review, and how both differ from the drawing  |
 | [Flows](flows.md)                 | Numbered steps, saved state, and exits                                    |
 | [Tools](tools.md)                 | Inputs, outputs, engine doors, and confirmation for DoctorCRE work        |
-| [Playbooks](playbooks.md)         | The first workflows and how Doc queries their approved steps and guidance |
+| [Playbooks](playbooks.md)         | The first workflows and how Doc queries their approved notes and guidance |
 | [Setup](setup.md)                 | Joe's Studio, Dell's Mac, future accounts, and the Ask Doc picker         |
 | [Memory](memory.md)               | Team preferences and personal preferences                                 |
 | [Verification](verification.md)   | Hermetic tests, expected results, and staging checks                      |

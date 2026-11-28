@@ -41,7 +41,9 @@ This continues the [ask flow](#f1-ask). A stored proposal opens the [save flow](
 flowchart TD
     Claim["Runner has a live claim"] --> Facts["Read current record facts"]
     Facts -->|Playbook or guidance applies| Knowledge["Call read_playbook or read_guidance"]
-    Knowledge -->|Approved and accessible| Result["Post completion for this claim"]
+    Knowledge -->|Approved and accessible notes and data| Result["Post completion for this claim"]
+    Knowledge -->|Top playbooks tie| Choice["Ask which accessible playbook to use"]
+    Choice --> Result
     Knowledge -->|Relevant knowledge unavailable| Explain["Say what guidance is unavailable"]
     Explain --> Result
     Facts -->|Record facts suffice| Result
