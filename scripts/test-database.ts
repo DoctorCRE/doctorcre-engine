@@ -68,13 +68,19 @@ export async function releaseTestDatabase(name: string) {
 		);
 		if (!rowCount) return;
 		await admin.query(`alter database "${name}" allow_connections false`);
-		if ((await checkDatabases(admin, prefix, true)).length < dropBatchSize)
-			return;
+		const ready = await checkDatabases(admin, prefix, true);
+		if (ready.length < dropBatchSize) return;
 
-		// Each worker that reaches the limit waits so finished databases cannot pile up.
-		await admin.query("select pg_advisory_lock(hashtextextended($1, 0))", [
-			prefix,
-		]);
+		// Keep other workers moving during cleanup until a second batch is ready.
+		const {
+			rows: [lock],
+		} = await admin.query<{ acquired: boolean }>(
+			ready.length >= 2 * dropBatchSize
+				? "select pg_advisory_lock(hashtextextended($1, 0)), true as acquired"
+				: "select pg_try_advisory_lock(hashtextextended($1, 0)) as acquired",
+			[prefix],
+		);
+		if (!lock?.acquired) return;
 		const finished = await checkDatabases(admin, prefix, true);
 		if (finished.length >= dropBatchSize)
 			await dropDatabases(finished.slice(0, dropBatchSize));
