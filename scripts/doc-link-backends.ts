@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { hash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, URL } from "node:url";
 import { z } from "zod";
@@ -21,6 +21,7 @@ type SignInStatus =
 type ModelTask = {
 	input: string;
 	prompt: string;
+	allowTools: boolean;
 	chat?: { url: string; claimId: string; credential: string };
 };
 
@@ -101,26 +102,26 @@ const rateLimit = z.object({
 });
 
 function runClaude(binary: string, timeout: number, task?: ModelTask) {
-	const args = [
-		"--setting-sources",
-		"",
-		"--settings",
-		sessionSettings,
-		"--no-session-persistence",
-		"--no-chrome",
-		"--disable-slash-commands",
-		"--strict-mcp-config",
-		"--permission-mode",
-		"dontAsk",
-	];
+	const args = ["--no-session-persistence"];
+	if (!task?.allowTools)
+		args.push(
+			"--setting-sources",
+			"",
+			"--settings",
+			sessionSettings,
+			"--no-chrome",
+			"--disable-slash-commands",
+			"--strict-mcp-config",
+			"--permission-mode",
+			"dontAsk",
+		);
 	if (task) {
 		args.push(
 			"-p",
 			"--output-format",
 			"stream-json",
 			"--verbose",
-			"--tools",
-			"",
+			...(task.allowTools ? [] : ["--tools", ""]),
 			"--mcp-config",
 			JSON.stringify({
 				mcpServers: task.chat
@@ -149,10 +150,11 @@ function runClaude(binary: string, timeout: number, task?: ModelTask) {
 		args.push("auth", "status");
 	}
 	return runCli(binary, args, timeout, {
+		...(task?.allowTools ? { cwd: homedir() } : {}),
 		input: task?.input,
 		env: {
 			...childEnvironment(),
-			CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
+			...(task?.allowTools ? {} : { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" }),
 			...(task?.chat ? { DOC_LINK_CREDENTIAL: task.chat.credential } : {}),
 		},
 	});
@@ -205,22 +207,20 @@ function claudeOutcome({ ok, stdout }: CliResult): LinkOutcome {
 }
 
 export function codexHome() {
-	return join(
-		homedir(),
-		"Library",
-		"Application Support",
-		"DoctorCRE Doc",
-		"codex",
-	);
+	return process.env.CODEX_HOME
+		? resolve(process.env.CODEX_HOME)
+		: join(homedir(), ".codex");
 }
 
 // Review the tool surface against the new release before adding a version.
 const codexVersion = "codex-cli 0.172.0";
-const codexConfig = [
+const codexAuthConfig = [
 	"-c",
 	'model_provider="openai"',
 	"-c",
 	'cli_auth_credentials_store="auto"',
+];
+const codexIsolationConfig = [
 	"-c",
 	"project_doc_max_bytes=0",
 	"-c",
@@ -313,7 +313,13 @@ function codexPlan(
 	return new Promise((resolve) => {
 		const child = execFile(
 			binary,
-			["app-server", ...codexConfig, "--listen", "stdio://"],
+			[
+				"app-server",
+				...codexAuthConfig,
+				...codexIsolationConfig,
+				"--listen",
+				"stdio://",
+			],
 			{
 				cwd: "/",
 				env,
@@ -368,7 +374,7 @@ async function codexSignIn(binary: string): Promise<SignInStatus> {
 	if (!version.ok || version.stdout.trim() !== codexVersion) return undefined;
 	const status = await runCli(
 		binary,
-		["login", "status", ...codexConfig],
+		["login", "status", ...codexAuthConfig, ...codexIsolationConfig],
 		5_000,
 		{ env, cwd: "/" },
 	);
@@ -436,20 +442,24 @@ async function runCodex(binary: string, timeout: number, task: ModelTask) {
 		"exec",
 		"--json",
 		"--ephemeral",
-		"--ignore-user-config",
-		"--ignore-rules",
-		"--strict-config",
 		"--skip-git-repo-check",
-		"--sandbox",
-		"read-only",
-		...codexConfig,
+		...codexAuthConfig,
 		"-c",
 		'forced_login_method="chatgpt"',
 		"-c",
-		`model_catalog_json=${JSON.stringify(codexCatalog)}`,
-		"-c",
 		`developer_instructions=${JSON.stringify(task.prompt)}`,
 	];
+	if (!task.allowTools)
+		args.push(
+			"--ignore-user-config",
+			"--ignore-rules",
+			"--strict-config",
+			"--sandbox",
+			"read-only",
+			...codexIsolationConfig,
+			"-c",
+			`model_catalog_json=${JSON.stringify(codexCatalog)}`,
+		);
 	if (task.chat) {
 		const { url, claimId, credential } = task.chat;
 		args.push(
@@ -457,12 +467,12 @@ async function runCodex(binary: string, timeout: number, task: ModelTask) {
 			`mcp_servers.doc={url=${JSON.stringify(url)}, required=true, bearer_token_env_var="DOC_LINK_CREDENTIAL", http_headers={"Doc-Claim-Id"=${JSON.stringify(claimId)}}, enabled_tools=${JSON.stringify(docTools)}}`,
 		);
 		Object.assign(env, { DOC_LINK_CREDENTIAL: credential });
-	} else {
+	} else if (!task.allowTools) {
 		args.push("-c", "mcp_servers={}");
 	}
 	return codexOutcome(
 		await runCli(binary, [...args, "-"], timeout, {
-			cwd: "/",
+			cwd: task.allowTools ? homedir() : "/",
 			env,
 			input: task.input,
 		}),
@@ -482,6 +492,6 @@ export const backends = {
 		run: runCodex,
 		personalPlanMessage: "Doc needs your own ChatGPT plan.",
 		policyMessage:
-			"Doc link needs a Mac without managed Codex settings and a private Codex home without local settings or instructions.",
+			"Mail judgment needs a Mac without managed Codex settings or Codex home instructions.",
 	},
 } satisfies Record<string, Backend>;

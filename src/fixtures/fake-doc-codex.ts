@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 
 const [command, ...args] = process.argv.slice(2);
@@ -49,18 +49,32 @@ if (command === "--version") {
 	const input = JSON.parse(readFileSync(0, "utf8"));
 	const prompt =
 		args.find((arg) => arg.startsWith("developer_instructions=")) ?? "";
-	assert.ok(args.includes("--ignore-user-config"));
-	assert.ok(args.includes("--ignore-rules"));
 	assert.ok(args.includes("--ephemeral"));
 	assert.ok(args.includes("--json"));
-	assert.ok(args.includes("read-only"));
-	assert.ok(args.includes("project_doc_max_bytes=0"));
-	assert.ok(args.includes("shell_tool"));
-	assert.ok(args.includes("apps"));
-	assert.ok(args.includes("plugins"));
-	assert.ok(args.includes("hooks"));
 	assert.equal(process.env.OPENAI_API_KEY, undefined);
 	assert.equal(args.at(-1), "-");
+
+	const isolationFlags = [
+		"--ignore-user-config",
+		"--ignore-rules",
+		"read-only",
+		"project_doc_max_bytes=0",
+		"shell_tool",
+		"apps",
+		"plugins",
+		"hooks",
+	];
+	for (const flag of isolationFlags)
+		assert.equal(args.includes(flag), !input.turn, flag);
+	assert.equal(args.includes("--sandbox"), !input.turn);
+
+	if (variant === "partner-config") {
+		assert.ok(process.env.CODEX_HOME);
+		assert.match(
+			readFileSync(join(process.env.CODEX_HOME, "config.toml"), "utf8"),
+			/shell_tool = true/,
+		);
+	}
 
 	const mcp = args.find((arg) => arg.startsWith("mcp_servers"));
 	if (input.turn) {

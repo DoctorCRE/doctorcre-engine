@@ -111,7 +111,6 @@ async function runLink(
 						managedCodexPolicy: [join(directory, "requirements.toml")],
 					}
 				: {}),
-			codexAccountAllowed: async () => true,
 			now: () => now,
 			wait: async () => {
 				assert.ok(
@@ -237,22 +236,11 @@ test("Doc link runs a private Claude print session and submits only the final an
 	observed.args[mcpIndex + 1] = "<MCP config>";
 	observed.args[promptIndex + 1] = "<fixed prompt>";
 	assert.deepEqual(observed.args, [
-		"--setting-sources",
-		"",
-		"--settings",
-		'{"disableAllHooks":true,"disableClaudeAiConnectors":true}',
 		"--no-session-persistence",
-		"--no-chrome",
-		"--disable-slash-commands",
-		"--strict-mcp-config",
-		"--permission-mode",
-		"dontAsk",
 		"-p",
 		"--output-format",
 		"stream-json",
 		"--verbose",
-		"--tools",
-		"",
 		"--mcp-config",
 		"<MCP config>",
 		"--allowedTools",
@@ -261,11 +249,8 @@ test("Doc link runs a private Claude print session and submits only the final an
 		"<fixed prompt>",
 	]);
 	const authArgs = JSON.parse(await readFile(authArgsPath, "utf8"));
-	assert.deepEqual(authArgs, [
-		...observed.args.slice(0, observed.args.indexOf("-p")),
-		"auth",
-		"status",
-	]);
+	assert.deepEqual(authArgs.slice(-2), ["auth", "status"]);
+	assert.ok(authArgs.includes("--strict-mcp-config"));
 	assert.deepEqual(observed.input, {
 		turn: { question: "Inspect", context },
 		history,
@@ -313,7 +298,7 @@ const managedSources = [
 ] satisfies [string, string, string | null][];
 
 for (const [source, name, contents] of managedSources) {
-	test(`Doc link stops before polling when it finds ${source}`, async (t) => {
+	test(`Doc link offers chat-only polling when it finds ${source}`, async (t) => {
 		const directory = await mkdtemp(join(process.cwd(), ".scratch."));
 		const path = join(directory, name);
 		await mkdir(join(path, ".."), { recursive: true });
@@ -334,21 +319,8 @@ for (const [source, name, contents] of managedSources) {
 			await rmdir(directory);
 		});
 		const errors = t.mock.method(console, "error", () => {});
-		const stopped = new Error("End the test while polling is paused");
-		await assert.rejects(
-			runDocLink(
-				{ engine, claude, credential },
-				{
-					managedSettings: managedSettingsIn(directory),
-					now: () => 0,
-					wait: async () => {
-						throw stopped;
-					},
-					fetch: async () => status(401),
-				},
-			),
-			stopped,
-		);
+		const requests = await runLink([status(401)], claude, directory);
+		assert.deepEqual(requests, [{ ...poll("ready"), work: null }]);
 		assert.equal(errors.mock.calls.length, 1);
 		assert.match(
 			String(errors.mock.calls[0]?.arguments[0]),
@@ -511,7 +483,7 @@ for (const [source, policy, arrange] of denyOnlyCases) {
 	});
 }
 
-test("Doc link refuses a turn when policy appears after a poll and resumes once it is removed", async (t) => {
+test("Doc link leaves a mail job unrun if policy appears after the poll", async (t) => {
 	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
 	const policy = join(directory, "managed-settings.json");
 	const errors = t.mock.method(console, "error", () => {});
@@ -520,31 +492,31 @@ test("Doc link refuses a turn when policy appears after a poll and resumes once 
 		if (policyPresent) await unlink(policy);
 		await rmdir(directory);
 	});
-	let waits = 0;
-	const requests: (string | null)[] = [];
+	const requests: Request[] = [];
 	await runDocLink(
 		{ engine, claude, credential },
 		{
 			managedSettings: managedSettingsIn(directory),
-			now: () => waits * 2_000,
-			wait: async () => {
-				waits++;
-				if (waits === 2) {
-					await unlink(policy);
-					policyPresent = false;
-				}
-			},
-			async fetch(_url, init) {
-				requests.push(new Headers(init?.headers).get("Doc-Link-Readiness"));
+			now: () => 0,
+			wait: async () => {},
+			async fetch(url, init) {
+				requests.push(new Request(url, init));
 				if (requests.length !== 1) return status(401);
 				await writeFile(policy, "{}");
 				policyPresent = true;
-				return claimed("Question");
+				return summaryClaim("Tour");
 			},
 		},
 	);
-	assert.equal(waits, 2);
-	assert.deepEqual(requests, ["ready", "ready"]);
+	assert.deepEqual(
+		requests.map((request) => new URL(request.url).pathname),
+		["/api/engine/doc/link/claim", "/api/engine/doc/link/claim"],
+	);
+	assert.equal(
+		requests[0]?.headers.get("Doc-Link-Work"),
+		"judgment, email_split, introduction",
+	);
+	assert.equal(requests[1]?.headers.get("Doc-Link-Work"), null);
 	assert.equal(errors.mock.calls.length, 1);
 	assert.match(
 		String(errors.mock.calls[0]?.arguments[0]),
@@ -798,7 +770,6 @@ for (const variant of ["signed-out", "api-key", "business", "unsupported"]) {
 			runDocLink(
 				{ backend: "codex", binary, engine, credential },
 				{
-					codexAccountAllowed: async () => true,
 					now: () => 60_000,
 					wait: async () => {
 						throw paused;
@@ -839,46 +810,71 @@ test("Codex config needs an absolute binary path", async () => {
 	);
 });
 
-test("The Codex runner pauses before polling if managed settings are present", async () => {
+for (const [backend, policy] of [
+	["claude", "managed-settings.json"],
+	["codex", "requirements.toml"],
+] as const) {
+	test(`Doc answers on ${backend} with managed settings and leaves mail available for backup`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		await writeFile(join(directory.path, policy), "{}");
+		t.mock.method(console, "error", () => {});
+		const requests = await runLink(
+			[claimed("Question"), status(204)],
+			backend === "codex" ? codex : claude,
+			directory.path,
+			backend,
+		);
+		assert.deepEqual(requests, [
+			{ ...poll("ready"), work: null },
+			answered(firstClaim),
+			{ ...poll("ready"), work: null },
+		]);
+	});
+}
+
+test("Codex chat uses the partner's tool config and mail uses the same home with tools off", async (t) => {
 	await using directory = await mkdtempDisposable(
 		join(process.cwd(), ".scratch."),
 	);
-	const policy = join(directory.path, "requirements.toml");
-	await writeFile(policy, "");
-	const paused = Symbol("polling paused");
-	await assert.rejects(
-		runDocLink(
-			{ backend: "codex", binary: codex, engine, credential },
-			{
-				managedCodexPolicy: [policy],
-				codexAccountAllowed: async () => true,
-				fetch: async () => assert.fail("polled despite managed settings"),
-				now: () => 60_000,
-				wait: async () => {
-					throw paused;
+	const binary = join(directory.path, "partner-config");
+	await symlink(codex, binary);
+	await writeFile(
+		join(directory.path, "config.toml"),
+		'sandbox_mode = "danger-full-access"\n[features]\nshell_tool = true\n',
+	);
+	const previous = process.env.CODEX_HOME;
+	process.env.CODEX_HOME = directory.path;
+	t.after(() => {
+		if (previous === undefined) delete process.env.CODEX_HOME;
+		else process.env.CODEX_HOME = previous;
+	});
+	const requests = await runLink(
+		[claimed("Question"), status(204), summaryClaim("Tour"), status(204)],
+		binary,
+		directory.path,
+		"codex",
+	);
+	assert.deepEqual(requests[1], answered(firstClaim));
+	assert.deepEqual(
+		requests[3],
+		result({
+			claim_id: firstClaim,
+			kind: "judgment",
+			outcome: {
+				kind: "answered",
+				result: {
+					summary: "The tour is Thursday.",
+					action_title: null,
+					quote: "The tour is Thursday.",
 				},
 			},
-		),
-		(error) => error === paused,
+		}),
 	);
 });
 
-test("Codex refuses to start outside its dedicated standard account", async () => {
-	await assert.rejects(
-		runDocLink(
-			{ backend: "codex", binary: codex, engine, credential },
-			{
-				codexAccountAllowed: async () => false,
-				fetch: async () => assert.fail("polled from another account"),
-				now: () => 60_000,
-				wait: async () => assert.fail("runner did not stop"),
-			},
-		),
-		/dedicated standard macOS account/,
-	);
-});
-
-test("Codex advertises no work with a missing or altered isolation catalog", async () => {
+test("Codex offers chat only with a missing or altered mail catalog", async () => {
 	await using directory = await mkdtempDisposable(
 		join(process.cwd(), ".scratch."),
 	);
@@ -891,7 +887,6 @@ test("Codex advertises no work with a missing or altered isolation catalog", asy
 			runDocLink(
 				{ backend: "codex", binary: codex, engine, credential },
 				{
-					codexAccountAllowed: async () => true,
 					codexCatalog: catalog,
 					fetch: async (_url, init) => {
 						work.push(new Headers(init?.headers).get("Doc-Link-Work"));
@@ -905,7 +900,7 @@ test("Codex advertises no work with a missing or altered isolation catalog", asy
 			),
 			(error) => error === paused,
 		);
-		assert.deepEqual(work, []);
+		assert.deepEqual(work, [null]);
 	}
 });
 

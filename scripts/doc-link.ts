@@ -1,16 +1,14 @@
-import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open, readdir } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
 import { z } from "zod";
 import {
 	judgmentClaimSchema,
 	judgmentTask,
 } from "../src/doc-judgment-prompt.ts";
-import { docPrompt } from "../src/doc-prompt.ts";
+import { macDocPrompt } from "../src/doc-prompt.ts";
 import {
 	backends,
 	codexHome,
@@ -59,6 +57,7 @@ const claimSchema = z.discriminatedUnion("kind", [
 type Readiness = "ready" | "signed_out" | "plan_limited";
 const checkSignInEvery = 30_000;
 const pollEvery = 2_000;
+const allowMailTools = false;
 // https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy
 // https://code.claude.com/docs/en/server-managed-settings
 function macManagedSettingsPaths() {
@@ -140,37 +139,10 @@ function macCodexPolicyPaths() {
 		"/etc/codex/requirements.toml",
 		join(preferences, userInfo().username, domain),
 		join(preferences, domain),
-		...["config.toml", "AGENTS.md", "AGENTS.override.md"].map((file) =>
+		...["AGENTS.md", "AGENTS.override.md"].map((file) =>
 			join(codexHome(), file),
 		),
 	];
-}
-
-async function isDedicatedCodexAccount() {
-	if (process.platform !== "darwin") return false;
-	try {
-		const login = userInfo();
-		if (
-			login.username !== "doctorcre-doc" ||
-			login.homedir !== "/Users/doctorcre-doc" ||
-			homedir() !== login.homedir ||
-			login.uid < 501 ||
-			login.uid !== process.geteuid?.()
-		)
-			return false;
-		const home = await lstat(login.homedir);
-		if (!home.isDirectory() || home.uid !== login.uid) return false;
-		const { stdout } = await promisify(execFile)("/usr/bin/id", ["-Gn"], {
-			timeout: 5_000,
-		});
-		const groups = stdout.trim().split(/\s+/);
-		return (
-			Boolean(groups[0]) &&
-			!groups.some((group) => ["admin", "wheel", "sudo"].includes(group))
-		);
-	} catch {
-		return false;
-	}
 }
 
 type LinkRuntime = {
@@ -179,7 +151,6 @@ type LinkRuntime = {
 	wait: () => Promise<void>;
 	managedSettings?: Parameters<typeof hasManagedPolicy>[0];
 	managedCodexPolicy?: string[];
-	codexAccountAllowed?: () => Promise<boolean>;
 	codexCatalog?: string;
 };
 
@@ -208,7 +179,6 @@ export async function runDocLink(
 		wait,
 		managedSettings,
 		managedCodexPolicy,
-		codexAccountAllowed = isDedicatedCodexAccount,
 		codexCatalog,
 	}: LinkRuntime = {
 		fetch: globalThis.fetch,
@@ -219,14 +189,11 @@ export async function runDocLink(
 	},
 ) {
 	const name = "backend" in config ? config.backend : "claude";
-	if (name === "codex" && !(await codexAccountAllowed()))
-		throw new Error(
-			"Run Codex Doc link in the dedicated standard macOS account doctorcre-doc.",
-		);
 	const backend = backends[name];
 	const binary = "binary" in config ? config.binary : config.claude;
 	let policyError: string | undefined;
-	async function policyAllowsTurns() {
+	async function mailAllowed() {
+		if (allowMailTools) return true;
 		let error: string | undefined;
 		if (name === "codex") {
 			if (await hasPolicyFiles(managedCodexPolicy ?? []))
@@ -237,7 +204,8 @@ export async function runDocLink(
 		} else if (managedSettings && (await hasManagedPolicy(managedSettings))) {
 			error = backend.policyMessage;
 		}
-		if (error && error !== policyError) console.error(error);
+		if (error && error !== policyError)
+			console.error(`Mail judgment is paused. ${error}`);
 		policyError = error;
 		return !error;
 	}
@@ -254,15 +222,11 @@ export async function runDocLink(
 	}
 
 	for (; ; await wait()) {
-		if (!(await policyAllowsTurns())) continue;
-		if (now() >= checkAt) {
-			await checkSignIn();
-			if (!(await policyAllowsTurns())) continue;
-		}
+		if (now() >= checkAt) await checkSignIn();
 		if (readiness === "personal_plan_required") continue;
 		const headers = new Headers({ "Doc-Link-Backend": name });
 		if (readiness) headers.set("Doc-Link-Readiness", readiness);
-		if (readiness === "ready")
+		if (readiness === "ready" && (await mailAllowed()))
 			headers.set("Doc-Link-Work", "judgment, email_split, introduction");
 		const poll = await postDocLink(config, "claim", { headers }, fetch);
 		if (poll?.status === 401) return;
@@ -272,29 +236,30 @@ export async function runDocLink(
 			await poll.json().catch(() => undefined),
 		).data;
 		if (!claim) continue;
-		if (!(await policyAllowsTurns())) continue;
-		if ((await checkSignIn()) !== "ready" || !(await policyAllowsTurns()))
+		const chat = claim.kind === "turn";
+		if (!chat && !(await mailAllowed())) continue;
+		if ((await checkSignIn()) !== "ready" || (!chat && !(await mailAllowed())))
 			continue;
 		const expires = Date.parse(claim.claim_until);
 		const timeout = Math.min(45_000, expires - 15_000 - now());
 		if (!(timeout > 0)) continue;
 
 		const heartbeat = setInterval(async () => {
-			if (await policyAllowsTurns())
+			if (chat || (await mailAllowed()))
 				void postDocLink(config, "claim", {}, fetch);
 		}, 10_000);
-		const task =
-			claim.kind === "turn"
-				? {
-						input: JSON.stringify({ turn: claim.turn, history: claim.history }),
-						prompt: docPrompt,
-						chat: {
-							url: new URL("/api/engine/doc/mcp", config.engine).href,
-							claimId: claim.claim_id,
-							credential: config.credential,
-						},
-					}
-				: judgmentTask(claim);
+		const task = chat
+			? {
+					input: JSON.stringify({ turn: claim.turn, history: claim.history }),
+					prompt: macDocPrompt,
+					allowTools: true,
+					chat: {
+						url: new URL("/api/engine/doc/mcp", config.engine).href,
+						claimId: claim.claim_id,
+						credential: config.credential,
+					},
+				}
+			: { ...judgmentTask(claim), allowTools: allowMailTools };
 		let outcome = await backend
 			.run(binary, timeout, task)
 			.finally(() => clearInterval(heartbeat));
