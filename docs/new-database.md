@@ -2120,10 +2120,10 @@ bash scripts/install-doc-link.sh "$DOC_ENGINE_ORIGIN"
 ```
 
 1. Setup uses [Anthropic's official installer](https://code.claude.com/docs/en/setup) if Claude Code is missing. If setup asks you to sign in, open `claude` (try `~/.local/bin/claude` if needed). Sign in with your own Claude subscription through Anthropic, keep usage credits off in your Claude account, and run the same command again.
-2. In the app, issue a Doc link credential from your account. Paste it at the hidden Terminal prompt and press Return. A prepared command can also read one line from standard input. Keep the credential out of command arguments and shell history. Setup verifies the credential with the engine before saving it and starting the job. If the code is refused, make a new one in the app and run setup again.
+2. If setup prompts for a Doc link credential, issue one in the app. Paste it at the hidden Terminal prompt and press Return. A prepared command can also read one line from standard input. Keep the credential out of command arguments and shell history. Setup verifies the credential with the engine before saving it and starting the job. If the new code is refused, make another one in the app and run setup again.
 3. When Terminal says **Doc link is ready.**, open Ask Doc and ask about a deal you can see. Open the source link in the answer to confirm it goes to that deal.
 
-Rerun setup with a new credential to replace the configuration and reload the background job. Setup writes `~/Library/Application Support/DoctorCRE Doc/link.json` with mode `0600`. It records the absolute paths of the signed-in CLIs it finds in `backends` and sets `default_backend` from the setup command. The runner uses that default and can still read earlier single-backend configs. It checks file ownership and permissions before reading the credential, and stops polling on `401`. Mail judgment receives no link credential.
+Rerun setup to refresh the list of signed-in CLIs or change the default. Setup verifies a saved credential against its original engine and keeps it if the engine accepts it. If you link to a different engine, have no saved credential, or the engine refuses it, setup prompts for a new one. Setup writes `~/Library/Application Support/DoctorCRE Doc/link.json` with mode `0600`. It records the absolute paths of the signed-in CLIs it finds in `backends` and sets `default_backend` from the setup command. The runner uses that default and can still read earlier single-backend configs. It checks file ownership and permissions before reading the credential, and stops polling on `401`. Mail judgment receives no link credential.
 
 The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts), the configuration, and `link.log` in the same folder as the configuration.
 
@@ -2145,7 +2145,7 @@ Doc chat starts in the partner's home directory and uses that CLI's configured t
 
 1. Use the absolute path to a Codex CLI 0.172.0 binary as `DOC_CODEX_BIN`. If you need the binary, get it from the [Codex CLI 0.172.0 release](https://github.com/openai/codex/releases/tag/rust-v0.172.0).
 2. If Codex asks you to sign in, use `"$DOC_CODEX_BIN" login` with your personal ChatGPT plan. Keep plan usage credits off. Setup uses `~/.codex` or the `CODEX_HOME` you set in Terminal.
-3. Run setup. Issue a Doc link credential in the app and paste it at the hidden prompt. Issuing a new credential revokes the previous one.
+3. Run setup. If it prompts for a credential, issue one in the app and paste it at the hidden prompt. Issuing a new credential revokes the previous one.
 
    ```sh
    bash scripts/install-doc-link.sh --codex "$DOC_CODEX_BIN" "$DOC_ENGINE_ORIGIN"
@@ -2153,7 +2153,7 @@ Doc chat starts in the partner's home directory and uses that CLI's configured t
 
 4. When Terminal says **Doc link is ready.**, ask Doc about a visible test deal and open a source from its answer.
 
-**Switch back to Claude Code.** Run the one-argument setup command above and paste a new Doc link credential. Ask Doc for a sourced answer.
+**Switch back to Claude Code.** Run the one-argument setup command above. Ask Doc for a sourced answer.
 
 Codex checks `login status` and reads the personal plan type through app-server's `account/read`. Setup saves the Codex home in the LaunchAgent so the background job uses the same sign-in and configuration. Codex mail judgment uses the verified model catalog, a read-only sandbox, and an ephemeral session. It skips user config and rules, sets the project instruction budget to zero, and disables shell, patch, image, web, agent, app, plugin, and hook capabilities. It connects to no MCP server. The runner leaves Codex mail jobs queued if the catalog is missing or changed, or if it finds managed Codex settings or Codex home instructions. When Codex supplies a plan reset time, the runner waits until then. Otherwise it checks again after five minutes.
 

@@ -222,6 +222,21 @@ async function discoverBackend(
 	}
 }
 
+async function verifiesCredential(config: Parameters<typeof postDocLink>[0]) {
+	// A poll without a readiness header verifies the credential without claiming a turn.
+	const poll = await postDocLink(config, "claim");
+	if (poll?.status === 401 || poll?.status === 403) return false;
+	if (!poll)
+		throw new SetupError(
+			"Could not reach the engine. Check your internet connection and the HTTPS engine origin, then run setup again.",
+		);
+	if (poll.status !== 204)
+		throw new SetupError(
+			`The engine could not verify the Doc link code (HTTP ${poll.status}). Check the engine origin and try again.`,
+		);
+	return true;
+}
+
 export async function installDocLink(args: readonly string[]) {
 	try {
 		const setup = parseSetup(args);
@@ -262,30 +277,30 @@ export async function installDocLink(args: readonly string[]) {
 				"Open Terminal under your macOS login and run setup again.",
 			);
 
-		const config = docLinkConfigSchema.safeParse({
-			engine: engine.data,
-			default_backend: selected.backend,
-			backends: registered,
-			credential: await readCredential(),
-		});
-		if (!config.success)
-			throw new SetupError(
-				"Copy a Doc link credential from the app and run setup again.",
-			);
-		// A poll without a readiness header verifies the credential without claiming a turn.
-		const poll = await postDocLink(config.data, "claim");
-		if (poll?.status === 401 || poll?.status === 403)
-			throw new SetupError(
-				"The Doc link code was refused. Make a new one in the app and run this again.",
-			);
-		if (!poll)
-			throw new SetupError(
-				"Could not reach the engine. Check your internet connection and the HTTPS engine origin, then run setup again.",
-			);
-		if (poll.status !== 204)
-			throw new SetupError(
-				`The engine could not verify the Doc link code (HTTP ${poll.status}). Check the engine origin and try again.`,
-			);
+		const newConfig = (credential: string | undefined) =>
+			docLinkConfigSchema.safeParse({
+				engine: engine.data,
+				default_backend: selected.backend,
+				backends: registered,
+				credential,
+			});
+		const cached =
+			existing &&
+			new URL(existing.engine).origin === new URL(engine.data).origin
+				? existing.credential
+				: undefined;
+		let config = newConfig(cached);
+		if (!config.success || !(await verifiesCredential(config.data))) {
+			config = newConfig(await readCredential());
+			if (!config.success)
+				throw new SetupError(
+					"Copy a Doc link credential from the app and run setup again.",
+				);
+			if (!(await verifiesCredential(config.data)))
+				throw new SetupError(
+					"The Doc link code was refused. Make a new one in the app and run this again.",
+				);
+		}
 
 		await mkdir(support, { recursive: true, mode: 0o700 });
 		const info = await lstat(support);
