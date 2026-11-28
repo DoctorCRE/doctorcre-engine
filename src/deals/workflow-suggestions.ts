@@ -7,7 +7,7 @@ import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { fit, isUuid } from "../request-shape.ts";
 import { checklistOf, checklistType, nextChecklistStep } from "./checklist.ts";
 import { isOpenBoardDeal, selectNextDealsWithFacts } from "./next-board.ts";
-import { currentLeaseOf } from "./next-detail.ts";
+import { currentLeaseOf } from "./plan-read.ts";
 
 const JOB = "workflow_suggestions";
 
