@@ -4,6 +4,7 @@
 
 | Name               | Type                     | Default | Nullable | Extra Definition                | Children | Parents                           | Comment |
 | ------------------ | ------------------------ | ------- | -------- | ------------------------------- | -------- | --------------------------------- | ------- |
+| backend            | text                     |         | true     |                                 |          |                                   |         |
 | credential_hash    | text                     |         | false    |                                 |          |                                   |         |
 | is_account_partner | boolean                  |         | false    | GENERATED ALWAYS AS true STORED |          | [next.app_user](next.app_user.md) |         |
 | issued_at          | timestamp with time zone | now()   | false    |                                 |          |                                   |         |
@@ -21,6 +22,7 @@
 
 | Name                                           | Type        | Definition                                                                                  |
 | ---------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------- |
+| doc_link_backend                               | CHECK       | CHECK ((backend = ANY (ARRAY['claude'::text, 'codex'::text])))                              |
 | doc_link_credential_hash_check                 | CHECK       | CHECK ((credential_hash ~ '^[0-9a-f]{64}$'::text))                                          |
 | doc_link_credential_hash_key                   | UNIQUE      | UNIQUE (credential_hash)                                                                    |
 | doc_link_credential_hash_not_null              | n           | NOT NULL credential_hash                                                                    |
