@@ -50,7 +50,6 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`email_summary`**: a recorded summary result for that email, with its source, generator and recorded time. `email_current_summary` gives the one current text when any result has text.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
 - **`weekly_review`**: one deal or prospect marked reviewed in one week's Monday review.
-- **`deal_star`**: one partner's star on one deal, kept until the owner approves dropping it. Nothing reads or saves stars (owner, 2026-11-25).
 - **`commission`**: a deal's commission, once: what an open deal is expected to bring, the gross the brokerage collects, and the closing user's part on this deal when it overrides their ladder.
 - **`commission_payment`**: one part of the gross, with when it was invoiced, falls due and was received.
 - **`commission_share`**: what goes to someone other than the users, such as a referring agent or the brokerage, as a share of the whole.
@@ -1666,12 +1665,6 @@ All next-schema automatic receipts give `event_id` (UUID), `prior_phase`, `phase
 
 The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. Undo returns the same status and error for a previous phase of Closed, Invoiced, or Dead, with a hint that Undo would return the deal to Closed deals or Lost deals. A copied invoice-dated close returns the same status and error with the hint "Closed because an invoice was recorded; Undo isn't available". A same-key retry returns the original answer.
 
-### Starred deals
-
-Stars are gone (owner, 2026-11-25: "every deal is important"; #1457). No door saves a star and the board read gives none. `deal_star` still holds the stars saved before, one row per user and deal, until the owner approves dropping the table in production. Until then the database keeps its rules: one row per pair, only the user saving it, never a job, removed with the deal, each star and unstar in change history.
-
-Fresh schemas include the table. [The deal stars migration](../schema/add-deal-stars.sql) adds it to an older `next` schema and can be applied twice; no engine needs it any more.
-
 ### App work for the Deals switch
 
 The app still needs its remaining save and live refresh paths (app #953 onward), including routing invoice undo and copied phase-move Undo to the engine. New-schema change IDs and party IDs have different meanings from legacy save versions and client IDs.
@@ -1964,7 +1957,7 @@ Track record counts come from `vendor_track_record`. A deal counts even when its
 
 ### Vendors redesign reads
 
-The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 needs the reads below. The vendor summary and the list read's changes are built. Markets a vendor covers are not. Each reads live vendors from the new schema as the list does, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
+The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 uses the reads below. Each reads live vendors from the new schema, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
 
 **Vendor summary.** `GET /api/engine/vendors/summary`, optional `owner`, `all` when absent, answers the category tiles in one read: `{ all, no_category, categories: [{ slug, label, ...counts }] }`. Each `counts` is `{ count, relationship: { core, established, building, prospective, not_rated, parked, avoid }, quiet }`. `categories` lists every vendor category in label order, with zeros for one no vendor holds. A vendor counts once in each category it holds, so the categories can add up to more than `all`. `no_category` counts vendors that hold only the vendor role. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
 
@@ -1980,13 +1973,15 @@ The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 need
 **The list read.** `GET /api/engine/vendors` changes in these ways:
 
 - `no_category=true` narrows the list to the vendors the summary counts under `no_category`. It combines with the other filters, is echoed in `query` only when asked for, and is refused with `category` and on the legacy list.
-- With `category` or `no_category=true`, it answers every matching vendor in one answer, with no next page. Other lists keep pages of 25.
+- With `category`, `no_category=true` or `markets=true`, it answers every matching vendor in one page. Other lists keep pages of 25.
 - Each row answers `categories`, every category the vendor holds as `{ slug, label }` in label order, beside today's single category until the app stops reading it.
 - `quiet=true` narrows the list to the vendors the summary counts as quiet, by the same rule at the default 90-day cadence. It combines with the other filters, is echoed in `query` only when asked for, and is refused on the legacy list.
 - Each row answers `quiet`, true or false, and `quiet_days`, the whole Central days since its last contact while quiet, otherwise null.
 - `sort=relationship` orders by relationship order, then by name, and is the default. The other sorts stay. The legacy list keeps `name` as its default.
 
-**Markets a vendor covers.** The territory tiles are the 19 named markets. A list row answers `markets`, each `{ id, name }` that one of its current territories covers: a market piece names it, or a state piece holds the market's counties. A vendor under no market but with a territory is under Elsewhere, which includes a typed territory not yet drawn into pieces. A vendor with no current territory is under No territory. Matching typed territories to markets is data work on production, with the owner's yes on the reviewed file, and nothing in it is guessed.
+**Markets a vendor covers.** With `markets=true`, the next list answers all matching vendors in one page and echoes the option in `query`. Each row has `markets`, a name-ordered list of `{ id, name }`, and `territory`, the comma-separated names of its current territories or null. Both fields are present with or without a `contract` parameter. The legacy list refuses the option. A market piece names the market directly. A state piece covers any market with a county in that state. Each market appears once per vendor.
+
+Each summary count also answers `markets` as `[{ id, name, count }]` in name order, with one entry per covered market and one count per vendor in it. `elsewhere` counts vendors with a current territory and no covered markets, including typed territories without pieces. `no_territory` counts vendors without a current territory. The reads include memberships with no end date or one on or after today in Central time. Matching typed territories to markets requires the owner's approval of the reviewed file.
 
 ## Doc conversations and turns
 
@@ -2017,6 +2012,7 @@ All paths below begin `/api/engine/doc`. UUIDs identify conversations, turns, an
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `GET /conversations`, optional `before` conversation ID | `200 { conversations: [{ id, title, created_at, last_message_at, state }], next_before }`. Up to 30, newest message first, in descending `(last_message_at, id)` order. `title` is the first 80 characters of the first question. `next_before` is the last listed ID if older chats remain, otherwise null. |
 | `GET /conversations/{id}`                               | `200 { conversation, turns }`. `conversation` has the same fields as the list entry. `turns` are in `position` order.                                                                                                                                                                                        |
+| `GET /records?query=`                                   | `200 { records: [{ ref, label, href, city }] }`. Search deals, leads and clients through the same new-database read Doc uses. The query is nonblank and at most 200 characters. Returns up to 10 matches.                                                                                                    |
 | `POST /turns`                                           | Send `{ idempotency_key, question, conversation_id?, context? }`. Omit `conversation_id` to start a chat. `200 { conversation_id, turn }` for an answered turn and `202` while queued or working. The conversation read shows a saved failure. Retry sends the original fields and key.                      |
 | `POST /turns/{id}/confirmation`                         | Send `{ idempotency_key, edits }` with a separate UUID for this save. The engine uses the stored proposal's kind and target. `200 { result }` gives the receipt. The reply-draft result also carries `existing`, true for an unchanged draft.                                                                |
 
@@ -2026,11 +2022,13 @@ Before requeuing a failed draft turn, the engine checks its stored draft, source
 
 Every returned `turn` has `id`, `position`, `created_at`, `idempotency_key`, `question`, nullable `context`, `state`, nullable `answer`, and nullable `confirmation` with the saved result. To retry the first turn after reload, omit `conversation_id` again. While queued, the turn carries `waiting_reason` with the existing display text and `waiting_reason_code` with the same machine code as the link's `readiness_code`. Both fields are null outside the queue. Each turn also carries the current runner `backend` when known. This field describes the configured runner, while `answered_by` describes where an answer came from. The app rereads the conversation to show progress and the saved result. The app opens new chat links as `/doc-chats?chat=<id>` so legacy links can show their own message. An older failed turn stays visible and retry applies to the latest question.
 
-A chat's `last_message_at` is the `created_at` of its latest turn. `state` is `working` while that turn is queued or working, `waiting_ok` while an answered turn's proposal has no confirmation, and otherwise null. `working` wins when both hold. The engine derives both from the turns on each read. A `before` cursor uses the chat's current `last_message_at`, so a chat that gets a new message while the partner pages moves to the top.
+To refresh marks for chats already on screen, send `GET /conversations?ids=` with up to 30 comma-separated conversation IDs. The response uses the same list shape, with only the signed-in partner's matching conversations and `next_before: null`. Use `ids` without `before`.
+
+A chat's `last_message_at` is the `created_at` of its latest turn. `state` is `working` while that turn is queued or working. It is `waiting_ok` if the latest turn asks for clarification or any answer's proposal still needs confirmation. Otherwise it is null. `working` wins when both hold. The engine derives both from the turns on each read. A `before` cursor uses the chat's current `last_message_at`, so a chat that gets a new message while the partner pages moves to the top.
 
 Each returned turn also has `draft_review`. It is null for a turn without draft context. For a draft turn it contains `{ draft_id, version, current }`, where `draft_id` and `version` come from the saved turn context. The engine computes `current` when it reads the turn. It is `pending_same` if the draft is still pending at that version, `changed` if it is pending at a newer version, or `gone` if it has left pending or is unavailable to the partner. The app uses `changed` or `gone` to ask the partner to open a fresh review for a failed draft turn.
 
-`answer` is `{ kind, text, sources, proposal }`. `kind` is `answer`, `clarification`, or `refusal`. `text` is plain text. `sources` lists the records used, or accessible choices for a clarification. A refusal has empty sources. `proposal` is null or one of the following on an `answer`.
+`answer` is `{ kind, text, sources, proposal }`. `kind` is `answer`, `clarification`, or `refusal`. `text` is plain text. `sources` lists the records used, or accessible choices for a clarification. Deal, lead and client choices carry a nullable `city`. Lead and client choices also carry `deal_count`, using the same links as Global Search, including a person's current company. A refusal has empty sources. `proposal` is null or one of the following on an `answer`.
 
 | `kind`           | Stored proposal                                                                                                                | Allowed `edits`       |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------- |

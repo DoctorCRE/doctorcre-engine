@@ -230,11 +230,6 @@ _Avoid_: flagged, urgent, priority
 _Database_: `deal.attention` today; `deal.needs_attention` in the new database.
 _Engine_: `attention`.
 
-**Star**:
-A partner's own mark on a deal, retired (owner, 2026-11-25: "every deal is important"). No door reads or saves one.
-_Avoid_: favorite, bookmark, pin
-_New database_: `deal_star`, kept until the owner approves dropping it.
-
 **Pipeline call**:
 A sitting where a partner goes through the open deals and marks each reviewed or skipped.
 _Avoid_: deal review, session, agenda
