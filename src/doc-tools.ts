@@ -51,6 +51,7 @@ export type DocClaimState = {
 	reads: number;
 	sources: Record<string, ClaimSource>;
 	returned_record?: true;
+	prompt_released?: true;
 	choices?: Source[];
 	failed?: true;
 };

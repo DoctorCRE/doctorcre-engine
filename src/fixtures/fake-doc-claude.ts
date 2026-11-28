@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 
 const args = process.argv.slice(2);
 const path = join(import.meta.dirname, "user-settings.json");
@@ -17,6 +18,53 @@ const finished = (result: unknown) =>
 		result: JSON.stringify(result),
 	});
 
+const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
+const doc = args.includes("--mcp-config")
+	? JSON.parse(valueAfter("--mcp-config") ?? "").mcpServers.doc
+	: undefined;
+const connectionFails = Boolean(
+	settings.fixtureDisconnected && doc?.headers["Doc-Claim-Id"] !== "readiness",
+);
+type FixtureInput = {
+	readiness?: boolean;
+	turn?: { question: string };
+	subject?: string;
+	body: string;
+	candidates?: unknown[];
+	destinations?: unknown[];
+};
+let streamedInput: FixtureInput | undefined;
+if (args.includes("--input-format")) {
+	assert.equal(valueAfter("--input-format"), "stream-json");
+	for await (const line of createInterface({ input: process.stdin })) {
+		const message = JSON.parse(line);
+		if (message.type === "user") {
+			streamedInput = JSON.parse(message.message.content);
+			break;
+		}
+		assert.equal(message.type, "control_request");
+		emit({
+			type: "control_response",
+			response: {
+				request_id: message.request_id,
+				subtype: "success",
+				response:
+					message.request.subtype === "mcp_status"
+						? {
+								mcpServers: [
+									{
+										name: "doc",
+										status: connectionFails ? "failed" : "connected",
+									},
+								],
+							}
+						: {},
+			},
+		});
+	}
+	if (!streamedInput) process.exit(0);
+}
+
 if (args.includes("auth")) {
 	const capture = join(import.meta.dirname, "auth-args.json");
 	if (existsSync(capture)) appendFileSync(capture, `${JSON.stringify(args)}\n`);
@@ -29,12 +77,14 @@ if (args.includes("auth")) {
 		subscriptionType: "pro",
 	});
 } else {
-	const input = JSON.parse(readFileSync(0, "utf8"));
+	const input: FixtureInput =
+		streamedInput ?? JSON.parse(readFileSync(0, "utf8"));
 	const probe = input.readiness === true;
+	if (!probe && input.turn && settings.fixtureAction)
+		appendFileSync(join(import.meta.dirname, "action.log"), "ran\n");
 	const question = input.turn?.question ?? input.subject;
 	let prompt = "";
 	if (probe ? isolated : !input.turn) {
-		const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
 		assert.equal(valueAfter("--setting-sources"), "");
 		assert.deepEqual(JSON.parse(valueAfter("--settings") ?? ""), {
 			disableAllHooks: true,
@@ -55,10 +105,6 @@ if (args.includes("auth")) {
 		}
 	}
 	if (!isolated) {
-		const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
-		const {
-			mcpServers: { doc },
-		} = JSON.parse(valueAfter("--mcp-config") ?? "");
 		assert.match(
 			doc.headers["Doc-Claim-Id"],
 			probe ? /^readiness$/ : /^[a-f0-9-]{36}$/,
@@ -67,7 +113,16 @@ if (args.includes("auth")) {
 		emit({
 			type: "system",
 			subtype: "init",
-			mcp_servers: [{ name: "doc", status: "connected" }],
+			mcp_servers: [
+				{
+					name: "doc",
+					status:
+						connectionFails ||
+						(!probe && settings.fixtureDisconnectsAfterPrompt)
+							? "failed"
+							: "connected",
+				},
+			],
 		});
 	}
 	if (probe) {

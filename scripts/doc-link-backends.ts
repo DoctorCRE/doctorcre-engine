@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { type ChildProcess, execFile } from "node:child_process";
 import { hash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -7,11 +7,12 @@ import { createInterface } from "node:readline";
 import { fileURLToPath, URL } from "node:url";
 import { z } from "zod";
 
-export type LinkOutcome =
+export type LinkOutcome = (
 	| { kind: "answered"; answer: Record<string, unknown> }
 	| { kind: "failed" | "signed_out" }
 	| { kind: "startup_failed"; reason?: string }
-	| { kind: "plan_limited"; resetsAt: number | undefined };
+	| { kind: "plan_limited"; resetsAt: number | undefined }
+) & { readinessIssue?: string };
 
 type SignInStatus =
 	| "ready"
@@ -24,6 +25,7 @@ export type ModelTask = {
 	prompt: string;
 	allowTools: boolean;
 	chat?: { url: string; claimId: string; credential: string };
+	beforePrompt?: () => Promise<boolean>;
 };
 
 type Backend = {
@@ -73,7 +75,11 @@ function runCli(
 		input,
 		env,
 		cwd,
-	}: { input?: string | undefined; env: NodeJS.ProcessEnv; cwd?: string },
+	}: {
+		input?: string | ((child: ChildProcess) => void) | undefined;
+		env: NodeJS.ProcessEnv;
+		cwd?: string;
+	},
 ) {
 	return new Promise<CliResult>((resolve) => {
 		const child = execFile(
@@ -82,7 +88,9 @@ function runCli(
 			{ cwd, env, timeout, killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024 },
 			(error, stdout, stderr) => resolve({ ok: !error, stdout, stderr }),
 		);
-		child.stdin?.on("error", () => {}).end(input);
+		child.stdin?.on("error", () => {});
+		if (typeof input === "function") input(child);
+		else child.stdin?.end(input);
 	});
 }
 
@@ -103,7 +111,7 @@ const rateLimit = z.object({
 	resetsAt: z.number().optional(),
 });
 
-function runClaude(
+async function runClaude(
 	binary: string,
 	timeout: number,
 	allowTools: boolean,
@@ -128,6 +136,7 @@ function runClaude(
 			"--output-format",
 			"stream-json",
 			"--verbose",
+			...(task.chat ? ["--input-format", "stream-json"] : []),
 			...(allowTools ? [] : ["--tools", ""]),
 			"--mcp-config",
 			JSON.stringify({
@@ -156,15 +165,22 @@ function runClaude(
 	} else {
 		args.push("auth", "status");
 	}
-	return runCli(binary, args, timeout, {
+	let released = !task?.chat;
+	const result = await runCli(binary, args, timeout, {
 		...(allowTools ? { cwd: homedir() } : {}),
-		input: task?.input,
+		input: task?.chat
+			? (child) =>
+					gateClaudeChat(child, task, () => {
+						released = true;
+					})
+			: task?.input,
 		env: {
 			...childEnvironment(),
 			...(allowTools ? {} : { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" }),
 			...(task?.chat ? { DOC_LINK_CREDENTIAL: task.chat.credential } : {}),
 		},
 	});
+	return { ...result, released };
 }
 
 export async function signInStatus(
@@ -185,27 +201,93 @@ export async function signInStatus(
 const docMcpIssue =
 	"Doc could not connect to its tools. Check the engine connection, then rerun setup.";
 const mcpConnection = z.object({ name: z.string(), status: z.string() });
+const mcpConnections = z.array(mcpConnection);
+const controlReply = z.object({
+	type: z.literal("control_response"),
+	response: z.object({
+		request_id: z.string(),
+		subtype: z.string(),
+		response: z.object({ mcpServers: mcpConnections.optional() }).optional(),
+	}),
+});
+
+function gateClaudeChat(
+	child: ChildProcess,
+	task: ModelTask,
+	release: () => void,
+) {
+	if (!child.stdout || !child.stdin) return;
+	const { stdin } = child;
+	const lines = createInterface({ input: child.stdout });
+	const command = (id: string, subtype: string) => {
+		if (!stdin.destroyed && !stdin.writableEnded)
+			stdin.write(
+				`${JSON.stringify({ type: "control_request", request_id: id, request: { subtype } })}\n`,
+			);
+	};
+	const fail = () => child.kill("SIGKILL");
+	const onLine = (line: string) => {
+		const response = controlReply.safeParse(readJson(line)).data?.response;
+		if (response?.request_id === "doc-init") {
+			if (response.subtype === "success") command("doc-mcp", "mcp_status");
+			else fail();
+		}
+		if (response?.request_id !== "doc-mcp") return;
+		const status = response.response?.mcpServers?.find(
+			({ name }) => name === "doc",
+		)?.status;
+		if (status === "pending") {
+			setTimeout(() => command("doc-mcp", "mcp_status"), 100).unref();
+			return;
+		}
+		lines.off("line", onLine);
+		if (response.subtype !== "success" || status !== "connected") {
+			fail();
+			return;
+		}
+		void (async () => {
+			if (task.beforePrompt && !(await task.beforePrompt())) {
+				fail();
+				return;
+			}
+			if (stdin.destroyed || stdin.writableEnded) return;
+			release();
+			stdin.end(
+				`${JSON.stringify({
+					type: "user",
+					message: { role: "user", content: task.input },
+					parent_tool_use_id: null,
+				})}\n`,
+			);
+		})().catch(fail);
+	};
+	lines.on("line", onLine);
+	command("doc-init", "initialize");
+}
 
 function claudeOutcome(
-	{ ok, stdout }: CliResult,
+	{ ok, stdout, released }: CliResult & { released: boolean },
 	needsDoc: boolean,
 ): LinkOutcome {
+	if (!released) return { kind: "startup_failed", reason: docMcpIssue };
 	let blocker: LinkOutcome | undefined;
 	let completed: Record<string, unknown> | undefined;
 	let initialized = false;
-	let docConnected = false;
+	let readinessIssue: string | undefined;
 	for (const line of stdout.split("\n")) {
 		const event = fields.safeParse(readJson(line)).data;
 		if (!event) continue;
 		if (event.type === "system" && event.subtype === "init") {
 			initialized = true;
-			docConnected =
-				z
-					.array(mcpConnection)
+			if (
+				needsDoc &&
+				!mcpConnections
 					.safeParse(event.mcp_servers)
 					.data?.some(
 						({ name, status }) => name === "doc" && status === "connected",
-					) ?? false;
+					)
+			)
+				readinessIssue = docMcpIssue;
 		}
 		if (event.type === "rate_limit_event") {
 			const limit = rateLimit.safeParse(event.rate_limit_info).data;
@@ -217,13 +299,17 @@ function claudeOutcome(
 	}
 	if (
 		ok &&
-		(!needsDoc || docConnected) &&
 		completed?.subtype === "success" &&
 		completed.is_error === false &&
 		typeof completed.result === "string"
 	) {
 		const answer = fields.safeParse(readJson(completed.result)).data;
-		if (answer) return { kind: "answered", answer };
+		if (answer)
+			return {
+				kind: "answered",
+				answer,
+				...(readinessIssue && { readinessIssue }),
+			};
 	}
 	if (blocker) return blocker;
 	if (completed?.api_error_status === 401) return { kind: "signed_out" };
@@ -233,11 +319,8 @@ function claudeOutcome(
 		/^(?:Not logged in\b|Invalid API key\b).*\/login/i.test(completed.result)
 	)
 		return { kind: "signed_out" };
-	if (needsDoc && initialized && !docConnected)
-		return { kind: "startup_failed", reason: docMcpIssue };
-	if (!initialized && !ok) return { kind: "startup_failed" };
-	if (needsDoc && !docConnected) return { kind: "startup_failed" };
-	return { kind: "failed" };
+	if (!needsDoc && !initialized && !ok) return { kind: "startup_failed" };
+	return { kind: "failed", ...(readinessIssue && { readinessIssue }) };
 }
 
 export function codexHome() {
@@ -513,13 +596,21 @@ async function runCodex(binary: string, timeout: number, task: ModelTask) {
 	} else if (!task.allowTools) {
 		args.push("-c", "mcp_servers={}");
 	}
-	return codexOutcome(
+	if (task.beforePrompt && !(await task.beforePrompt()))
+		return { kind: "startup_failed", reason: docMcpIssue } as const;
+	const outcome = codexOutcome(
 		await runCli(binary, [...args, "-"], timeout, {
 			cwd: task.allowTools ? homedir() : "/",
 			env,
 			input: task.input,
 		}),
 	);
+	if (task.beforePrompt && outcome.kind === "startup_failed")
+		return {
+			kind: "failed",
+			readinessIssue: outcome.reason ?? docMcpIssue,
+		} as const;
+	return outcome;
 }
 
 export const backends = {

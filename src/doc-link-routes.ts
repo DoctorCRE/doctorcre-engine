@@ -16,6 +16,7 @@ import {
 	finishDocJudgment,
 	finishDocTurn,
 	macRunner,
+	startDocTurn,
 } from "./doc-queue.ts";
 import type { DB } from "./next-database.d.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
@@ -138,6 +139,11 @@ export async function completeDocLink(c: Context<WriterEnv>) {
 
 		const { claim_id, kind } = body;
 		const fields = Object.keys(body).length;
+		if (kind === "started" && fields === 2)
+			return new Response(null, {
+				status: await startDocTurn(tx, owner, claim_id),
+				headers: noStore,
+			});
 		if (kind === "judgment" && fields === 3 && Object.hasOwn(body, "outcome")) {
 			const status = await finishDocJudgment(tx, owner, claim_id, body.outcome);
 			return new Response(null, { status, headers: noStore });

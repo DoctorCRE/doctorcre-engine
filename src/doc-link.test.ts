@@ -776,6 +776,44 @@ test("Doc link migration, private credentials and Mac polling", {
 							);
 							assert.ok(backup?.kind === "turn");
 							assert.equal(backup.turn.id, turn);
+							for (const expireClaim of [false, true]) {
+								await db.query(
+									"update next.doc_turn set state = 'queued', claim_id = null, claim_until = null, claim_state = null where id = $1",
+									[turn],
+								);
+								const work = await fetchClaim(headers);
+								assert.equal(work.work.kind, "turn");
+								const complete = (kind: string) =>
+									result(bearer, engineOrigin, {
+										claim_id: work.claim_id,
+										kind,
+									});
+								assert.equal((await complete("started")).status, 204);
+								if (expireClaim)
+									await db.query(
+										"update next.doc_turn set claim_until = now() - interval '1 second' where id = $1",
+										[turn],
+									);
+								else
+									assert.equal((await complete("startup_failed")).status, 204);
+								assert.equal(
+									await docLinkOwnerTransaction(
+										connectionString,
+										appUserId,
+										(tx) => claimDocWork(tx, appUserId, "backup"),
+									),
+									null,
+								);
+								assert.deepEqual(
+									(
+										await db.query(
+											"select state, claim_id from next.doc_turn where id = $1",
+											[turn],
+										)
+									).rows,
+									[{ state: "failed", claim_id: null }],
+								);
+							}
 						} finally {
 							await db.query(
 								"delete from next.doc_judgment_job where id = $1",
@@ -854,7 +892,7 @@ test("Doc link migration, private credentials and Mac polling", {
 									);
 								},
 								async fetch(url, init) {
-									if (requests++ >= 6)
+									if (requests++ >= 7)
 										return new Response(null, { status: 401 });
 									const incoming = new Request(url, init);
 									const response = await request(incoming);
@@ -879,6 +917,7 @@ test("Doc link migration, private credentials and Mac polling", {
 						const saved = [`${linkPath}/result`, 204];
 						assert.deepEqual(observed, [
 							"turn",
+							saved,
 							saved,
 							"email_summary",
 							saved,
