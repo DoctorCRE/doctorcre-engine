@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checklistOf } from "./checklist.ts";
-import { planOf } from "./plan.ts";
+import { forecastAttention, planOf } from "./plan.ts";
 
 type Facts = Parameters<typeof planOf>[0];
 
@@ -587,4 +587,50 @@ test("a recorded signing day is the expected signing day", () => {
 		facts({ checklist: checklist({ executed_lease: "2030-06-10" }) }),
 	);
 	assert.equal(plan.expected_signing_on, "2030-06-10");
+});
+
+test("a partner’s own end day moves the to-dos that follow", () => {
+	const original = planOf(facts());
+	assert.equal(expectedTo(original, "business_terms"), "2030-07-16");
+	const custom = planOf(facts({ own_dates: { business_terms: "2030-07-20" } }));
+	assert.equal(expectedTo(custom, "business_terms"), "2030-07-20");
+	assert.equal(expectedTo(custom, "contract_draft"), "2030-07-30");
+	assert.notEqual(custom.expected_signing_on, original.expected_signing_on);
+});
+
+test("forecast attention starts the first day the current phase overruns enough to miss a date", () => {
+	const risk = date("loi_expiry", "2030-06-27");
+	const initial = facts({ today: "2030-06-28", critical_dates: [risk] });
+	const hit = forecastAttention(null, initial, planOf(initial));
+	assert.deepEqual(hit, {
+		reason: "On pace to miss Example loi_expiry (Jun 27, 2030).",
+		since: "2030-06-28",
+	});
+	const next = { ...initial, today: "2030-06-29" };
+	assert.deepEqual(forecastAttention(null, next, planOf(next)), hit);
+	const moved = {
+		...next,
+		phase_spans: [
+			...next.phase_spans,
+			{ phase: "negotiation", from_on: "2030-06-29", to_on: null },
+		],
+	};
+	assert.equal(
+		forecastAttention(null, moved, planOf(moved))?.since,
+		"2030-06-29",
+	);
+	for (const reason of [
+		"A next step is late.",
+		"A critical date is within 7 days or past and not done.",
+		"This deal has no next step and no suggestion.",
+		"A client or broker email has had no answer for 2 working days.",
+		"A suggestion has waited 2 days.",
+		"Nothing has happened for 14 days.",
+	]) {
+		const concrete = { reason, since: "2030-06-19" };
+		assert.equal(
+			forecastAttention(concrete, initial, planOf(initial)),
+			concrete,
+		);
+	}
 });

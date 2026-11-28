@@ -55,7 +55,7 @@ async function freshDoor(t: TestContext) {
 	};
 	const post = (caller: Caller, body: object) =>
 		save(caller, "typical-lengths", body);
-	return { db, readLengths, post };
+	return { db, readLengths, post, save, request };
 }
 
 test("the read returns seeded lease lengths in workflow order and handles other kinds", async (t) => {
@@ -339,3 +339,82 @@ for (const migrated of [false, true]) {
 		},
 	);
 }
+
+test("partners save, undo and reset their own to-do dates from the plan they saw", async (t) => {
+	const { db, save, request } = await freshDoor(t);
+	const deal = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into deal (id, name, kind, owner_user_id) values ('${deal}', 'Example lease', 'lease', '${alex}');
+		insert into deal_phase_change (deal_id, phase, happened_at) values ('${deal}', 'pending', now() - interval '1 day'); commit;`);
+	const read = async () => {
+		const res = await request(
+			alexCaller,
+			`deals/${deal}`,
+			{ method: "GET" },
+			{ DEALS_READ_SCHEMA: "next" },
+		);
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as {
+			plan: {
+				base_version: number;
+				own_dates: Record<string, string>;
+				expected_signing_on: string | null;
+			};
+		};
+		return body.plan;
+	};
+	const submit = (base_version: number, fields: object) =>
+		save(blairCaller, `deals/${deal}/plan-dates`, {
+			idempotency_key: randomUUID(),
+			base_version,
+			...fields,
+		});
+	const {
+		rows: [date],
+	} = await db.query<{ target: string }>(
+		`select ((now() at time zone 'America/Chicago')::date + 40)::text as target`,
+	);
+	assert.ok(date);
+	const { target } = date;
+	const before = await read();
+	const [status, updated] = await submit(before.base_version, {
+		todo: "representation",
+		target_on: target,
+	});
+	assert.equal(status, 200);
+	assert.equal(updated.previous_on, null);
+	const after = await read();
+	assert.deepEqual(after.own_dates, { representation: target });
+	assert.notEqual(after.expected_signing_on, before.expected_signing_on);
+	assert.equal(
+		(
+			await submit(before.base_version, {
+				todo: "representation",
+				target_on: null,
+			})
+		)[0],
+		409,
+	);
+	assert.equal(
+		(
+			await submit(after.base_version, {
+				todo: "representation",
+				target_on: null,
+			})
+		)[0],
+		200,
+	);
+	assert.deepEqual((await read()).own_dates, {});
+	const next = await read();
+	assert.equal(
+		(
+			await submit(next.base_version, {
+				todo: "representation",
+				target_on: target,
+			})
+		)[0],
+		200,
+	);
+	assert.equal((await submit((await read()).base_version, {}))[0], 200);
+	assert.equal((await read()).expected_signing_on, before.expected_signing_on);
+});

@@ -4,10 +4,15 @@ import {
 	sql,
 	type Transaction,
 } from "kysely";
-import { jsonObjectFrom } from "kysely/helpers/postgres";
-import { checkInWording, stepItemId } from "../home-steps.ts";
+import {
+	jsonArrayFrom,
+	jsonBuildObject,
+	jsonObjectFrom,
+} from "kysely/helpers/postgres";
+import { checkInWording, stepCopy, stepItemId } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
 import {
+	nameOldRecords,
 	type OldRecordNames,
 	readOldRecordNames,
 } from "../old-record-names.ts";
@@ -16,6 +21,16 @@ import { dealAttention } from "./attention.ts";
 import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
 import { automaticPhaseReceipt, phaseReceiptFields } from "./phase-receipt.ts";
+import {
+	boardTimeline,
+	commissionsOf,
+	criticalDatesOf,
+	currentLeaseOf,
+	ownDatesOf,
+	phaseSpansOf,
+	stepsOf,
+	typicalLengthsOf,
+} from "./plan-read.ts";
 import {
 	boardClosedOn,
 	boardInvoicedOn,
@@ -403,6 +418,32 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			clientWebsiteOf(db, eb.ref("board.id"), eb.ref("board.client_id")).as(
 				"client_portal_url",
 			),
+			eb
+				.case()
+				.when("board.operating_state", "=", "active")
+				.then(
+					jsonBuildObject({
+						today: asText(
+							sql`(now() at time zone 'America/Chicago')::date`,
+						).$notNull(),
+						lease: jsonObjectFrom(currentLeaseOf(db, eb.ref("board.id"))),
+						commissions: jsonArrayFrom(commissionsOf(db, eb.ref("board.id"))),
+						critical_dates: jsonArrayFrom(
+							criticalDatesOf(db, eb.ref("board.id")),
+						),
+						phase_spans: phaseSpansOf(eb.ref("board.id")),
+						steps: jsonArrayFrom(
+							stepsOf(db, eb.ref("board.id")).where("s.status", "in", [
+								"open",
+								"done",
+							]),
+						),
+						lengths: typicalLengthsOf(eb.ref("board.kind")),
+						own_dates: ownDatesOf(eb.ref("board.id")),
+					}),
+				)
+				.end()
+				.as("timeline_facts"),
 			openActions(sql`s.deal_id = board.id`).as("open_actions"),
 			openActions(sql`s.party_id = board.client_id`, true).as("client_actions"),
 			// Deal notes have their own section and did not feed the old card summary.
@@ -427,6 +468,10 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			...[...deal.open_actions, ...deal.client_actions].map(
 				({ description }) => description,
 			),
+			...(deal.timeline_facts?.steps.flatMap(({ description, title }) => [
+				description,
+				title,
+			]) ?? []),
 		]),
 		...[...closed_deals, ...lost_deals].map(({ next_step }) => next_step),
 	]);
@@ -465,7 +510,7 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 	return {
 		schema_version: "local-deals-board.v2",
 		actor: input.partner,
-		deals: deals.map(({ client_actions, ...deal }) => {
+		deals: deals.map(({ client_actions, timeline_facts, ...deal }) => {
 			const open_actions = (
 				deal.open_actions.length === 0 &&
 				openDeals.get(deal.client_id)?.length === 1
@@ -474,6 +519,22 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			).map(boardAction(names));
 			return {
 				...checkInNextStep(names)(deal),
+				...(timeline_facts
+					? boardTimeline({
+							...deal,
+							...timeline_facts,
+							steps: timeline_facts.steps.map((step) => ({
+								...step,
+								label: stepCopy(
+									{
+										what: nameOldRecords(step.description, names),
+										item_title: step.title && nameOldRecords(step.title, names),
+									},
+									names,
+								).title,
+							})),
+						})
+					: { timeline: null }),
 				open_actions,
 				item_schema_version: "deal-items.v1",
 				// The list row shows these steps. A date is not required, and a

@@ -14,6 +14,7 @@ erDiagram
   "Deal open name"
   "Deal party"
   "Deal phase change"
+  "Deal plan date"
   "Deal reason"
   "Deal star"
   "Phase"
@@ -25,6 +26,7 @@ erDiagram
   "Deal party" }o--|| "Deal" : "deal ID"
   "Deal phase change" }o--|| "Deal" : "deal ID"
   "Deal phase change" }o--|| "Phase" : "phase"
+  "Deal plan date" }o--|| "Deal" : "deal ID"
   "Deal star" }o--|| "Deal" : "deal ID"
   "Typical length" }o--|| "Deal kind" : "deal kind"
 ```
@@ -33,7 +35,7 @@ erDiagram
 
 Numbers count foreign keys between the two areas.
 
-[Activity](viewpoint-activity.md) (5) · [Client websites](viewpoint-website.md) (1) · [Commissions](viewpoint-commissions.md) (1) · [Doc](viewpoint-doc.md) (1) · [Documents](viewpoint-documents.md) (1) · [Home and calendar](viewpoint-home-calendar.md) (2) · [Imported deals](viewpoint-imported-deals.md) (9) · [Invoices](viewpoint-invoices.md) (3) · [Leads](viewpoint-leads.md) (2) · [Leases](viewpoint-leases.md) (4) · [Offers](viewpoint-offers.md) (7) · [People](viewpoint-people.md) (2) · [Property](viewpoint-property.md) (2) · [Relationships](viewpoint-relationships.md) (6) · [Tours](viewpoint-tours.md) (1) · [Users and jobs](viewpoint-users-jobs.md) (30) · [Vendors and territories](viewpoint-vendors-territories.md) (1)
+[Activity](viewpoint-activity.md) (5) · [Client websites](viewpoint-website.md) (1) · [Commissions](viewpoint-commissions.md) (1) · [Doc](viewpoint-doc.md) (1) · [Documents](viewpoint-documents.md) (1) · [Home and calendar](viewpoint-home-calendar.md) (2) · [Imported deals](viewpoint-imported-deals.md) (9) · [Invoices](viewpoint-invoices.md) (3) · [Leads](viewpoint-leads.md) (2) · [Leases](viewpoint-leases.md) (4) · [Offers](viewpoint-offers.md) (7) · [People](viewpoint-people.md) (2) · [Property](viewpoint-property.md) (2) · [Relationships](viewpoint-relationships.md) (6) · [Tours](viewpoint-tours.md) (1) · [Users and jobs](viewpoint-users-jobs.md) (33) · [Vendors and territories](viewpoint-vendors-territories.md) (1)
 
 ## Tables
 
@@ -42,6 +44,7 @@ Numbers count foreign keys between the two areas.
 - [Deal open name](next.deal_open_name.md)
 - [Deal party](next.deal_party.md)
 - [Deal phase change](next.deal_phase_change.md)
+- [Deal plan date](next.deal_plan_date.md)
 - [Deal reason](next.deal_reason.md)
 - [Deal star](next.deal_star.md)
 - [Phase](next.phase.md)

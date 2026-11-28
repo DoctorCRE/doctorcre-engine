@@ -72,6 +72,7 @@ type PlanFacts = {
 		status: string;
 	}[];
 	lengths: Record<string, number>;
+	own_dates?: Record<string, string>;
 	today: string;
 };
 type TodoBase = {
@@ -184,7 +185,10 @@ export function planOf(facts: PlanFacts) {
 					stale = { phase, days: sat };
 					cursor = null;
 				} else if (cursor)
-					cursor = latest(addDays(from ?? today, typical_days), today);
+					cursor = latest(
+						facts.own_dates?.[item.id] ?? addDays(from ?? today, typical_days),
+						today,
+					);
 				else cursor = null;
 				chain.push({
 					...base,
@@ -195,7 +199,10 @@ export function planOf(facts: PlanFacts) {
 				});
 			} else if (cursor && typical_days) {
 				const from = cursor;
-				cursor = addDays(from, typical_days);
+				cursor = latest(
+					facts.own_dates?.[item.id] ?? addDays(from, typical_days),
+					from,
+				);
 				chain.push({
 					...base,
 					state: "expected",
@@ -289,7 +296,49 @@ export function planOf(facts: PlanFacts) {
 		phases,
 		rows: [...todos, ...steps, ...dates],
 		arrows,
-		expected_signing_on: recordedOrExpectedEnd(signing),
+		expected_signing_on: stale ? null : recordedOrExpectedEnd(signing),
 		stale,
+	};
+}
+
+const forecastDay = new Intl.DateTimeFormat("en-US", {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+	timeZone: "UTC",
+});
+
+export function forecastAttention(
+	concrete: { reason: string; since: string } | null,
+	facts: PlanFacts,
+	plan: ReturnType<typeof planOf>,
+) {
+	if (concrete) return concrete;
+	const phase = phaseOf(facts.phase);
+	const entered = facts.phase_spans.findLast(
+		(span) => phaseOf(span.phase) === phase,
+	)?.from_on;
+	const risk = plan.rows
+		.filter((row) => row.kind === "critical_date")
+		.filter((row) => row.at_risk)
+		.sort((a, b) => a.on.localeCompare(b.on) || a.id.localeCompare(b.id))[0];
+	if (!entered || entered > facts.today || !risk) return null;
+	let first = 0;
+	let last = daysBetween(entered, facts.today);
+	while (first < last) {
+		const mid = Math.floor((first + last) / 2);
+		const prior = planOf({ ...facts, today: addDays(entered, mid) });
+		if (
+			prior.rows.some(
+				(row) =>
+					row.kind === "critical_date" && row.id === risk.id && row.at_risk,
+			)
+		)
+			last = mid;
+		else first = mid + 1;
+	}
+	return {
+		reason: `On pace to miss ${risk.label} (${forecastDay.format(timeOf(risk.on))}).`,
+		since: addDays(entered, first),
 	};
 }

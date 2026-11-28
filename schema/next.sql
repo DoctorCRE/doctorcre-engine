@@ -559,6 +559,14 @@ create table outside_id (
 	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id, email_activity_id) = 1),
 	primary key (source, value)
 );
+-- A partner can choose an end day for a to-do on one deal.
+create table deal_plan_date (
+	deal_id uuid not null references deal,
+	todo text not null check (todo ~ '^[a-z][a-z0-9_]*$'),
+	target_on date check (isfinite(target_on)),
+	primary key (deal_id, todo)
+);
+
 -- Reads find a party's old ids by party.
 create index outside_id_by_party on outside_id (party_id);
 
@@ -3640,7 +3648,7 @@ declare
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'typical_length', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'market_city', 'territory',
-		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity', 'tour_plan', 'tour_stop',
+		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'deal_plan_date', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity', 'tour_plan', 'tour_stop',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement', 'weekly_review', 'deal_star',
 		'party_document', 'email_document', 'client_vertical', 'client_research', 'client_research_fact',
@@ -4207,6 +4215,7 @@ grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, pa
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
+grant select, insert, update (target_on) on deal_plan_date to engine;
 grant update (days) on typical_length to engine;
 grant update (lead_client_id) on party_role to engine;
 grant update (relationship_origin, rivalry_note, refers_business, offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id, needs_attention) on party_role to engine;

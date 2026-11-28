@@ -70,6 +70,7 @@
 | [next.deal_open_name](next.deal_open_name.md)                                               | 2       |         | BASE TABLE |
 | [next.deal_party](next.deal_party.md)                                                       | 9       |         | BASE TABLE |
 | [next.deal_phase_change](next.deal_phase_change.md)                                         | 11      |         | BASE TABLE |
+| [next.deal_plan_date](next.deal_plan_date.md)                                               | 7       |         | BASE TABLE |
 | [next.deal_property](next.deal_property.md)                                                 | 7       |         | BASE TABLE |
 | [next.deal_reason](next.deal_reason.md)                                                     | 6       |         | BASE TABLE |
 | [next.deal_star](next.deal_star.md)                                                         | 7       |         | BASE TABLE |
