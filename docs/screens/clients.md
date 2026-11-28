@@ -47,7 +47,7 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 - [ ] The diagram also shows a vendor who referred the client to us, and the other partner when he introduced someone on that deal.
 - [ ] Clicking a vendor box shows who introduced them, when, and the note, with **Mark chosen**, **Open**, and **Remove from this deal**. **Mark chosen** puts the vendor on the deal in that role and turns the box green. **Add vendor** asks for the vendor, the role, and who brought them in: Dell, Joe, or the client. It needs no note, and the introduction is dated today in Chicago. **Not recorded** leaves the source unset.
 - [ ] **Remove introduction** asks "Remove the introduction for [vendor] on [deal]?" before removing a recorded introduction. If the introduction has changed, reopen the box to review it. The vendor stays on the deal in any chosen roles. Email findings keep their source.
-- [ ] Saves on one vendor happen one at a time. When a save has no answer, the form says it is checking, reads the deal again, and shows what was saved before allowing another save.
+- [ ] Saves on one vendor happen one at a time. A slow save is never cancelled. The form shows "Still saving…" and stays locked until the save answers, then reads the deal again. If the connection fails with no answer, the form says "Couldn't confirm the save" and offers **Check again**. **Set** works again only after the fresh read returns and shows what was saved.
 - [ ] The open icon on a deal shows the same diagram large, in place of the table, with dates under each name. The x returns to the table. The large view is for a computer only.
 
 ## On a phone
