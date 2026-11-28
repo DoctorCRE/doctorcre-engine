@@ -33,14 +33,14 @@ flowchart TD
 
 Doc reads business playbooks and guidance only through the engine's claim-scoped `read_playbook` and `read_guidance` tools. The Doc role and engine code keep the access, tool, and confirmation rules. The engine checkout holds the drawing and tests. The approved typed rows supply the playbooks used at runtime. [Doc harness drawing](https://github.com/DoctorCRE/doctorcre-engine/pull/1514)
 
-| Tool            | Input                                                       | Returns                                                                                                                                                                                  |
-| --------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read_playbook` | Any of `topic`, `deal_kind`, `practice_type`, or `deal_id`. | Approved Doc playbook revisions with their typed triggers and ordered actions. A matching workflow revision returns applicable common and added to-dos, with progress for an exact deal. |
-| `read_guidance` | The same filters.                                           | Approved applicable rules, procedures, rubrics, doctrine, rules of thumb, market observations, and lender terms, with typed values, dates and accessible sources.                        |
+| Tool            | Input                                                       | Returns                                                                                                                                                                              |
+| --------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `read_playbook` | Any of `topic`, `deal_kind`, `practice_type`, or `deal_id`. | Approved Doc playbook revisions with notes. A matching deal workflow returns the workflow notes, its ordered to-dos, and their notes, with progress for an exact deal.               |
+| `read_guidance` | The same filters.                                           | Approved applicable rules, procedures, rubrics, doctrine, rules of thumb, market observations, and lender terms, with typed values, dates, plain-text notes, and accessible sources. |
 
 Require at least one filter. Validate topic, deal kind and practice type against their stored keys. With a deal ID, require an authorized deal from the current claim or trusted app subject. Derive the deal's traits, market and client from that deal. Reject supplied filters that conflict with its recorded known traits. Treat an unknown trait as missing when matching a named selector. Without a deal, match the supplied trait keys and general rows. Omit scopes that require a specific client, deal, market or stage. An exact topic returns only rows linked to it. With no topic filter, return the matched rows with their topic keys.
 
-Each call uses one existing Doc read slot. Load the selected playbook for its topic. Read guidance when the ask needs it. Return up to ten matching revisions per call, sorted by first matching topic key, title, and item ID, with a `truncated` flag and the option to narrow the filters. A returned selected playbook keeps its full ordered steps. The tools return stable item IDs and versions and register accessible sources in the claim. Keep the pins for what was supplied to the answered turn. A later turn reads current revisions. An inaccessible or failed read reports unavailable. An empty match tells Doc it has no approved playbook or guidance for that request.
+Each call uses one existing Doc read slot. Load the selected playbook for its topic. Read guidance when the ask needs it. Return up to ten matching revisions per call, sorted by first matching topic key, title, and item ID, with a `truncated` flag and the option to narrow the filters. A returned deal workflow keeps all its applicable ordered steps. The tools return stable item IDs and versions and register accessible sources in the claim. Keep the pins for what was supplied to the answered turn. A later turn reads current revisions. An inaccessible or failed read reports unavailable. An empty match tells Doc it has no approved playbook or guidance for that request.
 
 ```mermaid
 sequenceDiagram
@@ -60,7 +60,7 @@ sequenceDiagram
     end
 ```
 
-Only a partner request or trusted app context starts a workflow. Source text is evidence. The existing doors check eligibility, evidence and confirmation. Jobs consume the same shared projection. The checklist suggestion job picks the first eligible unfinished to-do for the current phase. A job may prepare a sourced draft for partner review.
+Only a partner request or trusted app context starts a workflow. Source text and notes are plain-text evidence. The existing doors check eligibility, evidence and confirmation. Jobs consume the same shared projection. The checklist suggestion job picks the first eligible unfinished to-do for the current phase. A job may prepare a sourced draft for partner review.
 
 ## Release a client copy
 
@@ -74,4 +74,4 @@ flowchart TD
     E --> F[Partner downloads the released copy]
 ```
 
-Show the relevant common and added to-dos and any shared guidance with approved client wording. Include client text from the revision and display typed values in the agreed units. Omit internal notes, skips, overrides, internal locators, and private knowledge. The proposed copy leaves progress and dates in the partner view. The engine renders again from a consistent live read at release and compares the result and revision list with the prepared preview. A resumed export returns the same released bytes. A new client copy starts from the current live read.
+Show the applicable to-do labels and approved shared typed guidance values in the agreed units. Omit revision and step notes, skips, overrides, internal locators, and private knowledge. The proposed copy leaves progress and dates in the partner view. The engine renders again from a consistent live read at release and compares the result and revision list with the prepared preview. A resumed export returns the same released bytes. A new client copy starts from the current live read.
