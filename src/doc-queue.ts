@@ -28,6 +28,7 @@ const clearJudgmentClaim = {
 };
 const initialClaim = { reads: 0, sources: {} } satisfies DocClaimState;
 const unexpired = sql<boolean>`claim_until > clock_timestamp()`;
+const released = sql<boolean>`coalesce(claim_state @> '{"prompt_released":true}'::jsonb, false)`;
 const leaseEnd = sql<string>`clock_timestamp() + interval '60 seconds'`;
 const claimUntilText = sql<string>`to_jsonb(claim_until) #>> '{}'`.as(
 	"claim_until",
@@ -51,6 +52,7 @@ async function claimDocTurn(
 			claim_state: initialClaim,
 		})
 		.where(eligible)
+		.where(sql<boolean>`not ${released}`)
 		.returning([
 			"id",
 			"conversation_id",
@@ -115,6 +117,14 @@ export async function claimDocWork(
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
 	);
+	await tx
+		.updateTable("doc_turn")
+		.set({ state: "failed", ...clearClaim })
+		.where("owner_user_id", "=", owner)
+		.where("state", "=", "working")
+		.where(released)
+		.where(sql<boolean>`not ${unexpired}`)
+		.execute();
 	const eligible = (queuedAt: RawBuilder<unknown>, kind: DocWorkKind) =>
 		runner === "backup" || runner === "backup_mail"
 			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
@@ -158,7 +168,7 @@ export async function claimDocWork(
 		}>`
 			with pending as (
 				select 'turn' as queue, null as kind, id, created_at, state, claim_id, claim_until,
-					(${eligible(turnQueuedAt, "chat")}) as eligible from doc_turn
+					(${eligible(turnQueuedAt, "chat")} and not ${released}) as eligible from doc_turn
 				where owner_user_id = ${owner} and state in ('queued', 'working')
 				${mailQueue}
 			)
@@ -454,6 +464,24 @@ type DocResult = { claim_id: string } & (
 	  }
 );
 
+export async function startDocTurn(
+	tx: Transaction<DB>,
+	owner: string,
+	claimId: string,
+) {
+	const saved = await tx
+		.updateTable("doc_turn")
+		.set({ claim_state: sql`claim_state || '{"prompt_released":true}'::jsonb` })
+		.where("claim_id", "=", claimId)
+		.where("owner_user_id", "=", owner)
+		.where("state", "=", "working")
+		.where(
+			sql<boolean>`not ${released} and claim_until > clock_timestamp() + interval '15 seconds'`,
+		)
+		.executeTakeFirst();
+	return saved.numUpdatedRows ? 204 : 404;
+}
+
 export async function finishDocTurn(
 	tx: Transaction<DB>,
 	owner: string,
@@ -487,7 +515,12 @@ export async function finishDocTurn(
 	const saved = await tx
 		.updateTable("doc_turn")
 		.set({
-			state: blocked ? "queued" : kind,
+			state:
+				blocked || kind === "queued"
+					? turn.claim_state.prompt_released
+						? "failed"
+						: "queued"
+					: kind,
 			...clearClaim,
 			answer,
 			...(kind === "answered" &&

@@ -95,6 +95,7 @@ async function runLink(
 	binary = claude,
 	directory?: string,
 	backend: "claude" | "codex" = "claude",
+	claimMcpAvailable = true,
 ) {
 	let now = 60_000;
 	const maxWaits = replies.length;
@@ -120,7 +121,23 @@ async function runLink(
 				now += 2_000;
 			},
 			async fetch(url, init) {
-				requests.push(new Request(url, init));
+				const request = new Request(url, init);
+				const path = new URL(request.url).pathname;
+				if (path.endsWith("/mcp"))
+					return claimMcpAvailable
+						? Response.json({
+								id: 1,
+								result: { serverInfo: { name: "doctorcre-doc" } },
+							})
+						: status(503);
+				if (
+					path.endsWith("/result") &&
+					z
+						.object({ kind: z.literal("started") })
+						.safeParse(await request.clone().json()).success
+				)
+					return status(204);
+				requests.push(request);
 				const reply = replies.shift();
 				if (reply === "drop") throw new TypeError("connection dropped");
 				if (reply instanceof Response) return reply;
@@ -250,6 +267,8 @@ test("Doc link runs a private Claude print session and submits only the final an
 		"--output-format",
 		"stream-json",
 		"--verbose",
+		"--input-format",
+		"stream-json",
 		"--mcp-config",
 		"<MCP config>",
 		"--allowedTools",
@@ -940,7 +959,13 @@ for (const [variant, claim, expected] of [
 		const errors = t.mock.method(console, "error", () => {});
 		const replies = claim ? [claim, status(204), status(401)] : [status(401)];
 		assert.deepEqual(
-			await runLink(replies, binary, undefined, "codex"),
+			await runLink(
+				replies,
+				binary,
+				undefined,
+				"codex",
+				variant !== "doc-mcp-drops",
+			),
 			expected,
 		);
 		assert.equal(errors.mock.calls.length, 1);
@@ -952,6 +977,62 @@ for (const [variant, claim, expected] of [
 		);
 	});
 }
+
+for (const disconnectsAfterPrompt of [false, true]) {
+	test(`Claude preserves the execution boundary when Doc MCP disconnects ${disconnectsAfterPrompt ? "after" : "before"} the prompt`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, "claude.ts");
+		const action = join(directory.path, "action.log");
+		await copyFile(claude, binary);
+		await writeFile(
+			join(directory.path, "user-settings.json"),
+			JSON.stringify({
+				fixtureAction: true,
+				fixtureDisconnected: !disconnectsAfterPrompt,
+				fixtureDisconnectsAfterPrompt: disconnectsAfterPrompt,
+			}),
+		);
+		t.mock.method(console, "error", () => {});
+		assert.deepEqual(
+			await runLink([claimed("Question"), status(204), status(401)], binary),
+			[
+				poll("ready"),
+				disconnectsAfterPrompt
+					? answered(firstClaim)
+					: result({ claim_id: firstClaim, kind: "startup_failed" }),
+				poll(null, "ready"),
+			],
+		);
+		assert.equal(
+			await readFile(action, "utf8").catch(() => ""),
+			disconnectsAfterPrompt ? "ran\n" : "",
+		);
+	});
+}
+
+test("Codex treats startup failure after prompt release as a terminal result", async (t) => {
+	await using directory = await mkdtempDisposable(
+		join(process.cwd(), ".scratch."),
+	);
+	const binary = join(directory.path, "doc-mcp-drops");
+	await symlink(codex, binary);
+	t.mock.method(console, "error", () => {});
+	assert.deepEqual(
+		await runLink(
+			[claimed("Question"), status(204), status(401)],
+			binary,
+			undefined,
+			"codex",
+		),
+		[
+			poll("ready"),
+			result({ claim_id: firstClaim, kind: "failed" }),
+			poll(null, "ready"),
+		],
+	);
+});
 
 test("Codex config needs an absolute binary path", async () => {
 	await using directory = await mkdtempDisposable(

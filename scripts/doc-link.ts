@@ -224,6 +224,48 @@ export function postDocLink(
 	}).catch(() => undefined);
 }
 
+async function connectsToDocMcp(
+	{ url, claimId, credential }: NonNullable<ModelTask["chat"]>,
+	fetch: typeof globalThis.fetch,
+) {
+	try {
+		const response = await fetch(url, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${credential}`,
+				"Doc-Claim-Id": claimId,
+				"Content-Type": "application/json",
+				Accept: "application/json, text/event-stream",
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "initialize",
+				params: {
+					protocolVersion: "2025-11-25",
+					capabilities: {},
+					clientInfo: { name: "doctorcre-doc", version: "1.0.0" },
+				},
+			}),
+			redirect: "error",
+			signal: AbortSignal.timeout(5_000),
+		});
+		return (
+			response.ok &&
+			z
+				.object({
+					id: z.literal(1),
+					result: z.object({
+						serverInfo: z.object({ name: z.literal("doctorcre-doc") }),
+					}),
+				})
+				.safeParse(await response.json()).success
+		);
+	} catch {
+		return false;
+	}
+}
+
 export async function runDocLink(
 	config: Config,
 	{
@@ -290,10 +332,13 @@ export async function runDocLink(
 		return false;
 	}
 	function rememberBlocker(kind: DocWorkKind, outcome: LinkOutcome) {
-		if (outcome.kind === "startup_failed")
+		if (outcome.kind === "startup_failed" || outcome.readinessIssue)
 			remember(kind, {
 				status: null,
-				reason: outcome.reason ?? backend.settingsMessage,
+				reason:
+					(outcome.kind === "startup_failed"
+						? outcome.reason
+						: outcome.readinessIssue) ?? backend.settingsMessage,
 				checkAt: now() + retryReadinessAfter,
 			});
 		if (outcome.kind === "signed_out")
@@ -324,12 +369,17 @@ export async function runDocLink(
 						input,
 					};
 		const outcome = await backend.run(binary, 15_000, task);
-		if (outcome.kind === "answered" && outcome.answer.ready === true)
+		if (
+			outcome.kind === "answered" &&
+			outcome.answer.ready === true &&
+			!outcome.readinessIssue
+		)
 			remember(kind, { status: "ready", checkAt: now() + checkReadyEvery });
 		else
 			rememberBlocker(
 				kind,
-				outcome.kind === "answered" || outcome.kind === "failed"
+				!outcome.readinessIssue &&
+					(outcome.kind === "answered" || outcome.kind === "failed")
 					? { kind: "startup_failed" }
 					: outcome,
 			);
@@ -378,13 +428,32 @@ export async function runDocLink(
 			if (chat || (await mailAllowed()))
 				void postDocLink(config, "claim", {}, fetch);
 		}, 10_000);
-		const task = chat
+		const task: ModelTask = chat
 			? chatTask(
 					config,
 					claim.claim_id,
 					JSON.stringify({ turn: claim.turn, history: claim.history }),
 				)
 			: { ...judgmentTask(claim), allowTools: allowMailTools };
+		if (task.chat)
+			task.beforePrompt = async () => {
+				if (
+					name === "codex" &&
+					task.chat &&
+					!(await connectsToDocMcp(task.chat, fetch))
+				)
+					return false;
+				const begun = await postDocLink(
+					config,
+					"result",
+					{
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ claim_id: claim.claim_id, kind: "started" }),
+					},
+					fetch,
+				);
+				return begun?.status === 204;
+			};
 		let outcome = await backend
 			.run(binary, timeout, task)
 			.finally(() => clearInterval(heartbeat));
