@@ -15,6 +15,7 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 - [ ] The chats list is always open on the left, 264px wide, with no heading. Each row is one 36px line with no underline. It shows the start of the chat's first question, and its time on the right. Newest chat first. The open chat's row has a filled background.
 - [ ] A row's time is the time of the chat's newest message. A message from today shows its time ("2:14 PM"). One from the last 6 days shows its weekday ("Tue"). An older one shows the month and day ("Nov 12"), with the year when it is not this year ("Nov 12, 2025").
 - [ ] A chat's row shows a spinner while Doc works on it, and an amber dot while a save waits for the partner's OK or Doc has a question for the partner.
+- [ ] The time stays visible beside the spinner or dot, including on a phone.
 - [ ] The **New chat** pencil sits at the top of the list. **Older chats** is a quiet last row that loads the next page, shown only when there is one.
 - [ ] The top bar reads "Ask Doc / " and the open chat's first question. The title shows once.
 - [ ] The conversation is one centered column 728px wide. The partner's question is a rounded box on the right, at most 80% of the column. Doc's answer is plain text on the page, with no box, and may use bold names and bullets.
@@ -55,6 +56,7 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 
 - [ ] **Send**, **New chat** and **Recent chats** are icon buttons with those names for screen readers and on hover: a round up-arrow for **Send**, a pencil-on-square for **New chat**, and the chats list toggle for **Recent chats**.
 - [ ] The character count is hidden until the question reaches 3,500 characters, and turns red past the 4,000 limit.
+- [ ] A picked deal, lead or client goes with the next question, even in an existing chat. The partner can remove the pick before sending. A question launched from an invoice or email review starts with that record already supplied. A draft review chat stays on its pending draft.
 
 ## Ask a question
 
@@ -138,3 +140,16 @@ The owner approved these on 2026-11-25. None is built yet. Each line replaces an
 - **Attach a file.** The paperclip will attach a PDF or photo for Doc to read, shown as a chip in the typing box with an x to remove it. It needs a design in `docs/new-database.md` first.
 
 The engine owns the [conversation and turn contract](../new-database.md#doc-conversations-and-turns). Mail jobs that need judgment use the partner's link after any waiting chat turns and stay out of the chats list. Verify these lines as both partners, including a mailbox the other partner cannot open.
+
+## Screen wiring
+
+App files are in `doctorcre-app`. Tables below are in `next`. Paths in the table start at `/api/engine/doc`.
+
+| Screen part | App file | Engine door | Tables |
+| --- | --- | --- | --- |
+| Chat list, heading, timestamps and marks | `doc-chats.html`, `src/ui/doc-chat.tsx`, `css/doc-chats.css` | `GET /conversations` | `doc_conversation`, `doc_turn` |
+| Conversation, waiting line, source and match chips | `src/ui/doc-chat.tsx`, `css/doc-chats.css` | `GET /conversations/{id}` | `doc_conversation`, `doc_turn`, `doc_link`, `save_receipt`, `reply_draft`, `email_mailbox` |
+| Typing box, Send and Retry | `src/ui/doc-chat.tsx`, `src/ui/device-text.ts` | `POST /turns` | `doc_conversation`, `doc_turn`, `doc_link`, `reply_draft`, `email_mailbox` |
+| Record picker | `src/ui/doc-chat.tsx`, `css/doc-chats.css` | `GET /records?query=` | `deal`, `party`, `party_role`, `client`, `outside_id`, `deal_party`, `party_company`, `party_email` |
+| Save card and receipt | `src/ui/doc-chat.tsx` | `POST /turns/{id}/confirmation` | `doc_turn`, `save_receipt`, `activity`, `activity_about`, `next_step`, `reply_draft`, `email_mailbox` |
+| Mac status and Settings link code | `src/ui/doc-link.ts`, `src/ui/doc-link-settings.tsx`, `src/ui/doc-chat.tsx` | `GET /link`, `POST /link`, `POST /link/revoke` | `doc_link` |

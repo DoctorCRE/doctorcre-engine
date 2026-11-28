@@ -5,7 +5,12 @@ import {
 	sql,
 	type Transaction,
 } from "kysely";
-import { Refusal, refuse, unregisteredFields } from "./answer.ts";
+import {
+	answerNextRead,
+	Refusal,
+	refuse,
+	unregisteredFields,
+} from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import {
 	confirmDocSave,
@@ -14,12 +19,14 @@ import {
 	requirePendingDocDraft,
 } from "./doc-confirmation.ts";
 import { docLinkState } from "./doc-link.ts";
+import { findDocRecords } from "./doc-reads.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { userStamp } from "./next-door.ts";
 import { ACTING_USER, stampNextSave } from "./next-save.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
+import type { DatabaseEnv } from "./reader.ts";
 import {
 	idempotencyKey,
 	SaveRefusal,
@@ -29,7 +36,7 @@ import {
 import { isArguments } from "./save-door.ts";
 import { isUuid } from "./uuid.ts";
 
-type DocEnv = WriterEnv & PartnerSessionEnv;
+type DocEnv = WriterEnv & PartnerSessionEnv & DatabaseEnv;
 type DocTransaction = Transaction<DB>;
 
 function reject(
@@ -137,7 +144,7 @@ type Turn = Pick<
 
 const latestTurn = (
 	conversation: string | RawBuilder<unknown>,
-) => sql`select created_at, state from doc_turn
+) => sql`select created_at, state, answer from doc_turn
 	where conversation_id = ${conversation} and owner_user_id = ${ACTING_USER}
 	order by position desc limit 1`;
 
@@ -146,7 +153,7 @@ const conversations = sql`
 	select c.id, to_jsonb(c.created_at) #>> '{}' as created_at, left(t.question, 80) as title,
 		to_jsonb(latest.created_at) #>> '{}' as last_message_at,
 		case when latest.state in ('queued', 'working') then 'working'
-			when exists (select from doc_turn p
+			when latest.answer ->> 'kind' = 'clarification' or exists (select from doc_turn p
 				where p.conversation_id = c.id and p.owner_user_id = c.owner_user_id
 					and p.confirmation_key is null and jsonb_typeof(p.answer -> 'proposal') = 'object')
 			then 'waiting_ok'
@@ -331,6 +338,15 @@ export function docRoutes() {
 			if (error instanceof SaveRefusal) return refuse(c, error.refusal);
 			console.warn("Doc database operation failed:", failureKind(error));
 			return refuse(c, new Refusal(503, "database_unavailable"));
+		})
+		.get("/records", (c) => {
+			const query = c.req.query("query")?.trim();
+			if (!query) return reject(400, "missing_required", ["query"]);
+			if ([...query].length > 200 || query.includes("\0"))
+				return reject(400, "invalid_field_value", ["query"]);
+			return answerNextRead(c, "find", async (tx) => ({
+				records: await findDocRecords(tx, query, "all"),
+			}));
 		})
 		.get("/conversations", async (c) =>
 			c.json(await transact(c, (tx) => listChats(tx, c.req.query("before")))),

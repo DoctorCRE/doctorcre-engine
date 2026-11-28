@@ -6,7 +6,7 @@ import { checkInWording } from "./home-steps.ts";
 import { readNextLeadDetail } from "./leads/detail.ts";
 import type { DB } from "./next-database.d.ts";
 import { readOldRecordNames } from "./old-record-names.ts";
-import { readSearchRecords } from "./search/records.ts";
+import { partySearchDealIds, readSearchRecords } from "./search/records.ts";
 
 type RecordKind = "deal" | "lead" | "client";
 export type Source<Kind extends RecordKind | "email" = RecordKind> = {
@@ -14,6 +14,8 @@ export type Source<Kind extends RecordKind | "email" = RecordKind> = {
 	label: string;
 	href: string;
 };
+
+export type DocMatch = Source & { city: string | null; deal_count?: number };
 
 const recordLink = {
 	deal: "/deals?deal=",
@@ -53,6 +55,27 @@ export async function findDocRecords(
 			matches.push(match("client", id, name, id, city));
 	}
 	return matches.slice(0, 10);
+}
+
+export async function describeDocMatches(
+	db: Transaction<DB>,
+	choices: DocMatch[],
+): Promise<DocMatch[]> {
+	const parties = choices
+		.filter(({ ref }) => ref.kind !== "deal")
+		.map(({ ref }) => ref.id);
+	if (!parties.length) return choices;
+	const { rows } = await sql<{ id: string; deal_count: number }>`
+		select id, (select count(distinct deal_id)::integer from (${partySearchDealIds(sql`matches.id`)}) deals) as deal_count
+		from (select distinct unnest(${parties}::uuid[]) as id) matches
+	`.execute(db);
+	const counts = new Map(rows.map(({ id, deal_count }) => [id, deal_count]));
+	return choices.map((choice) => ({
+		...choice,
+		...(choice.ref.kind !== "deal" && {
+			deal_count: counts.get(choice.ref.id),
+		}),
+	}));
 }
 
 async function recordFacts(

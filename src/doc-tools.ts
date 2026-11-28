@@ -12,7 +12,12 @@ import {
 	readDocMail,
 	readDocMailPriorities,
 } from "./doc-mail.ts";
-import { findDocRecords, readDocRecord, type Source } from "./doc-reads.ts";
+import {
+	describeDocMatches,
+	findDocRecords,
+	readDocRecord,
+	type Source,
+} from "./doc-reads.ts";
 import { docDueOn, docText as text } from "./doc-record-save.ts";
 import { nextTransaction, setNextReadViewer } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
@@ -206,10 +211,7 @@ export function registerDocTools(
 					choices.length > 1 &&
 					new Set(choices.map(({ label }) => name(label))).size === 1
 				) {
-					state.choices = choices.map(({ city, ...record }) => ({
-						...record,
-						label: city ? `${record.label} (${city})` : record.label,
-					}));
+					state.choices = await describeDocMatches(db, choices);
 					return validateDocAnswer(null, state);
 				}
 				return matches.map(({ city, ...record }) => ({
