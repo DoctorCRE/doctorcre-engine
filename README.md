@@ -64,9 +64,9 @@ with `kysely-codegen`, and runs TypeScript and tests in parallel once the databa
 types are ready.
 A test that needs its own database copies that restore, because one restore
 holds about 2,100 locks and many at once exhaust the server's lock table (#237).
-The check retains its test databases until the runner exits, then drops them
-in batches so PostgreSQL can share the checkpoints each drop requests.
-Allow several gigabytes of free disk per check.
+The check drops finished test databases in batches so PostgreSQL can share the
+checkpoints each drop requests. It drops the remaining databases when the runner
+exits.
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
 query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops` tables, which the generated types leave out.

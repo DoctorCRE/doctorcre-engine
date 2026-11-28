@@ -34,8 +34,13 @@ async function loadNextSection(url: string) {
 				"utf8",
 			),
 		]);
+		// Auth migrations in separate databases share this role.
 		await db.query(`alter default privileges revoke execute on functions from public;
-			create schema next; ${schema}; ${attribution}`);
+			create schema next; ${schema}; ${attribution};
+			do $$ begin
+				create role engine_partner_auth nologin;
+			exception when duplicate_object or unique_violation then null;
+			end $$`);
 	} finally {
 		await db.end();
 	}

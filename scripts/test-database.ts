@@ -5,6 +5,8 @@ import pg from "pg";
 
 export class NoDatabase extends Error {}
 
+const dropBatchSize = 16;
+
 function serverUrl() {
 	const url = new URL(
 		process.env.TEST_DATABASE_URL ??
@@ -55,8 +57,28 @@ export function testDatabaseName() {
 
 export async function releaseTestDatabase(name: string) {
 	const prefix = process.env.TEST_DATABASE_PREFIX;
-	if (!prefix || !name.startsWith(prefix))
+	if (!prefix || !name.startsWith(prefix)) {
 		await asAdmin(`drop database if exists "${name}" with (force)`);
+		return;
+	}
+	await withAdmin(async (admin) => {
+		const { rowCount } = await admin.query(
+			"select from pg_database where datname = $1",
+			[name],
+		);
+		if (!rowCount) return;
+		await admin.query(`alter database "${name}" allow_connections false`);
+		if ((await checkDatabases(admin, prefix, true)).length < dropBatchSize)
+			return;
+
+		// Each worker that reaches the limit waits so finished databases cannot pile up.
+		await admin.query("select pg_advisory_lock(hashtextextended($1, 0))", [
+			prefix,
+		]);
+		const finished = await checkDatabases(admin, prefix, true);
+		if (finished.length >= dropBatchSize)
+			await dropDatabases(finished.slice(0, dropBatchSize));
+	});
 }
 
 export async function withCheckDatabases(
@@ -66,26 +88,33 @@ export async function withCheckDatabases(
 	try {
 		await run(prefix);
 	} finally {
-		await dropCheckDatabases(prefix);
+		await dropDatabases(
+			await withAdmin((admin) => checkDatabases(admin, prefix, false)),
+		);
 	}
 }
 
-async function dropCheckDatabases(prefix: string) {
-	const { rows } = await withAdmin((admin) =>
-		admin.query<{ datname: string }>(
-			"select datname from pg_database where datname ~ $1",
-			[`^${prefix}[a-f0-9]{32}$`],
-		),
+async function checkDatabases(
+	admin: pg.Client,
+	prefix: string,
+	finished: boolean,
+) {
+	const { rows } = await admin.query<{ datname: string }>(
+		`select datname from pg_database
+		where datname ~ $1 and (not $2::boolean or not datallowconn)`,
+		[`^${prefix}[a-f0-9]{32}$`, finished],
 	);
+	return rows.map(({ datname }) => datname);
+}
+
+async function dropDatabases(names: string[]) {
 	const failures: unknown[] = [];
 	// Concurrent drops can share the checkpoint each drop asks for.
-	for (let i = 0; i < rows.length; i += 16) {
+	for (let i = 0; i < names.length; i += dropBatchSize) {
 		const results = await Promise.allSettled(
-			rows
-				.slice(i, i + 16)
-				.map(({ datname }) =>
-					asAdmin(`drop database "${datname}" with (force)`),
-				),
+			names
+				.slice(i, i + dropBatchSize)
+				.map((name) => asAdmin(`drop database "${name}" with (force)`)),
 		);
 		for (const result of results)
 			if (result.status === "rejected") failures.push(result.reason);
