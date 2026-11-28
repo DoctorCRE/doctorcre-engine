@@ -1,0 +1,26 @@
+# Verify Doc's harness
+
+## Existing check
+
+Extend the existing hermetic suites in `npm run check`. Use fake drivers, synthetic records, and the local database. Replay the same claim, tools, result and confirmation through both driver paths. Assert IDs, structured facts, links, states, receipts, and the absence of changes before confirmation. Equivalent reads can be reordered where the workflow has no ordering rule. Keep live models and live service calls out of the check.
+
+| Flow      | Observable cases                                                                                                                                                                                                                                                                                                                                     |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1 to F3  | One turn on replay, one active claim, current facts after a changed date, distinct lookalike deal choices, a missing record, foreign mailbox and chat access, an unread citation, checked numeric values, expired claim and latest-failure retry.                                                                                                    |
+| F4        | An edited reply saves once and is pending. An existing same-email or same-mailbox pending draft stays unchanged. The exact review opens. A stale revision cannot save. Only separate submission queues the exact draft and version. Mail text cannot authorize a write.                                                                              |
+| F5 and F8 | Claude and Codex register on one link. A saved choice takes effect on the next claim. A ready second choice answers after sign-out or plan limit. Mac off and expired credentials show distinct states. An eligible backup claim competes for the same slot and labels its answer. Exhausted credits requeue.                                        |
+| F6        | A required action waits for Ask Doc approval before dispatch. Approving writes one partner's typed grant. A matching repeat dispatches without asking again. Denial, a different partner, a request outside scope, and revocation cannot reuse the grant. Prove that the driver cannot dispatch approval-controlled actions ahead of Doc's decision. |
+| F7        | All four mail modes start with zero tools and no Doc credential under the current policy. Check exact quotes, saved input hash, duplicate filing, and fallback review. Backup leaves split and introduction queued.                                                                                                                                  |
+| F9        | Both partners see the same team comparison format. The other partner cannot read personal draft length. Confirming and removing a row changes later relevant claims. Mail cannot create either row.                                                                                                                                                  |
+
+## Expected-results trace
+
+While the build runs, give a fresh writer only this drawing. Start at each end state and work backward to the required prior steps and fixture inputs. For every row name the flow step, actor, exact input IDs or version, returned evidence, saved and unchanged rows, and screen result. Include blocked and retry paths from the table above. A second fresh reader checks every row against the drawing. Record a missing rule as a question. Builders and reviewers use the checked trace to compare outcomes.
+
+## Staging run-through
+
+Run the trace with made-up records as both partners. Run P1 and P2 on Claude Code and Codex. Repeat cases where wording varies. Check queuing, working, save, reload, exact review, and separate send using the staging outbox or a test mailbox. Simulate plan and other waiting exits without spending backup credits. Record queue wait, model and reads, and return to Ask Doc. Run approvals away from the Mac and verify that replay and revocation affect the next action. If a step fails, record expected and actual results. Use a stand-in for that step so later rows still run, and mark the rows that depended on it.
+
+On the desktop and phone, open each chip and compare the actual record, phase, date, amount and next step. Check that clarification has useful matches, forecast dates are labeled, and the pending draft addresses the exact source. The partners judge relevance, wording, and whether the free text follows from the records. Tests compare exact IDs, verified values and saved state. Use the [Doc screen checks](../screens/doc.md) for layout and actions.
+
+One reviewer walks the combined branch against this drawing. An unanswered point becomes a note for the owner. Weigh findings by path, likelihood and cost, then fix in one round and rerun the check and staging trace before asking for approval to merge.
