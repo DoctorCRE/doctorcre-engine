@@ -175,6 +175,7 @@ test("Doc link migration, private credentials and Mac polling", {
 		await db.query(await readSchema("add-doc-link.sql"));
 		await db.query(await readSchema("add-doc-link-readiness.sql"));
 		await db.query(await readSchema("add-doc-link-backend.sql"));
+		await db.query(await readSchema("add-doc-link-readiness-by-kind.sql"));
 
 		assert.equal((await send({})).status, 401);
 		assert.equal((await send(first, "POST")).status, 403);
@@ -670,6 +671,90 @@ test("Doc link migration, private credentials and Mac polling", {
 					{ kind: "email_summary", result: summary },
 					{ kind: "email_filing", result: answer.result },
 				]);
+
+				await runSubtest(
+					t,
+					"the Mac claims only kinds it reports ready",
+					async () => {
+						const conversation = randomUUID();
+						const turn = randomUUID();
+						const activity = randomUUID();
+						const job = randomUUID();
+						await db.query(
+							`with conversation as (
+							insert into next.doc_conversation (id, owner_user_id) values ($1, $5) returning id
+						), turn as (
+							insert into next.doc_turn (id, conversation_id, owner_user_id, position, idempotency_key, request_hash, question, state)
+							select $2, id, $5, 1, gen_random_uuid(), 'readiness-fixture', 'Ready fixture', 'queued' from conversation
+						), source as (
+							insert into next.activity (id, kind, happened_at) values ($3, 'email', now()) returning id
+								), about as (
+									insert into next.activity_about (activity_id, deal_id) select id, $6 from source
+						), message as (
+							insert into next.email (activity_id, sender, message_id, subject, body)
+							select id, 'sam@example.test', 'readiness-fixture', 'Tour', 'A tour is planned.' from source returning activity_id
+						), mailbox as (
+							insert into next.email_mailbox (activity_id, user_id) select activity_id, $5 from message
+						)
+						insert into next.doc_judgment_job (id, activity_id, owner_user_id, idempotency_key, kind)
+						select $4, activity_id, $5, gen_random_uuid(), 'email_summary' from message`,
+							[conversation, turn, activity, job, appUserId, deal.id],
+						);
+						try {
+							for (const [chat, mail, expected] of [
+								["signed_out", "ready", ["email_summary"]],
+								["ready", "signed_out", ["turn"]],
+								["ready", "ready", ["turn", "email_summary"]],
+								["signed_out", "signed_out", []],
+							] as const) {
+								await db.query(
+									"update next.doc_turn set state = 'queued' where id = $1",
+									[turn],
+								);
+								await db.query(
+									"update next.doc_judgment_job set state = 'queued' where id = $1",
+									[job],
+								);
+								const headers = {
+									"Doc-Link-Work-Readiness": JSON.stringify({ chat, mail }),
+									"Doc-Link-Work": "judgment",
+								};
+								for (const kind of expected) {
+									const claimed = await fetchClaim(headers);
+									assert.equal(claimed.work.kind, kind);
+									if (kind === "turn") {
+										const response = await result(bearer, engineOrigin, {
+											kind: "failed",
+											claim_id: claimed.claim_id,
+										});
+										assert.equal(response.status, 204);
+									} else {
+										await complete(claimed.claim_id, { kind: "failed" }, 204);
+									}
+								}
+								assert.equal((await poll(credential, headers)).status, 204);
+								assert.equal((await presence(first)).status, chat);
+								const saved = await db.query(
+									"select readiness_by_kind from next.doc_link where owner_user_id = $1",
+									[appUserId],
+								);
+								assert.deepEqual(saved.rows, [
+									{ readiness_by_kind: { chat, mail } },
+								]);
+							}
+						} finally {
+							await db.query(
+								"delete from next.doc_judgment_job where id = $1",
+								[job],
+							);
+							await db.query("delete from next.doc_turn where id = $1", [turn]);
+							await db.query(
+								"delete from next.doc_conversation where id = $1",
+								[conversation],
+							);
+						}
+					},
+				);
 
 				await runSubtest(
 					t,
