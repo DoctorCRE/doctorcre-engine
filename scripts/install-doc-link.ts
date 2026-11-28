@@ -476,18 +476,20 @@ async function configureLink(args: readonly string[], plutil: string) {
 				"Open Terminal under your macOS login and run setup again.",
 			);
 
+		const previous = snapshot.previousCredential;
+		const cached = previous?.accepted ? previous.config.credential : undefined;
 		const config = docLinkConfigSchema.safeParse({
 			engine: engine.data,
 			default_backend: selected.backend,
 			backends: registered,
 			...(codexDirectory && { codex_home: codexDirectory }),
-			credential: await readCredential(),
+			credential: cached ?? (await readCredential()),
 		});
 		if (!config.success)
 			throw new SetupError(
 				"Copy a Doc link credential from the app and run setup again.",
 			);
-		if (!(await verifiesCredential(config.data)))
+		if (!cached && !(await verifiesCredential(config.data)))
 			throw new SetupError(
 				"The Doc link code was refused. Make a new one in the app and run this again.",
 			);

@@ -143,14 +143,14 @@ esac`,
 			args = [engine],
 			codexDirectory,
 			polls,
-			revokeOnNew = false,
 			pauseAtPoll = false,
+			unavailableOrigin,
 		}: {
 			args?: string[];
 			codexDirectory?: string | undefined;
 			polls?: [string, number, string?][] | undefined;
-			revokeOnNew?: boolean;
 			pauseAtPoll?: boolean;
+			unavailableOrigin?: string;
 		} = {},
 	) {
 		const invocation = join(scratch, `run-installer-${++invocationNumber}.mjs`);
@@ -162,7 +162,6 @@ import { once } from "node:events";
 import { appendFileSync } from "node:fs";
 import { installDocLink } from ${JSON.stringify(installer.href)};
 const polls = ${JSON.stringify(polls ?? null)};
-let revoked = false;
 let fetchError;
 let paused = false;
 globalThis.fetch = async (url, init) => {
@@ -178,19 +177,22 @@ globalThis.fetch = async (url, init) => {
 		process.disconnect();
 	}
 	const requestOrigin = new URL(request.url).origin;
+	if (requestOrigin === ${JSON.stringify(unavailableOrigin)}) {
+		appendFileSync(${JSON.stringify(commands)}, "unavailable origin contacted\\n");
+		return new Response(null, { status: 503 });
+	}
 	if (${pauseAtPoll} && requestOrigin !== ${JSON.stringify(args.at(-1))})
 		return new Response(null, { status: 204 });
 	const [expectedCredential, status, origin] = polls?.shift() ?? [];
 	if (polls) assert.equal(credential, expectedCredential);
 	else assert.ok([${JSON.stringify(firstCredential)}, ${JSON.stringify(secondCredential)}].includes(credential));
 	assert.equal(request.url, new URL("/api/engine/doc/link/claim", origin ?? ${JSON.stringify(args.at(-1))}).href);
-	if (${revokeOnNew} && credential === ${JSON.stringify(secondCredential)}) revoked = true;
 	assert.equal(request.headers.get("Doc-Link-Readiness"), null);
 	assert.equal(request.headers.get("Cookie"), null);
 	assert.equal(request.redirect, "error");
 	appendFileSync(${JSON.stringify(commands)}, "engine credential checked\\n");
 	return new Response(null, {
-		status: revoked && credential === ${JSON.stringify(firstCredential)} ? 401 : (status ?? ${engineStatus}),
+		status: status ?? ${engineStatus},
 	});
 	} catch (error) {
 		fetchError = error;
@@ -409,7 +411,12 @@ test("a failed switch leaves Doc signed out when the old credential is revoked",
 	const agent = readFileSync(mac.agent, "utf8");
 	mac.rejectBootstrap(true);
 
-	const result = mac.run(secondCredential, { revokeOnNew: true });
+	const result = mac.run(secondCredential, {
+		polls: [
+			[firstCredential, 204],
+			[firstCredential, 401],
+		],
+	});
 
 	assert.equal(result.status, 1);
 	assert.match(result.stderr, /Setup didn't finish; run it again/);
@@ -614,10 +621,16 @@ test("first setup installs official Claude Code and loads Doc link from private 
 	assert.doesNotMatch(commands, /launchctl bootout/);
 });
 
-test("rerun replaces the config and reloads the existing job without reinstalling Claude", async (t) => {
+test("rerun prompts for a new credential when the engine refuses the saved one", async (t) => {
 	const mac = fakeMac(t);
 	assert.equal(mac.run().status, 0);
-	assert.equal(mac.run(secondCredential).status, 0);
+	const result = mac.run(secondCredential, {
+		polls: [
+			[firstCredential, 401],
+			[secondCredential, 204],
+		],
+	});
+	assert.equal(result.status, 0, result.stderr);
 	assert.equal(
 		(await readDocLinkConfig(mac.config)).credential,
 		secondCredential,
@@ -629,6 +642,70 @@ test("rerun replaces the config and reloads the existing job without reinstallin
 		/launchctl bootout gui\/\d+\/com\.doctorcre\.doc-link\n[\s\S]*launchctl bootstrap/,
 	);
 	assert.equal(commands.match(/launchctl bootstrap/g)?.length, 2);
+});
+
+test("switching to Codex keeps a verified legacy credential with no new input", async (t) => {
+	const mac = fakeMac(t);
+	assert.equal(mac.run().status, 0);
+	writeFileSync(
+		mac.config,
+		JSON.stringify({
+			engine: `${engine}/`,
+			claude: mac.claude,
+			credential: firstCredential,
+		}),
+	);
+	const result = mac.runCodex({ input: "", polls: [[firstCredential, 204]] });
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(await readDocLinkConfig(mac.config), {
+		engine,
+		credential: firstCredential,
+		default_backend: "codex",
+		codex_home: join(mac.home, ".codex"),
+		backends: [
+			{ backend: "codex", binary: mac.codex },
+			{ backend: "claude", binary: mac.claude },
+		],
+	});
+});
+
+for (const unavailableOrigin of [undefined, engine]) {
+	test(
+		unavailableOrigin
+			? "setup links to the new origin while the saved origin returns 503"
+			: "setup asks for a new credential when linking to a different engine origin",
+		async (t) => {
+			const mac = fakeMac(t);
+			assert.equal(mac.run().status, 0);
+			const otherEngine = "https://other-engine.example.test";
+			const result = mac.run(secondCredential, {
+				args: [otherEngine],
+				...(unavailableOrigin && { unavailableOrigin }),
+				polls: [[secondCredential, 204, otherEngine]],
+			});
+			assert.equal(result.status, 0, result.stderr);
+			assert.doesNotMatch(
+				readFileSync(mac.commands, "utf8"),
+				/unavailable origin contacted/,
+			);
+			assert.deepEqual(await readDocLinkConfig(mac.config), {
+				engine: otherEngine,
+				credential: secondCredential,
+				default_backend: "claude",
+				backends: [{ backend: "claude", binary: mac.claude }],
+			});
+		},
+	);
+}
+
+test("setup keeps the saved credential when the engine is unavailable", (t) => {
+	const mac = fakeMac(t);
+	assert.equal(mac.run().status, 0);
+	const before = readFileSync(mac.config, "utf8");
+	const result = mac.run("", { polls: [[firstCredential, 503]] });
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /HTTP 503/);
+	assert.equal(readFileSync(mac.config, "utf8"), before);
 });
 
 test("the setup command tells the partner to install Node 26 when it is missing or older", (t) => {
@@ -781,8 +858,10 @@ test("setup keeps credentials out of child arguments, output and the LaunchAgent
 	]) {
 		assert.ok(!output.includes(firstCredential));
 	}
-	const invalid = mac.run(`invalid-${firstCredential}`);
+	const invalid = mac.run(`invalid-${firstCredential}`, {
+		polls: [[firstCredential, 401]],
+	});
 	assert.equal(invalid.status, 1);
-	assert.match(invalid.stderr, /Copy a Doc link credential/);
+	assert.match(invalid.stderr, /Setup didn't finish; run it again/);
 	assert.ok(!invalid.stderr.includes(firstCredential));
 });
