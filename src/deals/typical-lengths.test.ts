@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { type TestContext, test } from "node:test";
+import pg from "pg";
 import { copyTest, readSchema } from "../test-copy.ts";
 import { type Caller, doorTest } from "../test-door.ts";
 
@@ -35,7 +36,7 @@ type ListBody = { deal_kind: string; items: Item[] };
 
 // Each test gets its own database, so none depends on rows another left behind.
 async function freshDoor(t: TestContext) {
-	const { db, setup, cleanup, save, request } = doorTest();
+	const { db, setup, cleanup, save, request, connectionString } = doorTest();
 	await setup();
 	t.after(cleanup);
 	await db.query(`begin; set local engine.job = 'old_system';
@@ -55,7 +56,7 @@ async function freshDoor(t: TestContext) {
 	};
 	const post = (caller: Caller, body: object) =>
 		save(caller, "typical-lengths", body);
-	return { db, readLengths, post };
+	return { db, readLengths, post, save, request, connectionString };
 }
 
 test("the read returns seeded lease lengths in workflow order and handles other kinds", async (t) => {
@@ -339,3 +340,343 @@ for (const migrated of [false, true]) {
 		},
 	);
 }
+
+async function planDateFixture(t: TestContext) {
+	const { db, save, request, connectionString } = await freshDoor(t);
+	const deal = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into deal (id, name, kind, owner_user_id) values ('${deal}', 'Example lease', 'lease', '${alex}');
+		insert into deal_phase_change (deal_id, phase, happened_at) values ('${deal}', 'pending', now() - interval '1 day'); commit;`);
+	const read = async () => {
+		const res = await request(
+			alexCaller,
+			`deals/${deal}`,
+			{ method: "GET" },
+			{ DEALS_READ_SCHEMA: "next" },
+		);
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as {
+			plan: {
+				base_version: number;
+				own_dates: Record<string, string>;
+				expected_signing_on: string | null;
+			};
+		};
+		return body.plan;
+	};
+	const submit = (base_version: number, fields: object) =>
+		save(blairCaller, `deals/${deal}/plan-dates`, {
+			idempotency_key: randomUUID(),
+			base_version,
+			...fields,
+		});
+	const day = async (offset: number) => {
+		const {
+			rows: [date],
+		} = await db.query<{ target: string }>(
+			`select ((now() at time zone 'America/Chicago')::date + $1::int)::text as target`,
+			[offset],
+		);
+		assert.ok(date);
+		return date.target;
+	};
+	return { db, deal, read, submit, day, connectionString };
+}
+
+test("partners save, undo and reset their own to-do dates from the plan they saw", async (t) => {
+	const { read, submit, day } = await planDateFixture(t);
+	const target = await day(40);
+	const before = await read();
+	const [status, updated] = await submit(before.base_version, {
+		todo: "representation",
+		target_on: target,
+	});
+	assert.equal(status, 200);
+	assert.equal(updated.previous_on, null);
+	const after = await read();
+	assert.deepEqual(after.own_dates, { representation: target });
+	assert.notEqual(after.expected_signing_on, before.expected_signing_on);
+	assert.equal(
+		(
+			await submit(before.base_version, {
+				todo: "representation",
+				target_on: null,
+			})
+		)[0],
+		409,
+	);
+	assert.equal(
+		(
+			await submit(after.base_version, {
+				todo: "representation",
+				target_on: null,
+			})
+		)[0],
+		200,
+	);
+	assert.deepEqual((await read()).own_dates, {});
+	const next = await read();
+	assert.equal(
+		(
+			await submit(next.base_version, {
+				todo: "representation",
+				target_on: target,
+			})
+		)[0],
+		200,
+	);
+	assert.equal((await submit((await read()).base_version, {}))[0], 200);
+	assert.equal((await read()).expected_signing_on, before.expected_signing_on);
+});
+
+test("Undo restores the saved date after an upstream override moves the bar start", async (t) => {
+	const { read, submit, day } = await planDateFixture(t);
+	const original = await day(40);
+	const upstream = await day(50);
+	const later = await day(60);
+	const edit = async (todo: string, target_on: string) =>
+		submit((await read()).base_version, { todo, target_on });
+
+	assert.equal((await edit("requirements", original))[0], 200);
+	assert.equal((await edit("representation", upstream))[0], 200);
+	const [status, saved] = await edit("requirements", later);
+	assert.equal(status, 200);
+	assert.equal(saved.previous_on, original);
+	assert.equal((await edit("requirements", await day(41)))[0], 400);
+	assert.ok(typeof saved.base_version === "number");
+	assert.equal(
+		(
+			await submit(saved.base_version, {
+				todo: "requirements",
+				target_on: saved.previous_on,
+			})
+		)[0],
+		200,
+	);
+	assert.deepEqual((await read()).own_dates, {
+		requirements: original,
+		representation: upstream,
+	});
+});
+
+test("concurrent plan edits accept one writer per base version", async (t) => {
+	const { read, submit, day } = await planDateFixture(t);
+	const { base_version } = await read();
+	const first = await day(40);
+	const second = await day(50);
+	const results = await Promise.all([
+		submit(base_version, { todo: "representation", target_on: first }),
+		submit(base_version, { todo: "representation", target_on: second }),
+	]);
+	assert.deepEqual(results.map(([status]) => status).sort(), [200, 409]);
+	const winner = results[0]?.[0] === 200 ? 0 : 1;
+	const saved = await read();
+	assert.equal(saved.base_version, results[winner]?.[1].base_version);
+	assert.equal(saved.own_dates.representation, winner === 0 ? first : second);
+});
+
+test("direct table writes cannot deadlock the Worker on an existing plan date", async (t) => {
+	const { db, deal, day, read, submit } = await planDateFixture(t);
+	const [seeded] = await submit((await read()).base_version, {
+		todo: "representation",
+		target_on: await day(40),
+	});
+	assert.equal(seeded, 200);
+	const gate = 1496;
+	await db.query(`create function pause_plan_date_for_test() returns trigger language plpgsql as $$
+		begin
+			if current_setting('engine.user_id', true) = '${blair}' then
+				perform pg_advisory_xact_lock(${gate});
+			end if;
+			return new;
+		end $$;
+		create trigger pause_plan_date_for_test before insert on deal_plan_date
+		for each row execute function pause_plan_date_for_test()`);
+	async function waitForWorker(lockTypes: string[]) {
+		const deadline = AbortSignal.timeout(15_000);
+		while (!deadline.aborted) {
+			const { rowCount } = await db.query(
+				`select from pg_locks where not granted and locktype = any($1::text[])
+				and pg_backend_pid() = any(pg_blocking_pids(pid))`,
+				[lockTypes],
+			);
+			if (rowCount) return;
+		}
+		assert.fail(`the Worker did not wait for ${lockTypes.join(" or ")}`);
+	}
+	for (const workerFirst of [false, true]) {
+		await t.test(
+			workerFirst
+				? "the Worker takes the deal lock first"
+				: "the date row is held first",
+			async () => {
+				const { base_version } = await read();
+				const target_on = await day(workerFirst ? 55 : 50);
+				const save = () =>
+					submit(base_version, { todo: "representation", target_on });
+				let saving: ReturnType<typeof save> | undefined;
+				let directCode: string | undefined;
+				let gateHeld = false;
+				await db.query("begin; set local deadlock_timeout = '25ms'");
+				try {
+					if (workerFirst) {
+						await db.query("select pg_advisory_lock($1)", [gate]);
+						gateHeld = true;
+						saving = save();
+						await waitForWorker(["advisory"]);
+					}
+					await db.query(
+						"select from deal_plan_date where deal_id = $1 for update",
+						[deal],
+					);
+					if (gateHeld) {
+						await db.query("select pg_advisory_unlock($1)", [gate]);
+						gateHeld = false;
+					}
+					saving ??= save();
+					await waitForWorker(["transactionid", "tuple"]);
+					await db.query(
+						`set local role engine; set local engine.user_id = '${alex}'`,
+					);
+					await db
+						.query(
+							`insert into deal_plan_date (deal_id, todo, target_on) values ($1, 'representation', current_date + 80)
+					on conflict (deal_id, todo) do update set target_on = excluded.target_on`,
+							[deal],
+						)
+						.catch((error: unknown) => {
+							if (!(error instanceof pg.DatabaseError)) throw error;
+							directCode = error.code;
+						});
+				} finally {
+					await db.query("rollback");
+					if (gateHeld) await db.query("select pg_advisory_unlock($1)", [gate]);
+					await saving;
+				}
+				assert.deepEqual([directCode, (await saving)?.[0]], ["42501", 200]);
+			},
+		);
+	}
+});
+
+test("a date that leaves no room for the forecast is rejected before saving", async (t) => {
+	const { read, submit } = await planDateFixture(t);
+	const before = await read();
+	const [status, refusal] = await submit(before.base_version, {
+		todo: "representation",
+		target_on: "9999-12-31",
+	});
+	assert.equal(status, 400);
+	assert.deepEqual(refusal.fields, ["target_on"]);
+	assert.deepEqual(await read(), before);
+	const [accepted] = await submit(before.base_version, {
+		todo: "representation",
+		target_on: "9998-12-31",
+	});
+	assert.equal(accepted, 200);
+	assert.match((await read()).expected_signing_on ?? "", /^9999-\d{2}-\d{2}$/);
+});
+
+test("workflow changes and incompatible plan dates cannot both commit across snapshots", async (t) => {
+	let writer: pg.Client | undefined;
+	t.after(async () => writer?.end());
+	const { connectionString, db, deal } = await planDateFixture(t);
+	writer = new pg.Client({
+		connectionString,
+		options: "-c search_path=next",
+	});
+	await writer.connect();
+	const changeWorkflow = "update deal set kind = 'purchase' where id = $1";
+	const saveDate =
+		"select write_deal_plan_date($1, 'commencement_letter', current_date + 40)";
+	const reset = "select write_deal_plan_date($1, null, null)";
+	const begin = (client: pg.Client, isolation: string) =>
+		client.query(
+			`begin isolation level ${isolation}; set local role engine; set local engine.user_id = '${alex}'`,
+		);
+	const stamp = (client: pg.Client) =>
+		client.query(
+			"select changed_at::text, changed_by_user_id, changed_by_job from deal where id = $1",
+			[deal],
+		);
+	for (const isolation of [
+		"repeatable read",
+		"serializable",
+		"read committed",
+	]) {
+		for (const [first, second] of [
+			[saveDate, changeWorkflow],
+			[changeWorkflow, saveDate],
+		] as const) {
+			await begin(db, isolation);
+			try {
+				const before = await stamp(db);
+				await begin(writer, isolation);
+				await writer.query(first, [deal]);
+				await writer.query("commit");
+				if (first === saveDate)
+					assert.deepEqual((await stamp(writer)).rows, before.rows);
+				await assert.rejects(db.query(second, [deal]), {
+					code: /^(23514|23503|40001)$/,
+				});
+			} finally {
+				await db.query("rollback");
+			}
+			await begin(writer, isolation);
+			await writer.query(reset, [deal]);
+			await writer.query("update deal set kind = 'lease' where id = $1", [
+				deal,
+			]);
+			await writer.query("commit");
+		}
+	}
+});
+
+test("the database accepts only to-dos from the deal's workflow", async (t) => {
+	const { db, deal } = await planDateFixture(t);
+	for (const ddl of [null, await readSchema("add-deal-plan-dates.sql")]) {
+		if (ddl) {
+			await db.query("drop table deal_plan_date");
+			await db.query(ddl);
+			await db.query(ddl);
+		}
+		await db.query("begin");
+		try {
+			const { rows } = await db.query(
+				"select has_function_privilege('engine_reader', 'write_deal_plan_date(uuid,text,date)', 'execute') as can_write",
+			);
+			assert.deepEqual(rows, [{ can_write: false }]);
+			await db.query("set local role engine");
+			await db.query("select set_config('engine.user_id', $1, true)", [alex]);
+			const insert = (todo: string) =>
+				db.query("select write_deal_plan_date($1, $2, current_date + 40)", [
+					deal,
+					todo,
+				]);
+			await insert("commencement_letter");
+			await db.query("savepoint invalid_date");
+			await assert.rejects(
+				db.query(
+					"select write_deal_plan_date($1, 'commencement_letter', '9999-12-31')",
+					[deal],
+				),
+				{ code: "23514" },
+			);
+			await db.query("rollback to savepoint invalid_date");
+			for (const todo of ["invented_todo", "purchase_close"]) {
+				await db.query("savepoint invalid_todo");
+				await assert.rejects(insert(todo), { code: "23514" });
+				await db.query("rollback to savepoint invalid_todo");
+			}
+			const reclassify = () =>
+				db.query("update deal set kind = 'purchase' where id = $1", [deal]);
+			await db.query("savepoint change_workflow");
+			await assert.rejects(reclassify(), { code: "23514" });
+			await db.query("rollback to savepoint change_workflow");
+			await db.query("select write_deal_plan_date($1, null, null)", [deal]);
+			await reclassify();
+		} finally {
+			await db.query("rollback");
+		}
+	}
+});

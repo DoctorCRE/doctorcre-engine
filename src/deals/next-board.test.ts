@@ -747,3 +747,27 @@ test("market and phase edits supersede the imported display values", async () =>
 		rollback,
 	);
 });
+
+test("the board shows the same plan as the deal and leaves parked deals out of Timeline", async () => {
+	await nextTransaction(connectionString, "read", async (tx) => {
+		const board = await readNextBoard(tx, { partner: "partner_one" });
+		const active = board.deals.find((deal) => deal.id === id(30));
+		const parked = board.deals.find((deal) => deal.id === id(32));
+		const detail = await readNextDealDetail(tx, id(30));
+		assert.ok("plan" in detail);
+		assert.ok(active?.timeline);
+		assert.deepEqual(active.timeline.phase_spans, detail.plan.phases);
+		assert.equal(
+			active.timeline.expected_signing_on,
+			detail.plan.expected_signing_on,
+		);
+		assert.deepEqual(active.timeline.stale, detail.plan.stale);
+		assert.ok(active.timeline.rows.length);
+		assert.ok(
+			active.timeline.rows.every(
+				(row) => row.phase === active.phase || row.phase === null,
+			),
+		);
+		assert.equal(parked?.timeline, null);
+	});
+});
