@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
@@ -16,7 +16,7 @@ const finished = (result: unknown) =>
 
 if (args.includes("auth")) {
 	const capture = join(import.meta.dirname, "auth-args.json");
-	if (existsSync(capture)) writeFileSync(capture, JSON.stringify(args));
+	if (existsSync(capture)) appendFileSync(capture, `${JSON.stringify(args)}\n`);
 	const path = join(import.meta.dirname, "user-settings.json");
 	const settings = existsSync(path)
 		? JSON.parse(readFileSync(path, "utf8"))

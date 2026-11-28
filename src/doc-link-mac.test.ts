@@ -143,6 +143,9 @@ async function runLink(
 		requests.map(async (request) => ({
 			path: new URL(request.url).pathname,
 			readiness: request.headers.get("Doc-Link-Readiness"),
+			mailReadiness:
+				JSON.parse(request.headers.get("Doc-Link-Work-Readiness") ?? "null")
+					?.mail ?? null,
 			work: request.headers.get("Doc-Link-Work"),
 			body: request.body ? await request.json() : null,
 		})),
@@ -151,15 +154,18 @@ async function runLink(
 
 const link = (...replies: Reply[]) => runLink(replies);
 
-const poll = (readiness: string) => ({
+const poll = (readiness: string, mailReadiness: string | null = readiness) => ({
 	path: "/api/engine/doc/link/claim",
 	readiness,
-	work: readiness === "ready" ? "judgment, email_split, introduction" : null,
+	mailReadiness,
+	work:
+		mailReadiness === "ready" ? "judgment, email_split, introduction" : null,
 	body: null,
 });
 const result = (body: unknown) => ({
 	path: "/api/engine/doc/link/result",
 	readiness: null,
+	mailReadiness: null,
 	work: null,
 	body,
 });
@@ -248,9 +254,15 @@ test("Doc link runs a private Claude print session and submits only the final an
 		"--system-prompt",
 		"<fixed prompt>",
 	]);
-	const authArgs = JSON.parse(await readFile(authArgsPath, "utf8"));
-	assert.deepEqual(authArgs.slice(-2), ["auth", "status"]);
-	assert.ok(authArgs.includes("--strict-mcp-config"));
+	const authCalls = (await readFile(authArgsPath, "utf8"))
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	assert.ok(
+		authCalls.every((args) => args.slice(-2).join(" ") === "auth status"),
+	);
+	assert.ok(authCalls.some((args) => args.includes("--strict-mcp-config")));
+	assert.ok(authCalls.some((args) => !args.includes("--strict-mcp-config")));
 	assert.deepEqual(observed.input, {
 		turn: { question: "Inspect", context },
 		history,
@@ -261,16 +273,18 @@ test("Doc link runs a private Claude print session and submits only the final an
 	assert.equal(observed.logname, "partner");
 });
 
-for (const [name, settings, readiness] of [
+for (const [name, settings, readiness, mailReadiness] of [
 	[
 		"refuses a configured token for chat",
 		{ env: { ANTHROPIC_AUTH_TOKEN: "fixture token" } },
 		"signed_out",
+		"ready",
 	],
 	[
 		"offers chat only when isolated mail is signed out",
 		{ fixtureIsolatedSignedOut: true },
 		"ready",
+		"signed_out",
 	],
 ] as const) {
 	test(`Claude ${name}`, async () => {
@@ -284,7 +298,7 @@ for (const [name, settings, readiness] of [
 			JSON.stringify(settings),
 		);
 		assert.deepEqual(await runLink([status(401)], binary), [
-			{ ...poll(readiness), work: null },
+			poll(readiness, mailReadiness),
 		]);
 	});
 }
@@ -348,7 +362,7 @@ for (const [source, name, contents] of managedSources) {
 		});
 		const errors = t.mock.method(console, "error", () => {});
 		const requests = await runLink([status(401)], claude, directory);
-		assert.deepEqual(requests, [{ ...poll("ready"), work: null }]);
+		assert.deepEqual(requests, [poll("ready", null)]);
 		assert.equal(errors.mock.calls.length, 1);
 		assert.match(
 			String(errors.mock.calls[0]?.arguments[0]),
@@ -577,7 +591,7 @@ test("Doc link releases a claim when sign-in expires and resumes the queued turn
 		[
 			poll("ready"),
 			result({ claim_id: firstClaim, kind: "signed_out" }),
-			poll("signed_out"),
+			poll("signed_out", "ready"),
 			poll("ready"),
 			answered(secondClaim),
 			poll("ready"),
@@ -598,8 +612,8 @@ test("Doc link reports a plan limit and waits for its reported reset before clai
 		[
 			poll("ready"),
 			result({ claim_id: firstClaim, kind: "plan_limited" }),
-			poll("plan_limited"),
-			poll("plan_limited"),
+			poll("plan_limited", "ready"),
+			poll("plan_limited", "ready"),
 			poll("ready"),
 			answered(secondClaim),
 			poll("ready"),
@@ -660,7 +674,12 @@ for (const [subject, kind] of [
 	test(`Doc link stops requesting jobs after mail reports ${kind}`, async () => {
 		assert.deepEqual(
 			await link(summaryClaim(subject), status(204), summaryClaim("Tour")),
-			[poll("ready"), judgment({ kind }), poll(kind), poll(kind)],
+			[
+				poll("ready"),
+				judgment({ kind }),
+				poll("ready", kind),
+				poll("ready", kind),
+			],
 		);
 	});
 }
@@ -811,7 +830,11 @@ for (const [question, kind] of [
 				undefined,
 				"codex",
 			),
-			[poll("ready"), result({ claim_id: firstClaim, kind }), poll(kind)],
+			[
+				poll("ready"),
+				result({ claim_id: firstClaim, kind }),
+				poll(kind, "ready"),
+			],
 		);
 	});
 }
@@ -887,9 +910,9 @@ for (const [backend, policy] of [
 			backend,
 		);
 		assert.deepEqual(requests, [
-			{ ...poll("ready"), work: null },
+			poll("ready", null),
 			answered(firstClaim),
-			{ ...poll("ready"), work: null },
+			poll("ready", null),
 		]);
 	});
 }
@@ -945,8 +968,8 @@ for (const [question, reset] of [
 			[
 				poll("ready"),
 				result({ claim_id: firstClaim, kind: "plan_limited" }),
-				poll("plan_limited"),
-				poll("plan_limited"),
+				poll("plan_limited", "ready"),
+				poll("plan_limited", "ready"),
 				poll("ready"),
 				poll("ready"),
 			],

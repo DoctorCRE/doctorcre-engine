@@ -555,6 +555,39 @@ test("Doc ranks at most ten priorities and can open an exact draft review outsid
 	assert.equal(await tool(request, "read_mail", { activity_id: mail }), null);
 });
 
+test("Doc still requires a citation after a previously returned record loses access", async (t) => {
+	const { credential } = await issue(owner);
+	const request = send(credential, await claim(owner));
+	assert.equal(
+		(await tool(request, "read_mail", { activity_id: mail })).ref.id,
+		mail,
+	);
+	await db.query("select set_config('engine.user_id', $1, false)", [owner]);
+	t.after(() => db.query("reset engine.user_id"));
+	await db.query(
+		"delete from next.email_mailbox where activity_id = $1 and user_id = $2",
+		[mail, owner],
+	);
+	try {
+		assert.equal(await tool(request, "read_mail", { activity_id: mail }), null);
+		await tool(
+			request,
+			"validate_answer",
+			{
+				kind: "answer",
+				text: "The previous mail had a tour update.",
+				sources: [],
+			},
+			true,
+		);
+	} finally {
+		await db.query(
+			"insert into next.email_mailbox (activity_id, user_id) values ($1, $2)",
+			[mail, owner],
+		);
+	}
+});
+
 test("Doc finds a lead by the copied ID from its link in a new claim", async () => {
 	const { credential } = await issue(owner);
 	const first = await tool(send(credential, await claim(owner)), "find", {

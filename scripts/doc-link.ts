@@ -8,6 +8,11 @@ import {
 	judgmentClaimSchema,
 	judgmentTask,
 } from "../src/doc-judgment-prompt.ts";
+import type {
+	DocLinkReadiness,
+	DocWorkKind,
+	DocWorkReadiness,
+} from "../src/doc-link.ts";
 import { macDocPrompt } from "../src/doc-prompt.ts";
 import {
 	backends,
@@ -54,7 +59,10 @@ const claimSchema = z.discriminatedUnion("kind", [
 	judgmentClaimSchema,
 ]);
 
-type Readiness = "ready" | "signed_out" | "plan_limited";
+type ReadinessCheck = {
+	status: DocLinkReadiness | "personal_plan_required" | null;
+	checkAt: number;
+};
 const checkSignInEvery = 30_000;
 const pollEvery = 2_000;
 const allowMailTools = false;
@@ -210,45 +218,78 @@ export async function runDocLink(
 		return !error;
 	}
 
-	let readiness: Readiness | "personal_plan_required" | undefined;
-	let mailReady = false;
-	let checkAt = 0;
-	async function checkSignIn() {
-		const status = await backend.signIn(binary);
-		if (status === "personal_plan_required" && readiness !== status)
-			console.error(backend.personalPlanMessage);
-		readiness = status;
-		mailReady =
-			status === "ready" &&
-			(allowMailTools ||
-				name !== "claude" ||
-				((await mailAllowed()) &&
-					(await backends.claude.signIn(binary, false)) === "ready"));
-		checkAt = now() + checkSignInEvery;
-		return status;
+	const kinds = ["chat", "mail"] as const;
+	const checks: Record<DocWorkKind, ReadinessCheck> = {
+		chat: { status: null, checkAt: 0 },
+		mail: { status: null, checkAt: 0 },
+	};
+	const reportedStatus = (kind: DocWorkKind) => {
+		const { status } = checks[kind];
+		return status === "personal_plan_required" ? "signed_out" : status;
+	};
+	async function refreshReadiness(
+		due: readonly DocWorkKind[],
+		mailPolicy: boolean,
+	) {
+		let normal: ReturnType<typeof backend.signIn> | undefined;
+		for (const kind of due) {
+			const check = checks[kind];
+			if (kind === "mail" && !mailPolicy) {
+				check.status = null;
+				check.checkAt = now();
+				continue;
+			}
+			const isolatedMail =
+				kind === "mail" && name === "claude" && !allowMailTools;
+			if (!isolatedMail) normal ??= backend.signIn(binary);
+			const status = isolatedMail
+				? await backends.claude.signIn(binary, false)
+				: await normal;
+			if (
+				status === "personal_plan_required" &&
+				!kinds.some((work) => checks[work].status === status)
+			)
+				console.error(backend.personalPlanMessage);
+			check.status = status ?? null;
+			check.checkAt = now() + checkSignInEvery;
+		}
 	}
-
 	for (; ; await wait()) {
-		if (now() >= checkAt) await checkSignIn();
-		if (readiness === "personal_plan_required") continue;
-		const headers = new Headers({ "Doc-Link-Backend": name });
-		if (readiness) headers.set("Doc-Link-Readiness", readiness);
-		if (readiness === "ready" && mailReady && (await mailAllowed()))
+		const mailPolicy = await mailAllowed();
+		await refreshReadiness(
+			kinds.filter((kind) => now() >= checks[kind].checkAt),
+			mailPolicy,
+		);
+		const readiness: DocWorkReadiness = {
+			chat: reportedStatus("chat"),
+			mail: mailPolicy ? reportedStatus("mail") : null,
+		};
+		if (
+			checks.chat.status === "personal_plan_required" &&
+			readiness.mail !== "ready"
+		)
+			continue;
+		const headers = new Headers({
+			"Doc-Link-Backend": name,
+			"Doc-Link-Work-Readiness": JSON.stringify(readiness),
+		});
+		if (readiness.chat) headers.set("Doc-Link-Readiness", readiness.chat);
+		if (readiness.mail === "ready")
 			headers.set("Doc-Link-Work", "judgment, email_split, introduction");
 		const poll = await postDocLink(config, "claim", { headers }, fetch);
 		if (poll?.status === 401) return;
-		if (poll?.status !== 200 || readiness !== "ready") continue;
+		if (poll?.status !== 200) continue;
 
 		const claim = claimSchema.safeParse(
 			await poll.json().catch(() => undefined),
 		).data;
 		if (!claim) continue;
 		const chat = claim.kind === "turn";
-		if (!chat && !(await mailAllowed())) continue;
-		if (
-			(await checkSignIn()) !== "ready" ||
-			(!chat && (!mailReady || !(await mailAllowed())))
-		)
+		const kind = chat ? "chat" : "mail";
+		if (readiness[kind] !== "ready" || (!chat && !(await mailAllowed())))
+			continue;
+		await refreshReadiness([kind], true);
+		if (checks[kind].status !== "ready" || (!chat && !(await mailAllowed())))
 			continue;
 		const expires = Date.parse(claim.claim_until);
 		const timeout = Math.min(45_000, expires - 15_000 - now());
@@ -274,9 +315,9 @@ export async function runDocLink(
 			.run(binary, timeout, task)
 			.finally(() => clearInterval(heartbeat));
 		if (outcome.kind === "signed_out" || outcome.kind === "plan_limited") {
-			readiness = outcome.kind;
+			checks[kind].status = outcome.kind;
 			const reset = outcome.kind === "plan_limited" && outcome.resetsAt;
-			checkAt =
+			checks[kind].checkAt =
 				reset && reset * 1_000 > now()
 					? reset * 1_000
 					: now() +
