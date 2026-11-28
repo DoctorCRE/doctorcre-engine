@@ -79,6 +79,7 @@ const introduction = (
 	introduced_on: on,
 	note,
 	chosen,
+	removable: true,
 });
 
 test("a client's deals, its linked people's too, carry their vendors and the introductions made for them", async () => {
@@ -89,6 +90,8 @@ test("a client's deals, its linked people's too, carry their vendors and the int
 		id,
 		name,
 		owner,
+		client_id: id === doctorDeal ? doctor : practice,
+		client_name: id === doctorDeal ? "Example Reed" : "Example Birch Dental",
 	});
 	assert.deepEqual(deals, [
 		{
@@ -159,4 +162,37 @@ test("a party that is not a client is not found, and a client with no deals has 
 	const response = await read(lender);
 	assert.equal(response.status, 200, await response.clone().text());
 	assert.deepEqual(await response.json(), { deals: [] });
+});
+
+test("a client-made introduction is visible on a linked deal and leaves vendor relationship counts alone", async () => {
+	const joe = { user: "joe" };
+	const relationships = () =>
+		request(joe, `vendors/${attorney}/relationships`, { method: "GET" }).then(
+			(r) => r.json(),
+		);
+	const before = await relationships();
+	const added = await request(joe, "introductions", {
+		method: "POST",
+		body: JSON.stringify({
+			idempotency_key: randomUUID(),
+			vendor_id: attorney,
+			made_by: "client",
+			introduced_party_id: doctor,
+			introduced_on: "2026-01-07",
+			deal_id: doctorDeal,
+		}),
+	});
+	assert.equal(added.status, 201, await added.clone().text());
+	const { deals } = (await (await read(practice)).json()) as {
+		deals: ClientDeal[];
+	};
+	const linked = deals.find((d) => d.id === doctorDeal);
+	assert.equal(linked?.client_id, doctor);
+	assert.partialDeepStrictEqual(linked?.introductions[0], {
+		made_by: "client",
+		introduced_party_id: doctor,
+		chosen: false,
+		removable: true,
+	});
+	assert.deepEqual(await relationships(), before);
 });

@@ -101,7 +101,7 @@
 | [next.imported_deal_invoiced](next.imported_deal_invoiced.md)                               | 6       |         | BASE TABLE |
 | [next.imported_deal_owner](next.imported_deal_owner.md)                                     | 9       |         | BASE TABLE |
 | [next.imported_deal_party](next.imported_deal_party.md)                                     | 10      |         | BASE TABLE |
-| [next.introduction](next.introduction.md)                                                   | 17      |         | BASE TABLE |
+| [next.introduction](next.introduction.md)                                                   | 18      |         | BASE TABLE |
 | [next.invoice_email](next.invoice_email.md)                                                 | 22      |         | BASE TABLE |
 | [next.invoice_mailbox](next.invoice_mailbox.md)                                             | 5       |         | BASE TABLE |
 | [next.job](next.job.md)                                                                     | 2       |         | BASE TABLE |
