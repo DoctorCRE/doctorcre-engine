@@ -32,6 +32,7 @@ const tbls = z.object({
 type Relation = z.infer<typeof relation>;
 type Area = z.infer<typeof tbls>["viewpoints"][number] & {
 	relations: Relation[];
+	external: Map<string, Area>;
 	neighbors: Map<Area, number>;
 };
 
@@ -39,6 +40,7 @@ function areaGraph(schema: z.infer<typeof tbls>) {
 	const areas: Area[] = schema.viewpoints.map((area) => ({
 		...area,
 		relations: [],
+		external: new Map(),
 		neighbors: new Map(),
 	}));
 	const areaByTable = new Map<string, Area>();
@@ -66,6 +68,10 @@ function areaGraph(schema: z.infer<typeof tbls>) {
 		if (from === to) {
 			from.relations.push(link);
 		} else {
+			from.relations.push(link);
+			to.relations.push(link);
+			from.external.set(link.parent_table, to);
+			to.external.set(link.table, from);
 			const count = (from.neighbors.get(to) ?? 0) + 1;
 			from.neighbors.set(to, count);
 			to.neighbors.set(from, count);
@@ -98,26 +104,29 @@ const controlsSpacer = 'title: "\\u00a0"';
 
 function areaPage(area: Area) {
 	const boxes = area.tables.map((table) => `  "${tableName(table)}"`);
+	const display = (table: string) => {
+		const external = area.external.get(table);
+		return external
+			? `${tableName(table)} (${external.name})`
+			: tableName(table);
+	};
 	const lines = area.relations.map((link) => {
 		const [left] = markers[link.cardinality];
 		const [, right] = markers[link.parent_cardinality];
 		const label = link.columns.map(plainName).join(", ");
 		// Nonbreaking spaces keep ELK's self-link labels left of the cardinality markers.
 		const padding = link.table === link.parent_table ? "#160;".repeat(4) : "";
-		return `  "${tableName(link.table)}" ${left}--${right} "${tableName(link.parent_table)}" : "${label}${padding}"`;
+		return `  "${display(link.table)}" ${left}--${right} "${display(link.parent_table)}" : "${label}${padding}"`;
 	});
 	const tables = area.tables.map(
 		(table) => `- [${tableName(table)}](${table}.md)`,
 	);
-	const connections =
-		area.id === "deals"
-			? [...area.neighbors]
-					.sort(([a], [b]) => a.name.localeCompare(b.name, "en"))
-					.map(
-						([other, count]) =>
-							`[${other.name}](viewpoint-${other.id}.md) (${count})`,
-					)
-			: [];
+	const connections = [...area.neighbors]
+		.sort(([a], [b]) => a.name.localeCompare(b.name, "en"))
+		.map(
+			([other, count]) =>
+				`[${other.name}](viewpoint-${other.id}.md) (${count})`,
+		);
 	const reserveControls = area.id === "people";
 	return [
 		`# ${area.name}`,
@@ -152,6 +161,9 @@ function areaPage(area: Area) {
 		...tables,
 		"",
 		"See each table for its columns and links to other areas.",
+		...(area.tables.includes("next.lead_source_sender")
+			? ["", "Lead source sender is standalone intake configuration."]
+			: []),
 		"",
 	].join("\n");
 }
@@ -208,9 +220,6 @@ function masterDrawing(areas: Area[]) {
 	);
 	groups.push({ name: "Other areas", areas: [...remaining.values()] });
 	const ordered = groups.flatMap((group) => group.areas);
-	const omitted = new Set(
-		ordered.filter((area) => area.neighbors.size > (areas.length - 1) / 2),
-	);
 	const boxes = groups.flatMap(({ name, areas }, index) =>
 		areas.length > 0
 			? [
@@ -222,14 +231,10 @@ function masterDrawing(areas: Area[]) {
 			: [],
 	);
 	const lines = ordered.flatMap((area, index) =>
-		omitted.has(area)
-			? []
-			: ordered.slice(index + 1).flatMap((other) => {
-					const count = area.neighbors.get(other);
-					return count && !omitted.has(other)
-						? [`  a-${area.id} ---|${count}| a-${other.id}`]
-						: [];
-				}),
+		ordered.slice(index + 1).flatMap((other) => {
+			const count = area.neighbors.get(other);
+			return count ? [`  a-${area.id} ---|${count}| a-${other.id}`] : [];
+		}),
 	);
 	const links = areas.map(
 		({ id }) => `  click a-${id} href "${areaUrl}/viewpoint-${id}.md"`,
@@ -238,40 +243,6 @@ function masterDrawing(areas: Area[]) {
 	const headingOrder = groups.flatMap(({ areas: [first] }, index) =>
 		first ? [`  heading-group${index} ~~~ a-${first.id}`] : [],
 	);
-	const omittedNames = [...omitted]
-		.filter(({ id }) => id !== "users-jobs")
-		.map(({ name }) => name);
-	const notes = [];
-	const users = [...omitted].find(({ id }) => id === "users-jobs");
-	if (users) {
-		notes.push(
-			"",
-			`The Users and jobs area connects to ${users.neighbors.size} other areas, mostly through audit fields. Some links record ownership, such as who owns a Doc conversation.`,
-		);
-	}
-	if (omittedNames.length) {
-		const names = new Intl.ListFormat("en", { type: "conjunction" }).format(
-			omittedNames,
-		);
-		notes.push("", `The same rule omits lines to ${names}.`);
-	}
-	const deals = [...omitted].find(({ id }) => id === "deals");
-	if (deals) {
-		const keyIds = ["imported-deals", "offers", "leases"];
-		const keyConnections = [...deals.neighbors]
-			.filter(([area]) => keyIds.includes(area.id))
-			.sort(([a], [b]) => keyIds.indexOf(a.id) - keyIds.indexOf(b.id))
-			.map(([area, count]) => `${area.name} (${count})`);
-		if (keyConnections.length) {
-			const names = new Intl.ListFormat("en", { type: "conjunction" }).format(
-				keyConnections,
-			);
-			notes.push(
-				"",
-				`Deals connects to ${names}. See [Deals](tables/viewpoint-deals.md#connects-to) for all its connections.`,
-			);
-		}
-	}
 	return [
 		"```mermaid",
 		"---",
@@ -292,7 +263,6 @@ function masterDrawing(areas: Area[]) {
 		...headingOrder,
 		"  classDef heading fill:none,stroke:none,font-weight:bold",
 		"```",
-		...notes,
 	].join("\n");
 }
 

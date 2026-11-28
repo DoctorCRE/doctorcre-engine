@@ -49,7 +49,12 @@ test("area pages show plain names and distinct foreign key labels", () => {
 	assert.match(deals, /\[Deal phase change\]\(next\.deal_phase_change\.md\)/);
 	const diagram = deals.split("```")[1];
 	assert(diagram);
-	assert.doesNotMatch(diagram, /next\.|FOREIGN KEY|Party/);
+	assert.doesNotMatch(diagram, /next\.|FOREIGN KEY/);
+	assert.match(diagram, /"Deal" \}o--\|\| "Party \(People\)" : "owner ID"/);
+	const people = pages.find(
+		({ file }) => file === "viewpoint-people.md",
+	)?.markdown;
+	assert.match(people ?? "", /"Deal \(Deals\)" \}o--\|\| "Party" : "owner ID"/);
 });
 
 test("the master counts cross-area foreign keys in both directions with one line per pair", () => {
@@ -61,7 +66,7 @@ test("the master counts cross-area foreign keys in both directions with one line
 	]);
 });
 
-test("the master omits widely shared links and keeps all area boxes", () => {
+test("the master includes widely shared links and keeps all area boxes", () => {
 	const names = [
 		"users-jobs",
 		"people",
@@ -90,17 +95,10 @@ test("the master omits widely shared links and keeps all area boxes", () => {
 	const { master } = drawDatabase({ tables, viewpoints, relations });
 	assert.match(master, /a-users-jobs\["users-jobs"\]/);
 	assert.match(master, /a-people\["people"\]/);
-	assert.match(
-		master,
-		/Users and jobs area connects to 6 other areas, mostly through audit fields/,
-	);
-	assert.match(master, /The same rule omits lines to people\./);
-	assert.deepEqual(master.match(/^ {2}.+ ---\|.+$/gm), [
-		"  a-deals ---|1| a-doc",
-	]);
+	assert.equal(master.match(/^ {2}.+ ---\|.+$/gm)?.length, relations.length);
 });
 
-test("the master names key Deals connections and the area page links to every neighbor", () => {
+test("the area page links to every neighbor", () => {
 	const viewpoints = [
 		["deals", "Deals"],
 		["imported-deals", "Imported deals"],
@@ -117,11 +115,7 @@ test("the master names key Deals connections and the area page links to every ne
 		),
 		foreignKey("deals", "offers", "accepted_offer_id"),
 	];
-	const { master, pages } = drawDatabase({ tables, viewpoints, relations });
-	assert.match(
-		master,
-		/Deals connects to Imported deals \(1\), Offers \(2\), and Leases \(1\)\./,
-	);
+	const { pages } = drawDatabase({ tables, viewpoints, relations });
 	const deals = pages.find(
 		({ file }) => file === "viewpoint-deals.md",
 	)?.markdown;
@@ -149,4 +143,31 @@ test("the drawings require an area for every table, including tables with no for
 			drawDatabase({ tables, viewpoints: viewpoints.slice(0, 2), relations }),
 		/Assign next\.job to an area/,
 	);
+});
+
+test("every table with a foreign key has a line in its area", () => {
+	const { pages } = drawDatabase({ tables, viewpoints, relations });
+	for (const area of viewpoints) {
+		const diagram = pages
+			.find(({ file }) => file === `viewpoint-${area.id}.md`)
+			?.markdown.split("```")[1];
+		assert(diagram);
+		for (const table of area.tables.filter((name) =>
+			relations.some(
+				(link) => link.table === name || link.parent_table === name,
+			),
+		)) {
+			const name = table
+				.replace("next.", "")
+				.replaceAll("_", " ")
+				.replace(/\bid\b/g, "ID");
+			const label = name.charAt(0).toUpperCase() + name.slice(1);
+			assert(
+				diagram
+					.split("\n")
+					.some((line) => line.includes(`"${label}"`) && line.includes("--")),
+				`${label} has no line`,
+			);
+		}
+	}
 });

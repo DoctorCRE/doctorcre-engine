@@ -1,6 +1,6 @@
 # Database drawings
 
-Each box is an area of the database. The number on each line counts the foreign keys between the two areas. The drawing leaves out lines to areas that connect to more than half of the other areas.
+Each box is an area of the database. The number on each line counts the foreign keys between the two areas. Every connected pair of areas appears. In each area drawing, boxes labeled with another area show its linked tables; line labels name the linking columns.
 
 <!-- Begin master drawing -->
 ```mermaid
@@ -56,18 +56,58 @@ flowchart TB
     a-users-jobs["Users and jobs"]
     a-changes-preferences["Changes and preferences"]
   end
+  a-people ---|6| a-relationships
+  a-people ---|2| a-clients
+  a-people ---|1| a-vendors-territories
+  a-people ---|5| a-leads
+  a-people ---|2| a-deals
+  a-people ---|1| a-imported-deals
+  a-people ---|1| a-property
+  a-people ---|1| a-leases
+  a-people ---|3| a-offers
+  a-people ---|1| a-website
+  a-people ---|1| a-email
+  a-people ---|1| a-documents
+  a-people ---|5| a-activity
+  a-people ---|1| a-home-calendar
+  a-people ---|1| a-doc
+  a-people ---|1| a-social-accounts
+  a-people ---|1| a-commissions
+  a-people ---|22| a-users-jobs
+  a-people ---|1| a-changes-preferences
   a-relationships ---|5| a-clients
   a-relationships ---|2| a-vendors-territories
   a-relationships ---|5| a-leads
+  a-relationships ---|6| a-deals
   a-relationships ---|1| a-imported-deals
   a-relationships ---|1| a-property
   a-relationships ---|2| a-offers
   a-relationships ---|1| a-home-calendar
   a-relationships ---|2| a-doc
+  a-relationships ---|26| a-users-jobs
+  a-clients ---|26| a-users-jobs
+  a-vendors-territories ---|1| a-deals
   a-vendors-territories ---|1| a-property
+  a-vendors-territories ---|30| a-users-jobs
+  a-leads ---|2| a-deals
   a-leads ---|1| a-offers
   a-leads ---|1| a-email
   a-leads ---|3| a-activity
+  a-leads ---|15| a-users-jobs
+  a-deals ---|9| a-imported-deals
+  a-deals ---|2| a-property
+  a-deals ---|4| a-leases
+  a-deals ---|7| a-offers
+  a-deals ---|1| a-tours
+  a-deals ---|1| a-website
+  a-deals ---|1| a-documents
+  a-deals ---|5| a-activity
+  a-deals ---|2| a-home-calendar
+  a-deals ---|1| a-doc
+  a-deals ---|3| a-invoices
+  a-deals ---|1| a-commissions
+  a-deals ---|26| a-users-jobs
+  a-imported-deals ---|15| a-users-jobs
   a-property ---|3| a-leases
   a-property ---|2| a-offers
   a-property ---|1| a-tours
@@ -75,24 +115,41 @@ flowchart TB
   a-property ---|1| a-home-calendar
   a-property ---|1| a-marketing-posts
   a-property ---|1| a-marketing-review
+  a-property ---|18| a-users-jobs
   a-leases ---|2| a-offers
   a-leases ---|2| a-documents
+  a-leases ---|17| a-users-jobs
   a-offers ---|1| a-documents
   a-offers ---|6| a-activity
   a-offers ---|1| a-home-calendar
+  a-offers ---|14| a-users-jobs
   a-tours ---|2| a-activity
+  a-tours ---|6| a-users-jobs
+  a-website ---|4| a-users-jobs
   a-email ---|2| a-documents
   a-email ---|1| a-activity
   a-email ---|1| a-home-calendar
   a-email ---|2| a-doc
+  a-email ---|21| a-users-jobs
   a-documents ---|1| a-marketing-posts
+  a-documents ---|12| a-users-jobs
   a-activity ---|2| a-home-calendar
+  a-activity ---|12| a-users-jobs
+  a-home-calendar ---|20| a-users-jobs
+  a-doc ---|3| a-users-jobs
   a-doc ---|1| a-changes-preferences
   a-marketing-posts ---|3| a-marketing-categories
   a-marketing-posts ---|2| a-marketing-review
   a-marketing-posts ---|1| a-social-accounts
+  a-marketing-posts ---|6| a-users-jobs
+  a-marketing-categories ---|6| a-users-jobs
+  a-marketing-review ---|6| a-users-jobs
+  a-social-accounts ---|4| a-users-jobs
   a-invoices ---|1| a-commissions
+  a-invoices ---|6| a-users-jobs
   a-invoices ---|1| a-changes-preferences
+  a-commissions ---|14| a-users-jobs
+  a-users-jobs ---|10| a-changes-preferences
   click a-people href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-people.md"
   click a-relationships href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-relationships.md"
   click a-clients href "https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables/viewpoint-clients.md"
@@ -125,12 +182,6 @@ flowchart TB
   heading-group4 ~~~ a-users-jobs
   classDef heading fill:none,stroke:none,font-weight:bold
 ```
-
-The Users and jobs area connects to 24 other areas, mostly through audit fields. Some links record ownership, such as who owns a Doc conversation.
-
-The same rule omits lines to People and Deals.
-
-Deals connects to Imported deals (9), Offers (7), and Leases (4). See [Deals](tables/viewpoint-deals.md#connects-to) for all its connections.
 <!-- End master drawing -->
 
 Select a box to open its drawing on the main branch, or use the [area and table index](tables/README.md) to browse this version. Each area drawing labels its lines with the columns that link the tables. For columns, cross-area references, and constraints, open a table page or see [the schema](../../schema/next.sql).
