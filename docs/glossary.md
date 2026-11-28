@@ -328,3 +328,13 @@ _New database_: `reply_draft`, with its delivery status: pending, dismissed, app
 **Candidate**:
 An unreviewed sweep or public-record result kept outside the working contact list. A user promotes it to a lead, or declines it with a reason.
 _New database_: `candidate`, retaining source context and qualification after promotion. A suppressed candidate waits for user review.
+
+## Industry and company knowledge
+
+**Playbook** is the current deal workflow, applicable guidance, and recorded progress for one deal. A client copy is the exact preview a partner approved for release.
+
+**To-do** is one ordered part of the deal workflow. Its stable checklist slug identifies it across revisions. A next step is a separate action saved on a deal.
+
+**Practice type** describes the client's line of practice. **Practice stage** describes where the practice is in its business life. A deal's phase is separate.
+
+**Knowledge revision** is one version of a sourced item, such as a rule of thumb or a lender program term. The current approved version supplies live guidance.
