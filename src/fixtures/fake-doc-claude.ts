@@ -54,8 +54,23 @@ if (args.includes("auth")) {
 			assert.ok(!prompt.includes(input.body));
 		}
 	}
+	if (!isolated) {
+		const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
+		const {
+			mcpServers: { doc },
+		} = JSON.parse(valueAfter("--mcp-config") ?? "");
+		assert.match(
+			doc.headers["Doc-Claim-Id"],
+			probe ? /^readiness$/ : /^[a-f0-9-]{36}$/,
+		);
+		assert.match(process.env.DOC_LINK_CREDENTIAL ?? "", /^[A-Za-z0-9_-]{43}$/);
+		emit({
+			type: "system",
+			subtype: "init",
+			mcp_servers: [{ name: "doc", status: "connected" }],
+		});
+	}
 	if (probe) {
-		assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
 		finished({ ready: true });
 	} else if (question === "Expired sign-in") {
 		emit({ type: "assistant", error: "authentication_failed" });
@@ -92,7 +107,6 @@ if (args.includes("auth")) {
 						: { summary: quote, action_title: null, quote },
 		);
 	} else {
-		emit({ type: "system", subtype: "init" });
 		emit({
 			type: "rate_limit_event",
 			rate_limit_info: { status: "allowed_warning" },

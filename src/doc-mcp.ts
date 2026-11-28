@@ -1,3 +1,4 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Context } from "hono";
 import { withDocLink } from "./doc-link.ts";
 import { docLinkCredential } from "./doc-link-routes.ts";
@@ -28,24 +29,41 @@ export async function docMcp(c: Context<WriterEnv>) {
 			credential,
 			async (tx, owner) => {
 				const claim = c.req.header("Doc-Claim-Id");
+				async function reply(server: McpServer) {
+					if (request.method !== "POST")
+						return c.body(null, 405, { Allow: "POST" });
+					const transport = new WebStandardStreamableHTTPServerTransport({
+						enableJsonResponse: true,
+					});
+					await server.connect(transport);
+					const response = await transport.handleRequest(request);
+					response.headers.set("Cache-Control", "no-store");
+					return response;
+				}
+				if (claim === "readiness") {
+					const { McpServer } = await import(
+						"@modelcontextprotocol/sdk/server/mcp.js"
+					);
+					const server = new McpServer(
+						{ name: "doctorcre-doc", version: "1.0.0" },
+						{ capabilities: { tools: {} } },
+					);
+					try {
+						return await reply(server);
+					} finally {
+						await server.close();
+					}
+				}
 				if (!isUuid(claim)) return c.body(null, 404);
-				const reply = await withDocTools(
-					tx,
-					owner,
-					claim,
-					reader.connectionString,
-					async (server) => {
-						if (request.method !== "POST")
-							return c.body(null, 405, { Allow: "POST" });
-						const transport = new WebStandardStreamableHTTPServerTransport({
-							enableJsonResponse: true,
-						});
-						await server.connect(transport);
-						return transport.handleRequest(request);
-					},
+				return (
+					(await withDocTools(
+						tx,
+						owner,
+						claim,
+						reader.connectionString,
+						reply,
+					)) ?? c.body(null, 404)
 				);
-				reply?.headers.set("Cache-Control", "no-store");
-				return reply ?? c.body(null, 404);
 			},
 		);
 		return response instanceof Response ? response : unauthorized();

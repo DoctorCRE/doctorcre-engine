@@ -248,7 +248,9 @@ export async function claimDocWork(
 
 const judgmentOutcome = z.discriminatedUnion("kind", [
 	z.strictObject({ kind: z.literal("answered"), result: z.unknown() }),
-	z.strictObject({ kind: z.enum(["failed", "signed_out", "plan_limited"]) }),
+	z.strictObject({
+		kind: z.enum(["failed", "startup_failed", "signed_out", "plan_limited"]),
+	}),
 ]);
 const text = z
 	.string()
@@ -383,7 +385,10 @@ export async function saveDocJudgment(
 		);
 
 	const { kind } = outcome;
-	const blocked = kind === "signed_out" || kind === "plan_limited";
+	const blocked =
+		kind === "startup_failed" ||
+		kind === "signed_out" ||
+		kind === "plan_limited";
 	const state = blocked ? "queued" : kind;
 	const saved = await tx
 		.updateTable("doc_judgment_job")
@@ -430,13 +435,23 @@ export async function saveDocJudgment(
 			where not exists (select from email_current_summary where activity_id = ${job.activity_id})
 		`.execute(tx);
 	}
-	if (blocked) await recordDocPoll(tx, owner, { mail: kind });
+	if (blocked)
+		await recordDocPoll(tx, owner, {
+			mail: kind === "startup_failed" ? null : kind,
+		});
 	return 204;
 }
 
 type DocResult = { claim_id: string } & (
 	| { kind: "answered"; answer: unknown; answered_by?: "backup" }
-	| { kind: "failed" | "signed_out" | "plan_limited" | "queued" }
+	| {
+			kind:
+				| "failed"
+				| "startup_failed"
+				| "signed_out"
+				| "plan_limited"
+				| "queued";
+	  }
 );
 
 export async function finishDocTurn(
@@ -465,7 +480,10 @@ export async function finishDocTurn(
 			return 422;
 		}
 	}
-	const blocked = kind === "signed_out" || kind === "plan_limited";
+	const blocked =
+		kind === "startup_failed" ||
+		kind === "signed_out" ||
+		kind === "plan_limited";
 	const saved = await tx
 		.updateTable("doc_turn")
 		.set({
@@ -480,6 +498,9 @@ export async function finishDocTurn(
 		.where(unexpired)
 		.executeTakeFirst();
 	if (!saved.numUpdatedRows) return 404;
-	if (blocked) await recordDocPoll(tx, owner, { chat: kind });
+	if (blocked)
+		await recordDocPoll(tx, owner, {
+			chat: kind === "startup_failed" ? null : kind,
+		});
 	return 204;
 }

@@ -227,6 +227,30 @@ test("the engine speaks MCP only to the link credential and its current private 
 	assert.equal((await send(credential, current)("tools/list")).status, 401);
 });
 
+test("Doc readiness connects over MCP without exposing any tools or claim", async () => {
+	const { credential } = await issue(owner);
+	assert.equal((await send("", "readiness")("tools/list")).status, 401);
+	const request = send(credential, "readiness");
+	const init = await request("initialize", {
+		protocolVersion: "2025-11-25",
+		capabilities: {},
+		clientInfo: { name: "Example Mac", version: "1.0.0" },
+	});
+	assert.equal(init.status, 200);
+	assert.equal(
+		(await request("notifications/initialized", undefined, null)).status,
+		202,
+	);
+	const list = await request("tools/list");
+	assert.equal(list.status, 200);
+	assert.deepEqual(await list.json(), {
+		jsonrpc: "2.0",
+		id: 7,
+		result: { tools: [] },
+	});
+	await tool(request, "read", { kind: "deal", id: deal }, true);
+});
+
 test("Doc reads shared records, validates citations and proposes a save without business writes", async () => {
 	const { credential } = await issue(owner);
 	const id = await claim(owner);

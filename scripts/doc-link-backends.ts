@@ -10,6 +10,7 @@ import { z } from "zod";
 export type LinkOutcome =
 	| { kind: "answered"; answer: Record<string, unknown> }
 	| { kind: "failed" | "signed_out" }
+	| { kind: "startup_failed"; reason?: string }
 	| { kind: "plan_limited"; resetsAt: number | undefined };
 
 type SignInStatus =
@@ -18,7 +19,7 @@ type SignInStatus =
 	| "personal_plan_required"
 	| undefined;
 
-type ModelTask = {
+export type ModelTask = {
 	input: string;
 	prompt: string;
 	allowTools: boolean;
@@ -181,12 +182,31 @@ export async function signInStatus(
 		: "personal_plan_required";
 }
 
-function claudeOutcome({ ok, stdout }: CliResult): LinkOutcome {
+const docMcpIssue =
+	"Doc could not connect to its tools. Check the engine connection, then rerun setup.";
+const mcpConnection = z.object({ name: z.string(), status: z.string() });
+
+function claudeOutcome(
+	{ ok, stdout }: CliResult,
+	needsDoc: boolean,
+): LinkOutcome {
 	let blocker: LinkOutcome | undefined;
 	let completed: Record<string, unknown> | undefined;
+	let initialized = false;
+	let docConnected = false;
 	for (const line of stdout.split("\n")) {
 		const event = fields.safeParse(readJson(line)).data;
 		if (!event) continue;
+		if (event.type === "system" && event.subtype === "init") {
+			initialized = true;
+			docConnected =
+				z
+					.array(mcpConnection)
+					.safeParse(event.mcp_servers)
+					.data?.some(
+						({ name, status }) => name === "doc" && status === "connected",
+					) ?? false;
+		}
 		if (event.type === "rate_limit_event") {
 			const limit = rateLimit.safeParse(event.rate_limit_info).data;
 			if (limit) blocker = { kind: "plan_limited", resetsAt: limit.resetsAt };
@@ -197,6 +217,7 @@ function claudeOutcome({ ok, stdout }: CliResult): LinkOutcome {
 	}
 	if (
 		ok &&
+		(!needsDoc || docConnected) &&
 		completed?.subtype === "success" &&
 		completed.is_error === false &&
 		typeof completed.result === "string"
@@ -212,6 +233,10 @@ function claudeOutcome({ ok, stdout }: CliResult): LinkOutcome {
 		/^(?:Not logged in\b|Invalid API key\b).*\/login/i.test(completed.result)
 	)
 		return { kind: "signed_out" };
+	if (needsDoc && initialized && !docConnected)
+		return { kind: "startup_failed", reason: docMcpIssue };
+	if (!initialized && !ok) return { kind: "startup_failed" };
+	if (needsDoc && !docConnected) return { kind: "startup_failed" };
 	return { kind: "failed" };
 }
 
@@ -412,12 +437,14 @@ function codexReset(message: string) {
 	return Number.isFinite(milliseconds) ? milliseconds / 1_000 : undefined;
 }
 
-function codexOutcome({ ok, stdout }: CliResult): LinkOutcome {
+function codexOutcome({ ok, stdout, stderr }: CliResult): LinkOutcome {
+	let started = false;
 	let completed = false;
 	let finalMessage: string | undefined;
 	for (const line of stdout.split("\n")) {
 		const event = fields.safeParse(readJson(line)).data;
 		if (!event) continue;
+		if (event.type === "thread.started") started = true;
 		if (event.type === "item.completed") {
 			const message = codexMessage.safeParse(event.item).data;
 			if (message) finalMessage = message.text;
@@ -435,14 +462,17 @@ function codexOutcome({ ok, stdout }: CliResult): LinkOutcome {
 				)
 					return { kind: "signed_out" };
 			}
-			return { kind: "failed" };
+			break;
 		}
 	}
 	const answer =
 		completed && ok && finalMessage !== undefined
 			? fields.safeParse(readJson(finalMessage)).data
 			: undefined;
-	return answer ? { kind: "answered", answer } : { kind: "failed" };
+	if (answer) return { kind: "answered", answer };
+	if (/required MCP servers failed to initialize/i.test(stderr))
+		return { kind: "startup_failed", reason: docMcpIssue };
+	return { kind: !ok && !started ? "startup_failed" : "failed" };
 }
 
 async function runCodex(binary: string, timeout: number, task: ModelTask) {
@@ -492,7 +522,10 @@ export const backends = {
 	claude: {
 		signIn: signInStatus,
 		run: async (binary, timeout, task) =>
-			claudeOutcome(await runClaude(binary, timeout, task.allowTools, task)),
+			claudeOutcome(
+				await runClaude(binary, timeout, task.allowTools, task),
+				Boolean(task.chat),
+			),
 		personalPlanMessage: ownClaudePlanMessage,
 		settingsMessage: "Check your Claude Code settings, then rerun setup.",
 		policyMessage: "Doc link needs a Mac without managed Claude Code settings.",
