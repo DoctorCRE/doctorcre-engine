@@ -1,9 +1,4 @@
 disableOutputSchema: true
-er:
-  format: mermaid
-  showColumnTypes:
-    related: true
-    primary: true
 viewpoints:
   - id: people
     name: People
