@@ -21,7 +21,7 @@ Should a standing action grant authorize future DoctorCRE saves or sends by itse
 
 ## Q4 Loading and evidence
 
-Should open-ended chats select a playbook by the wording of the question or only use playbooks launched from known app actions and explicit requests? Recommend selection from explicit context or requests for the first two playbooks. For deal activity outside the current projection, either show what is available or extend the engine projection for an approved scenario. Recommend adding fields only when a trace case identifies a missing fact. Reuse decision 220's structured numeric checks where a visual is used. Should plain-text answers gain structured value checks, or should partners judge whether the wording agrees with its sources? Recommend starting with staging judgment for prose and retaining the existing projection and source checks in S4.
+Should an open-ended chat infer a topic for `read_playbook` or `read_guidance`, or query only when an app action or explicit request identifies the topic? Recommend explicit context or requests for the first two playbooks. Use recorded deal and practice context for scope. Ask when the needed topic or subject is ambiguous. For deal activity outside the current projection, either show what is available or extend the engine projection for an approved scenario. Recommend adding fields only when a trace case identifies a missing fact. Reuse decision 220's structured numeric checks where a visual is used. Should plain-text answers gain structured value checks, or should partners judge whether the wording agrees with its sources? Recommend starting with staging judgment for prose and retaining the existing projection and source checks in S4.
 
 ## Q5 Filing without a review
 
@@ -33,4 +33,4 @@ Should the next expansion start with the existing vendor and Calendar doors or t
 
 ## Q7 Preference values and team edits
 
-Should both partners edit team defaults directly or should one partner own those edits? Recommend letting both edit the shared row with the ordinary write proofs. For draft length and comparison format, choose named values or bounded custom values. Recommend starting with named values and leaving rows unset until a partner chooses. The exact names and the playbook baseline need approval before building the preference keys.
+Should both partners edit team defaults directly or should one partner own those edits? Recommend letting both edit the shared row with the ordinary write proofs. For draft length and comparison format, choose named values or bounded custom values. Recommend starting with named values and leaving rows unset until a partner chooses. The exact names and the default in the approved knowledge rows need approval before building the preference keys.

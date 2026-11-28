@@ -1,6 +1,6 @@
 # Set up Doc for a partner
 
-The shared template is the role, playbooks, tool definitions, made-up examples, driver definitions, installer and LaunchAgent in the engine checkout. Each partner supplies their account, Mac login, supported CLI installations and personal plan sign-ins. Each link owns one revocable engine credential. Each partner has their own model choices, personal preferences and standing grants. Team preferences are shared through the engine. [Decision 195 and decision 217](../decisions.md) · [Memory](memory.md)
+The shared template is the Doc instructions, tool definitions, made-up test fixtures, drivers, installer and LaunchAgent in the engine checkout. In chat, the Mac and backup read approved playbooks and guidance through the engine tools. Setup copies no knowledge to the Mac. [Playbook reads](playbooks.md#read-approved-playbooks-and-guidance) Each partner supplies their account, Mac login, supported CLI installations and personal plan sign-ins. Each link owns one revocable engine credential. Each partner has their own model choices, personal preferences and standing grants. Team preferences are shared through the engine. [Decision 195 and decision 217](../decisions.md) · [Memory](memory.md)
 
 ## Use the same command on each Mac
 

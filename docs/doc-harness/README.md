@@ -4,7 +4,7 @@ This drawing is for owner approval in [#1509](https://github.com/DoctorCRE/docto
 
 ## The parts and their connection
 
-- **DoctorCRE.** Ask Doc takes the question, shows its sources, and asks for confirmation. Doc link claims work for the partner. The engine owns private chat, preferences, business tools, access checks, evidence, and saves. A shared role and playbooks describe how Doc works. The engine enforces business rules.
+- **DoctorCRE.** Ask Doc takes the question, shows its sources, and asks for confirmation. Doc link claims work for the partner. The engine owns private chat, preferences, business tools, access checks, evidence, and saves. Checked-in Doc instructions govern tool use, access checks and confirmed saves. Doc queries approved playbooks and business guidance from the engine's knowledge store. [Knowledge drawing](https://github.com/DoctorCRE/doctorcre-engine/pull/1520)
 - **Base harness.** Claude Code or Codex runs the model loop, calls tools, reads their results, and manages sign-in and plan limits. Its own permission prompts are off. It runs on the partner's own Mac login. Other providers go through the same driver interface after approval. The prepaid backup is an existing engine runner for eligible work.
 - **Driver interface.** A passive check reports provider, readiness, models and efforts, and any plan reset. A run receives mode, selected model and effort, deadline, role or job instructions, and typed claim data. Chat also gets the claim-scoped DoctorCRE MCP connection and a path to ask Doc for approval before an action runs. The driver returns `answered`, `failed`, `signed_out`, or `plan_limited` with the reset when known. Doc link owns queueing and completion. Results use the same engine contract across drivers. [Setup](setup.md) · [Flows](flows.md)
 
@@ -12,15 +12,15 @@ The role tells Doc to use DoctorCRE tools for app facts, resolve the exact recor
 
 ## Read the drawing
 
-| Page                              | What it covers                                                           |
-| --------------------------------- | ------------------------------------------------------------------------ |
-| [Current state](current-state.md) | What is on main, what is in review, and how both differ from the drawing |
-| [Flows](flows.md)                 | Numbered steps, saved state, and exits                                   |
-| [Tools](tools.md)                 | Inputs, outputs, engine doors, and confirmation for DoctorCRE work       |
-| [Playbooks](playbooks.md)         | The first two workflows and how Doc loads them                           |
-| [Setup](setup.md)                 | Joe's Studio, Dell's Mac, future accounts, and the Ask Doc picker        |
-| [Memory](memory.md)               | Team preferences and personal preferences                                |
-| [Verification](verification.md)   | Hermetic tests, expected results, and staging checks                     |
-| [Decisions](decisions.md)         | Sources and reasons for the drawing                                      |
-| [Questions](questions.md)         | Applied defaults and owner choices still open                            |
-| [Slices](slices.md)               | Build order, dependencies, and acceptance references                     |
+| Page                              | What it covers                                                            |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| [Current state](current-state.md) | What is on main, what is in review, and how both differ from the drawing  |
+| [Flows](flows.md)                 | Numbered steps, saved state, and exits                                    |
+| [Tools](tools.md)                 | Inputs, outputs, engine doors, and confirmation for DoctorCRE work        |
+| [Playbooks](playbooks.md)         | The first workflows and how Doc queries their approved steps and guidance |
+| [Setup](setup.md)                 | Joe's Studio, Dell's Mac, future accounts, and the Ask Doc picker         |
+| [Memory](memory.md)               | Team preferences and personal preferences                                 |
+| [Verification](verification.md)   | Hermetic tests, expected results, and staging checks                      |
+| [Decisions](decisions.md)         | Sources and reasons for the drawing                                       |
+| [Questions](questions.md)         | Applied defaults and owner choices still open                             |
+| [Slices](slices.md)               | Build order, dependencies, and acceptance references                      |
