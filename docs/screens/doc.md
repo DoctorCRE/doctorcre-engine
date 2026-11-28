@@ -39,24 +39,25 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 
 ## What each control does
 
-| Control                                                                              | What it does                                                                                                                       |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| A chat row                                                                           | Opens that chat with its saved questions and answers in order                                                                      |
-| **New chat** (pencil)                                                                | Starts an empty chat and clears the typing box                                                                                     |
-| **Older chats**                                                                      | Loads the next page of chats                                                                                                       |
-| **Recent chats** (list icon, phone)                                                  | Shows the chats over the conversation                                                                                              |
-| Enter                                                                                | Sends. Shift+Enter starts a new line                                                                                               |
-| **Send** (up arrow)                                                                  | Sends. Grey when the box is blank, over 4,000 characters, or a question in this chat is queued or working                          |
-| Character count                                                                      | Hidden below 3,500 characters. From 3,500 it reads like "3,650 / 4,000"                                                            |
-| `@`                                                                                  | Opens a picker of deals, leads and clients. The pick shows as a chip in the typing box, and Doc answers about that record          |
-| A source chip                                                                        | Opens that exact deal, lead, client, or mail review                                                                                |
-| A match chip                                                                         | When Doc asks which record the partner meant, each match is a chip with its city and how many deals it is on. It opens that record |
-| **Save note**, **Save next step**, **Save draft and open review**, **Save revision** | See [Confirm a save](#confirm-a-save)                                                                                              |
-| **Retry**                                                                            | See [Ask a question](#ask-a-question) and [Confirm a save](#confirm-a-save)                                                        |
+| Control                                                                              | What it does                                                                                                              |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| A chat row                                                                           | Opens that chat with its saved questions and answers in order                                                             |
+| **New chat** (pencil)                                                                | Starts an empty chat and clears the typing box                                                                            |
+| **Older chats**                                                                      | Loads the next page of chats                                                                                              |
+| **Recent chats** (list icon, phone)                                                  | Shows the chats over the conversation                                                                                     |
+| Enter                                                                                | Sends. Shift+Enter starts a new line                                                                                      |
+| **Send** (up arrow)                                                                  | Sends. Grey when the box is blank, over 4,000 characters, or a question in this chat is queued or working                 |
+| Character count                                                                      | Hidden below 3,500 characters. From 3,500 it reads like "3,650 / 4,000"                                                   |
+| `@`                                                                                  | Opens a picker of deals, leads and clients. The pick shows as a chip in the typing box, and Doc answers about that record |
+| A source chip                                                                        | Opens that exact deal, lead, client, or mail review                                                                       |
+| A match chip                                                                         | Opens the exact record. Lead and client chips show city and deal count where available.                                   |
+| **Save note**, **Save next step**, **Save draft and open review**, **Save revision** | See [Confirm a save](#confirm-a-save)                                                                                     |
+| **Retry**                                                                            | See [Ask a question](#ask-a-question) and [Confirm a save](#confirm-a-save)                                               |
 
 - [ ] **Send**, **New chat** and **Recent chats** are icon buttons with those names for screen readers and on hover: a round up-arrow for **Send**, a pencil-on-square for **New chat**, and the chats list toggle for **Recent chats**.
 - [ ] The character count is hidden until the question reaches 3,500 characters, and turns red past the 4,000 limit.
 - [ ] A picked deal, lead or client goes with the next question, even in an existing chat. The partner can remove the pick before sending. A question launched from an invoice or email review starts with that record already supplied. A draft review chat stays on its pending draft.
+- [ ] When S4 ships, same-name deal chips show recorded phase and owner when available. If those facts leave chips indistinguishable, number the remaining matches in the order returned and ask the partner to open the exact linked records before choosing. Missing fields stay blank. [Doc clarification](../doc-harness/flows.md#f2-clarify)
 
 ## Ask a question
 
@@ -113,14 +114,13 @@ See [Send a new email from Doc](../new-database.md#send-a-new-email-from-doc).
 ## Kept from our rules
 
 - [ ] **Send** is neutral. The save button is the one orange button in view.
-- [ ] No microphone, right-hand panel, search over chats, rows that list Doc's steps, or model picker in the chat. The model choice lives on Settings.
+- [ ] Keep the chat free of a microphone, a right-hand panel, search over chats, and rows that list Doc's steps.
 - [ ] Tones, type sizes and spacing come from the app's tokens. A chat uses three text sizes, and a new chat four. See [design principles](../design-principles.md).
 
 ## Choose who answers, watch it arrive, see it drawn
 
-The owner approved these on 2026-11-25. None is built yet. Each line replaces any line above that says otherwise once its unit ships. The engine side is [Planned Doc changes](../new-database.md#planned-doc-changes).
+These items are planned. On approval, the [Doc harness drawing](../doc-harness/setup.md#ask-doc-picker) supersedes the November 25 plan to put model choice in Settings. The [record picker](#what-each-control-does) still supplies deal, lead and client context. Each change takes effect when its unit ships. The engine side is [Planned Doc changes](../new-database.md#planned-doc-changes).
 
-- [ ] **Who answers** on Settings, under Doc link, lists each model the partner's Mac reports: Claude, Codex, Grok and Gemini. Each row shows "Ready", "Sign in on your Mac" or "Paused until 4:40 AM". A partner whose Mac reports only Claude sees no picker.
 - [ ] The partner picks a first choice and may pick a second. Each choice offers the models and effort levels its tool lists, with the tool's default first. Saving applies from the next question in every chat.
 - [ ] A chat started on one model continues on another with its earlier questions and answers.
 - [ ] When the plan limit gives a reset time, the waiting line reads "Doc is paused until 4:40 AM". Without one it reads "Doc is paused until your Claude plan resets", with the paused model's name in place of Claude.

@@ -2197,6 +2197,8 @@ The confirmation locks the partner's turn and uses the existing `runNextSave` re
 
 ### Planned Doc changes
 
+On approval, the [Doc harness drawing](doc-harness/README.md) governs the first build's model picker, chat approvals and reuse of the current chat and mail readiness probes. The details below record the earlier plans.
+
 Decisions 218 to 220 add these. None is built yet. The behavior above holds until each unit lands and moves its part into the sections above.
 
 #### Model choice
