@@ -151,7 +151,7 @@ async function seen(dealId: string) {
 	);
 	assert.ok(!("error" in page));
 	const board = await nextTransaction(connectionString, "read", (tx) =>
-		readNextBoard(tx, joe, { partner: "joe" }),
+		readNextBoard(tx, { partner: "joe" }),
 	);
 	const card = board.deals.find((row) => row.id === dealId);
 	if (card) assert.deepEqual(card.attention, page.attention);
@@ -340,7 +340,7 @@ test("fourteen quiet days is the reason when a step is still open, and it sorts 
 	});
 	assert.equal((await seen(recent)).attention, null);
 	const board = await nextTransaction(connectionString, "read", (tx) =>
-		readNextBoard(tx, joe, { partner: "joe" }),
+		readNextBoard(tx, { partner: "joe" }),
 	);
 	const quietAt = board.deals.findIndex((row) => row.id === quiet);
 	const calmAt = board.deals.findIndex((row) => row.id === calm);

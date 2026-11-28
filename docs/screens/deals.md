@@ -74,6 +74,18 @@ A Leases ending lane at the bottom waits until the first lease ending is recorde
 
 When the nightly invoice job closes a deal, Closed deals shows "Closed automatically: Invoice received" with its date in words and offers Undo. A copied automatic move to Closed shows "Closed automatically" with its date in words. When it has an invoice date and no invoice application to reverse, it keeps the date and caption, and Undo is hidden. Other copied closes offer phase Undo. A recorded loss appears in Lost deals without an automatic close badge or Undo.
 
+### Wiring
+
+What runs the board today. App files are in `doctorcre-app`; the app's `src/worker.js` passes each call to the engine door named here.
+
+| Screen part                                           | App files                                                                                                | Engine doors                                                                                                                                                                                           | Tables                                                                                                                                |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Board, List, Parked lane, Closed deals and Lost deals | `pipeline.html`, `js/pipeline.js`, `js/pipeline-model.js`, `js/local-deals-model.js`, `css/pipeline.css` | `GET /deals` (`src/deals/routes.ts`, `src/deals/next-board.ts`)                                                                                                                                        | `deal`, `deal_phase_change`, `deal_party`, `party`, `next_step`, `activity`, `activity_about`, `deal_client_website`, `critical_date` |
+| Scroll thumb on the board and columns                 | `src/ui/scroll-thumb.ts`, `css/pipeline.css`                                                             | none                                                                                                                                                                                                   | none                                                                                                                                  |
+| Moving a phase, Park and Revive                       | `js/pipeline.js` (`beginMove`, `openCompletion`, `runMove`), `js/pipeline-model.js` (`completionPlan`)   | `POST /deals/:deal/changes` (`src/deals/next-change.ts`)                                                                                                                                               | `deal`, `deal_phase_change`, `change`                                                                                                 |
+| Add deal                                              | `pipeline.html`, `js/pipeline.js`                                                                        | `POST /deals` (`src/deals/next-change.ts`)                                                                                                                                                             | `deal`, `deal_party`, `deal_phase_change`, `change`                                                                                   |
+| Prospects lane                                        | `src/ui/prospect-saves.tsx`, `js/pipeline.js`                                                            | `GET /prospects`, `POST /prospects`, `POST /prospects/:party_id/changes`, `POST /prospects/:party_id/drop` (`src/prospects/`); a note goes to `POST /activities` and a follow-up to `POST /next-steps` | `party`, `party_role`, `activity`, `activity_about`, `next_step`, `change`                                                            |
+
 ## Prospects
 
 A prospect is someone who may become a deal but is not one yet. The owner's words: the old spreadsheet worked because "it didn't block us from typing out a quick note or adding something in", and a lead once slipped for one to two months because it had no place to live.
@@ -267,6 +279,16 @@ Coming later: when the client last opened the site, once the engine records it. 
 - [ ] Critical dates are one row that scrolls sideways. The path is one row that scrolls sideways and opens on the current phase. Next steps, Latest activity, Ask Doc to, Invoice, People and Park deal follow.
 - [ ] Plan keeps the chart, with a narrower name column and no side list. It scrolls sideways, a tap opens a bar, and nothing drags.
 - [ ] A phase click opens the same question as a sheet from the bottom. An Activity row opens full screen with Back. Tours shows the tour first, with its stops and **Generate tour packet**, then the properties.
+
+## Wiring
+
+What draws each deal page part from the engine. App files are in `src/ui/` of `DoctorCRE/doctorcre-app`.
+
+| Screen part     | App files                            | Engine doors                                                         | Tables                                                                                           |
+| --------------- | ------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| The path        | `deal-path.ts`, `deal-checklist.tsx` | `GET /api/engine/deals/{id}` `checklist`                             | `lease`, `lease_version`, `commission_payment`, `critical_date`, `deal_phase_change`             |
+| Needs attention | Not built yet                        | `GET /api/engine/deals/{id}` and `GET /api/engine/deals` `attention` | `next_step`, `critical_date`, `proposal`, `email`, `activity`, `deal_party`, `deal_phase_change` |
+| Invoice         | Not built yet                        | `GET /api/engine/deals/{id}` `invoice`                               | `commission_payment`, `lease`, `lease_version`, `deal_phase_change`                              |
 
 ## Questions for the owner
 

@@ -50,7 +50,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`email_summary`**: a recorded summary result for that email, with its source, generator and recorded time. `email_current_summary` gives the one current text when any result has text.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
 - **`weekly_review`**: one deal or prospect marked reviewed in one week's Monday review.
-- **`deal_star`**: one partner's star on one deal. The app shows no stars for now (owner, 2026-11-25).
+- **`deal_star`**: one partner's star on one deal, kept until the owner approves dropping it. Nothing reads or saves stars (owner, 2026-11-25).
 - **`commission`**: a deal's commission, once: what an open deal is expected to bring, the gross the brokerage collects, and the closing user's part on this deal when it overrides their ladder.
 - **`commission_payment`**: one part of the gross, with when it was invoiced, falls due and was received.
 - **`commission_share`**: what goes to someone other than the users, such as a referring agent or the brokerage, as a share of the whole.
@@ -159,7 +159,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 47. A vendor's category is a role whose `category_of` is vendor, and it stays one. Only a vendor holds a vendor category, checked when the change is saved.
 48. A stage comes from its own role's stage list, and is stored once per role.
 49. A relationship level is a vendor role's, one of the four levels, and only a schema change adds or renames a level.
-50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. One the team made names the user who made it, and one the vendor made names none. Its note is never blank, and who it joins and who made it never change. A vendor keeps its vendor role while it has introductions.
+50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. One the team made names the user who made it, and one the vendor made names none. Its note, when it has one, is never blank, and who it joins and who made it never change. A vendor keeps its vendor role while it has introductions.
 51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none. The owner-run copy can keep a ruling with the reserved reason `not recorded, set before the new system`. New rulings require a recorded reason. A merge keeps the stricter disposition, avoid over parked over none, with its reason. An avoided vendor cannot be a target, and a merge clears its target.
 52. Every insert, update and delete of a stamped row leaves one change row: the record's key, the fields it changed from what to what, and who made it and when. A statement that changes nothing leaves none.
 53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update, a delete or an owner-requested erase.
@@ -1668,13 +1668,9 @@ The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `PO
 
 ### Starred deals
 
-Each partner keeps their own starred deals (owner, 2026-11-24, #1240). `deal_star` holds one row per user and deal. The database refuses a second row for the same pair, refuses a star that names anyone but the user saving it, and so refuses one from a job, and removes a deal's stars with the deal. Change history keeps each star and unstar.
+Stars are gone (owner, 2026-11-25: "every deal is important"; #1457). No door saves a star and the board read gives none. `deal_star` still holds the stars saved before, one row per user and deal, until the owner approves dropping the table in production. Until then the database keeps its rules: one row per pair, only the user saving it, never a job, removed with the deal, each star and unstar in change history.
 
-Each open deal in the new board read's `deals` gives `starred`, true when the signed-in partner starred it. The old read omits it. The app shows no star and does not sort by it (owner, 2026-11-25: "every deal is important"); the stars stay stored.
-
-`POST /api/engine/deals/{deal_id}/star` and `POST /api/engine/deals/{deal_id}/unstar` take `idempotency_key` and answer `200 { deal_id, starred }` for the signed-in partner. Starring a starred deal or unstarring an unstarred one answers the same. An unknown deal returns `404 not_found`. Jobs have no star route. Shared retry rules apply.
-
-On an existing `next` schema, apply [the deal stars migration](../schema/add-deal-stars.sql) after the owner approves it for production, before deploying the engine that reads stars. It can be applied twice. Fresh schemas include the table.
+Fresh schemas include the table. [The deal stars migration](../schema/add-deal-stars.sql) adds it to an older `next` schema and can be applied twice; no engine needs it any more.
 
 ### App work for the Deals switch
 
@@ -1722,7 +1718,7 @@ These saves follow the same session, replay and `{ from, to }` edit rules as peo
 
 A partner records an introduction that happened, as § "Vendors" describes it. A referral is one the vendor made. Offered and requested introductions stay links (§ "Who knows whom"). These saves use the signed-in session, the shared replay rules, and change history.
 
-- `POST /api/engine/introductions` takes `idempotency_key`, `vendor_id`, `made_by` (`vendor` or `team`), `introduced_party_id`, `introduced_on`, a nonblank `note`, and optionally `deal_id`. One the team made names the signed-in partner. It answers `201 { introduction_id, vendor_id, made_by, introduced_by, introduced_party_id, introduced_on, deal_id, note }`, with `introduced_by` the partner's sign-in name or null. The vendor introduced to itself answers `400 invalid_field_value` naming `introduced_party_id`, and a missing vendor, introduced party or deal answers `404 not_found`. A record without the vendor role is refused by rule 50 (`422 database_refused_the_statement` naming the rule).
+- `POST /api/engine/introductions` takes `idempotency_key`, `vendor_id`, `made_by` (`vendor` or `team`), `introduced_party_id`, `introduced_on`, and optionally `deal_id`, a nonblank `note`, and `introduced_by` (`joe` or `dell`). One the team made names the partner in `introduced_by`, or the signed-in partner without it, so either partner can record the other's introduction. `introduced_by` on one the vendor made answers `400 invalid_field_value`. Change history names the partner who saved it. It answers `201 { introduction_id, vendor_id, made_by, introduced_by, introduced_party_id, introduced_on, deal_id, note }`, with `introduced_by` the partner's sign-in name or null. The vendor introduced to itself answers `400 invalid_field_value` naming `introduced_party_id`, and a missing vendor, introduced party or deal answers `404 not_found`. A record without the vendor role is refused by rule 50 (`422 database_refused_the_statement` naming the rule).
 - `POST /api/engine/introductions/{id}` changes `introduced_on`, `deal_id` or `note`, each as `{ from, to }` with the value the partner saw. A deal can be cleared; the date and note cannot. A missing introduction or deal answers `404 not_found`. A field changed since returns `409 version_conflict` with `fields` and `current`. Who it joins and who made it never change, so the door takes no other field and the engine login has no grant to update them.
 
 ### Link people and companies
@@ -1735,7 +1731,7 @@ These saves follow the same session, replay and `{ from, to }` edit rules. They 
 
 ## Deal page redesign
 
-The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping, deal attention and attention alerts are built. The rest of this section is not built yet.
+The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping, deal attention, attention alerts and invoice dates are built. The rest of this section is not built yet.
 
 ### Deal attention
 
@@ -1756,7 +1752,7 @@ A parked deal, and a deal that is closed, lost, invoiced or otherwise ended, ans
 
 ### Invoice dates
 
-The deal page shows three dates for each commission payment: triggered, sent and paid. Sent is the payment's `invoiced_on` and paid is its `received_on`. Triggered is the day the event happened that lets the brokerage invoice. Before it, the screen names the event, such as "Goes out when the lease is signed". No column holds it yet. Not decided: which event triggers the invoice for each deal kind, and whether triggered is stored or read from the checklist. A new column needs the owner's yes before production.
+The deal page shows three marks for each commission payment: triggered, sent and paid. The deal read answers `invoice` as `{ trigger, triggered_on, payments: [{ id, sent_on, paid_on }] }`. `trigger` is the event that lets the brokerage invoice: `lease_signed` for a lease or renewal, `purchase_closed` for a purchase or land deal, and null for a deal of no known type. `triggered_on` is the day it happened, or null before it: the current lease's `executed_on` for `lease_signed`, and the deal's close day for `purchase_closed`. It is read from those rows, never stored, so no column holds it. The trigger is deal-wide, so a deal with no payment yet still names it. Each payment's `sent_on` is its `invoiced_on` and `paid_on` its `received_on`, ordered by `sent_on` with unsent payments last.
 
 ### Checklist under the phases
 

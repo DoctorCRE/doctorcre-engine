@@ -3,7 +3,7 @@ import { isoMillis } from "../answer.ts";
 import type { DB } from "../database.d.ts";
 import { asText } from "../reader.ts";
 
-type DealType = "lease" | "renewal" | "purchase" | "land";
+export type DealType = "lease" | "renewal" | "purchase" | "land";
 type Status =
 	| "not_recorded"
 	| "complete"
@@ -195,6 +195,7 @@ const DEAL_TYPES = new Map<string | null, DealType>([
 	["purchase", "purchase"],
 	["land", "land"],
 ]);
+export const dealTypeOf = (type: string | null) => DEAL_TYPES.get(type) ?? null;
 
 const invoiceDate = new Intl.DateTimeFormat("en-US", {
 	dateStyle: "medium",
@@ -291,7 +292,7 @@ function criticalDateItems({ deal, criticalDates, today }: Facts): Item[] {
 }
 
 export function checklistOf(facts: Facts) {
-	const type = DEAL_TYPES.get(facts.deal.type) ?? null;
+	const type = dealTypeOf(facts.deal.type);
 	const { templateCurrent } = facts;
 	const head = {
 		schema_version: "deal-checklist.v1",
