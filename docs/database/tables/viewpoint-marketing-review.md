@@ -13,7 +13,7 @@ erDiagram
   "Post review"
   "Post text"
   "Post review" |o--o| "Post text" : "post ID, text version"
-  "Post text" }o--o| "Post text" : "post ID, previous version"
+  "Post text" }o--o| "Post text" : "post ID, previous version#160;#160;#160;#160;"
 ```
 
 ## Tables

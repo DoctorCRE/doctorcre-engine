@@ -19,9 +19,11 @@ type Vendor = {
 };
 type Introduction = {
 	id: string;
+	version: string;
 	vendor_id: string;
 	vendor_name: string;
-	made_by: "vendor" | "team";
+	made_by: "vendor" | "team" | "client";
+	removable: boolean;
 	introduced_by: string | null;
 	introduced_party_id: string;
 	introduced_party_name: string;
@@ -32,6 +34,8 @@ type Introduction = {
 export type ClientDeal = {
 	id: string;
 	name: string;
+	client_id: string;
+	client_name: string;
 	phase: string | null;
 	phase_label: string | null;
 	open: boolean;
@@ -62,9 +66,10 @@ const vendors = sql<
 const introductions = sql<
 	Introduction[]
 >`(select coalesce(jsonb_agg(jsonb_build_object(
-		'id', i.id, 'vendor_id', i.vendor_id, 'vendor_name', vp.name, 'made_by', i.made_by,
+		'id', i.id, 'version', i.xmin::text, 'vendor_id', i.vendor_id, 'vendor_name', vp.name, 'made_by', i.made_by,
 		'introduced_by', u.slug, 'introduced_party_id', i.introduced_party_id,
 		'introduced_party_name', ip.name, 'introduced_on', i.introduced_on, 'note', i.note,
+		'removable', i.source_job_id is null,
 		'chosen', ${onDealAsVendor(sql.ref("deals.id"), sql.ref("i.vendor_id"))}
 	) order by i.introduced_on nulls last, i.created_at, i.id), '[]')
 	from introduction i
@@ -87,7 +92,7 @@ async function readClientDeals(db: Transaction<DB>, client: string) {
 		)
 		.as("deals");
 	const { rows } = await sql<ClientDeal>`
-		select deals.id, deals.name, deals.phase, ph.label as phase_label,
+		select deals.id, deals.name, deals.client_id, deals.client_name, deals.phase, ph.label as phase_label,
 			${isOpenBoardDeal} as open, deals.closed_on, deals.owner,
 			${vendors} as vendors, ${introductions} as introductions
 		from ${deals}

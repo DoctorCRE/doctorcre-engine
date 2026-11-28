@@ -13,7 +13,7 @@ erDiagram
   "Offer claim"
   "Offer document"
   "Proposal"
-  "Offer" }o--o| "Offer" : "deal ID, answers round"
+  "Offer" }o--o| "Offer" : "deal ID, answers round#160;#160;#160;#160;"
   "Offer claim" }o--|| "Offer" : "offer ID"
   "Offer document" }o--|| "Offer" : "offer ID"
 ```

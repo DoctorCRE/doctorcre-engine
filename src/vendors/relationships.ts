@@ -65,7 +65,7 @@ const network = (db: Transaction<DB>, vendor: string) => {
 			join party ip on ip.id = i.introduced_party_id
 			left join app_user u on u.id = i.introduced_by_user_id
 			left join vendor_deal d on d.id = i.deal_id
-			where i.vendor_id = ${vendor})
+			where i.vendor_id = ${vendor} and i.made_by in ('vendor', 'team'))
 		select ${introductions("vendor")} as sent_us,
 			${introductions("team")} as we_sent_them,
 			(select coalesce(jsonb_agg(deal || jsonb_build_object('client', case when client_id is not null

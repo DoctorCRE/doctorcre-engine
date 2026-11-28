@@ -11,7 +11,7 @@ config:
 erDiagram
   "Invoice email"
   "Invoice mailbox"
-  "Invoice email" }o--o| "Invoice email" : "application ID, deal ID, payment ID, email date"
+  "Invoice email" }o--o| "Invoice email" : "application ID, deal ID, payment ID, email date#160;#160;#160;#160;"
 ```
 
 ## Tables

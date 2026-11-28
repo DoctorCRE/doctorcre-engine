@@ -99,7 +99,9 @@ function areaPage(area: Area) {
 		const [left] = markers[link.cardinality];
 		const [, right] = markers[link.parent_cardinality];
 		const label = link.columns.map(plainName).join(", ");
-		return `  "${tableName(link.table)}" ${left}--${right} "${tableName(link.parent_table)}" : "${label}"`;
+		// Nonbreaking spaces keep ELK's self-link labels left of the cardinality markers.
+		const padding = link.table === link.parent_table ? "#160;".repeat(4) : "";
+		return `  "${tableName(link.table)}" ${left}--${right} "${tableName(link.parent_table)}" : "${label}${padding}"`;
 	});
 	const tables = area.tables.map(
 		(table) => `- [${tableName(table)}](${table}.md)`,
@@ -129,56 +131,116 @@ function areaPage(area: Area) {
 	].join("\n");
 }
 
-function areaRanks(areas: Area[]) {
-	// Putting neighbors in different ranks keeps the left-to-right drawing narrow.
-	const ranks = new Map<Area, number>();
-	for (const area of [...areas].sort(
-		(a, b) => b.neighbors.size - a.neighbors.size,
-	)) {
-		const used = new Set(
-			[...area.neighbors.keys()].map((neighbor) => ranks.get(neighbor)),
-		);
-		let rank = 0;
-		while (used.has(rank)) rank++;
-		ranks.set(area, rank);
-	}
-	return ranks;
-}
+const areaGroups = [
+	[
+		"People and clients",
+		["people", "relationships", "clients", "vendors-territories", "leads"],
+	],
+	[
+		"Deals and property",
+		[
+			"deals",
+			"imported-deals",
+			"property",
+			"leases",
+			"offers",
+			"tours",
+			"website",
+		],
+	],
+	[
+		"Mail and activity",
+		["email", "documents", "activity", "home-calendar", "doc"],
+	],
+	[
+		"Marketing and billing",
+		[
+			"marketing-posts",
+			"marketing-categories",
+			"marketing-review",
+			"social-accounts",
+			"invoices",
+			"commissions",
+		],
+	],
+	["Users and records", ["users-jobs", "changes-preferences"]],
+] as const;
 
 const areaUrl =
 	"https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables";
 
 function masterDrawing(areas: Area[]) {
-	const ranks = areaRanks(areas);
-	const boxes = areas.map(({ id, name }) => `  a-${id}["${name}"]`);
-	const lines = areas.flatMap((area) =>
-		[...area.neighbors].flatMap(([other, count]) => {
-			const from = ranks.get(area);
-			const to = ranks.get(other);
-			assert(from !== undefined && to !== undefined);
-			return from < to ? [`  a-${area.id} ---|${count}| a-${other.id}`] : [];
+	const remaining = new Map(areas.map((area) => [area.id, area]));
+	const groups: { name: string; areas: Area[] }[] = areaGroups.map(
+		([name, ids]) => ({
+			name,
+			areas: ids.flatMap((id) => {
+				const area = remaining.get(id);
+				remaining.delete(id);
+				return area ? [area] : [];
+			}),
 		}),
+	);
+	groups.push({ name: "Other areas", areas: [...remaining.values()] });
+	const ordered = groups.flatMap((group) => group.areas);
+	const omitted = new Set(
+		ordered.filter((area) => area.neighbors.size > (areas.length - 1) / 2),
+	);
+	const boxes = groups.flatMap(({ name, areas }, index) =>
+		areas.length > 0
+			? [
+					`  subgraph group${index}["${name}"]`,
+					...areas.map(({ id, name }) => `    a-${id}["${name}"]`),
+					"  end",
+				]
+			: [],
+	);
+	const lines = ordered.flatMap((area, index) =>
+		omitted.has(area)
+			? []
+			: ordered.slice(index + 1).flatMap((other) => {
+					const count = area.neighbors.get(other);
+					return count && !omitted.has(other)
+						? [`  a-${area.id} ---|${count}| a-${other.id}`]
+						: [];
+				}),
 	);
 	const links = areas.map(
 		({ id }) => `  click a-${id} href "${areaUrl}/viewpoint-${id}.md"`,
 	);
+	const omittedNames = [...omitted]
+		.filter(({ id }) => id !== "users-jobs")
+		.map(({ name }) => name);
+	const notes = [];
+	if ([...omitted].some(({ id }) => id === "users-jobs")) {
+		notes.push(
+			"",
+			"Almost every area records who made each row (Users and jobs).",
+		);
+	}
+	if (omittedNames.length) {
+		const names = new Intl.ListFormat("en", { type: "conjunction" }).format(
+			omittedNames,
+		);
+		notes.push("", `The same rule omits lines to ${names}.`);
+	}
 	return [
 		"```mermaid",
 		"---",
 		"config:",
-		"  layout: dagre",
+		"  layout: elk",
 		"  flowchart:",
 		"    htmlLabels: false",
 		"    diagramPadding: 8",
-		"    padding: 4",
-		"    nodeSpacing: 10",
-		"    rankSpacing: 15",
+		"    nodeSpacing: 25",
+		"    rankSpacing: 35",
 		"---",
-		"flowchart LR",
+		"flowchart TB",
 		...boxes,
 		...lines,
 		...links,
 		"```",
+		...notes,
 	].join("\n");
 }
 

@@ -56,7 +56,7 @@ CREATE VIEW vendor_track_record AS (
 | [next.deal_phase_change](next.deal_phase_change.md) | 11      |         | BASE TABLE |
 | [next.deal_party](next.deal_party.md)               | 9       |         | BASE TABLE |
 | [next.role](next.role.md)                           | 7       |         | BASE TABLE |
-| [next.introduction](next.introduction.md)           | 17      |         | BASE TABLE |
+| [next.introduction](next.introduction.md)           | 18      |         | BASE TABLE |
 | [next.party_role](next.party_role.md)               | 25      |         | BASE TABLE |
 
 ---

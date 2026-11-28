@@ -13,7 +13,7 @@ erDiagram
   "Document extraction"
   "Document kind"
   "Party document"
-  "Document" }o--o| "Document" : "supersedes ID, deal ID, kind, previous version"
+  "Document" }o--o| "Document" : "supersedes ID, deal ID, kind, previous version#160;#160;#160;#160;"
   "Document" }o--o| "Document kind" : "kind"
   "Document extraction" }o--|| "Document" : "document ID, deal ID"
   "Party document" }o--|| "Document" : "document ID"

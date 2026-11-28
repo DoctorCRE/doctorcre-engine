@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { main as backfillMain } from "../scripts/queue-introductions.ts";
 import {
 	introductionMail,
 	validateIntroductions,
@@ -9,7 +10,7 @@ import { docLinkOwnerTransaction } from "./doc-link.ts";
 import { claimDocWork, finishDocJudgment } from "./doc-queue.ts";
 import { doorTest } from "./test-door.ts";
 
-const { db, setup, cleanup, save, writerUrl } = doorTest();
+const { db, setup, cleanup, save, writerUrl, connectionString } = doorTest();
 const [joe, vendor, pat, sam, deal] = [
 	randomUUID(),
 	randomUUID(),
@@ -215,14 +216,21 @@ test("capture and Mac judgment save exact unconfirmed introductions without chan
 		select merge_party('${duplicatePerson}', '${pat}');
 		commit;`);
 	const pending = await db.query(
-		"select id, source_job_id from introduction where not confirmed and vendor_id = $1 and introduced_party_id = $2",
+		"select id, source_job_id, xmin::text as version from introduction where not confirmed and vendor_id = $1 and introduced_party_id = $2",
 		[vendor, pat],
 	);
 	assert.equal(pending.rowCount, 1);
 	const sourced = pending.rows[0];
 	assert.ok(sourced);
+	const remove = () =>
+		save({ user: "joe" }, `introductions/${sourced.id}/remove`, {
+			idempotency_key: randomUUID(),
+			version: sourced.version,
+		});
+	assert.equal((await remove())[0], 404);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		update introduction set confirmed = true where id = '${sourced.id}'; commit;`);
+	assert.equal((await remove())[0], 404);
 	await assert.rejects(
 		db.query("delete from doc_judgment_job where id = $1", [
 			sourced.source_job_id,
@@ -325,4 +333,55 @@ test("a verbatim quote must be meaningful and name the records it supports", () 
 		undefined,
 	);
 	assert.ok(validate("I'll introduce C D to Contact Example."));
+});
+
+test("backfill counts and queues eligible stored mail once", async () => {
+	assert.equal(typeof backfillMain, "function");
+	const { spawnSync } = await import("node:child_process");
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${randomUUID()}', 'person', 'Morgan Fixture'), ('${randomUUID()}', 'company', 'Fixture Plumbing');
+		insert into party_role (party_id, role) select id, 'vendor' from party where name = 'Fixture Plumbing'; commit;`);
+	const eligible = await capture("Morgan Fixture meets Fixture Plumbing.");
+	const ineligible = await capture("Morgan Fixture says hello.");
+	const lead = await capture(
+		"Morgan Fixture meets Fixture Plumbing.",
+		"notice@lead.example.test",
+	);
+	await db.query(
+		`insert into lead_source_sender (address, name) values ('notice@lead.example.test', 'Example source')`,
+	);
+	await db.query(
+		"delete from doc_judgment_job where kind = 'introduction' and activity_id = any($1::uuid[])",
+		[[eligible, ineligible, lead]],
+	);
+	const run = (dry: boolean) => {
+		const result = spawnSync(
+			process.execPath,
+			["scripts/queue-introductions.ts", ...(dry ? ["--dry-run"] : [])],
+			{
+				env: { ...process.env, DATABASE_URL: connectionString },
+				encoding: "utf8",
+			},
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(
+			result.stdout,
+			/^eligible,queued,already_queued\n\d+,\d+,\d+\n(dry_run|applied)\n$/,
+		);
+		return result.stdout;
+	};
+	const jobs = async () =>
+		(
+			await db.query(
+				"select activity_id from doc_judgment_job where kind = 'introduction' and activity_id = any($1::uuid[]) order by activity_id",
+				[[eligible, ineligible, lead]],
+			)
+		).rows;
+	const dry = run(true);
+	assert.deepEqual(await jobs(), []);
+	assert.equal(run(false), dry.replace("dry_run", "applied"));
+	assert.deepEqual(await jobs(), [{ activity_id: eligible }]);
+	const rerun = run(false).split("\n")[1]?.split(",");
+	assert.equal(rerun?.[1], "0");
+	assert.deepEqual(await jobs(), [{ activity_id: eligible }]);
 });

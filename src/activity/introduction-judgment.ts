@@ -27,14 +27,17 @@ const containsName = (text: string, name: string) =>
 const nameWords = (text: RawBuilder<unknown>) =>
 	sql`btrim(regexp_replace(lower(${text}), '[^[:alnum:]]+', ' ', 'g'))`;
 
-export async function introductionMail(tx: Transaction<DB>, activity: string) {
-	const {
-		rows: [mail],
-	} = await sql<IntroductionContext>`
+export async function introductionMails(
+	tx: Transaction<DB>,
+	activities: string[],
+) {
+	const { rows: mails } = await sql<
+		IntroductionContext & { activity_id: string }
+	>`
 		with message as materialized (
-			select sender, ' ' || ${nameWords(sql`subject || ' ' || body`)} || ' ' as evidence,
+			select e.activity_id, sender, ' ' || ${nameWords(sql`subject || ' ' || body`)} || ' ' as evidence,
 				(a.happened_at at time zone 'America/Chicago')::date as sent_on
-			from email e join activity a on a.id = e.activity_id where e.activity_id = ${activity}
+			from email e join activity a on a.id = e.activity_id where e.activity_id = any(${activities}::uuid[])
 		), records as (
 			select p.id, p.name, case when u.id is null then 'person' else 'partner' end as kind
 			from party p left join app_user u on u.id = p.id and u.is_account_partner where p.kind = 'person'
@@ -49,16 +52,16 @@ export async function introductionMail(tx: Transaction<DB>, activity: string) {
 				select *, count(*) over (partition by case when kind = 'partner' then 'person' else kind end, name_key) as matches from named
 			) names where matches = 1 and name_key <> ''
 		), affiliations as materialized (
-			select c.company_id, p.name, count(*) over (partition by p.name_key) as vendors
+			select m.activity_id, c.company_id, p.name, count(*) over (partition by m.activity_id, p.name_key) as vendors
 			from party_company c join unique_names p on p.id = c.person_id and p.kind = 'person'
 			join party_role v on v.party_id = c.company_id and v.role = 'vendor'
 			cross join message m
 			where (c.started_on is null or c.started_on <= m.sent_on) and (c.ended_on is null or c.ended_on > m.sent_on)
 				and strpos(m.evidence, ' ' || p.name_key || ' ') > 0
 		), candidates as (
-			select n.id, n.name, n.kind, a.aliases
+			select m.activity_id, n.id, n.name, n.kind, a.aliases
 			from unique_names n cross join message m cross join lateral (
-				select array(select name from affiliations where company_id = n.id and vendors = 1
+				select array(select name from affiliations where activity_id = m.activity_id and company_id = n.id and vendors = 1
 					and n.kind = 'vendor' order by name) as aliases
 			) a
 			where strpos(m.evidence, ' ' || n.name_key || ' ') > 0 or cardinality(a.aliases) > 0 or (
@@ -66,14 +69,21 @@ export async function introductionMail(tx: Transaction<DB>, activity: string) {
 					select from party_email pe where pe.address = m.sender and pe.party_id = n.id
 				))
 		)
-		select sent_on::text,
+		select m.activity_id, sent_on::text,
 			array(select party_id from party_email where address = m.sender order by party_id) as sender_ids,
-			(select jsonb_agg(to_jsonb(c) order by kind, name, id) from candidates c) as candidates
+			(select jsonb_agg(to_jsonb(c) - 'activity_id' order by kind, name, id) from candidates c where c.activity_id = m.activity_id) as candidates
 		from message m where exists (
-			select from candidates v join candidates p on p.id <> v.id where v.kind = 'vendor' and p.kind = 'person'
+			select from candidates v join candidates p on p.id <> v.id where v.activity_id = m.activity_id and p.activity_id = m.activity_id and v.kind = 'vendor' and p.kind = 'person'
 		)
 	`.execute(tx);
-	return mail;
+	return mails;
+}
+
+export async function introductionMail(tx: Transaction<DB>, activity: string) {
+	const mail = (await introductionMails(tx, [activity]))[0];
+	if (!mail) return;
+	const { activity_id: _activityId, ...context } = mail;
+	return context;
 }
 
 const fields = {

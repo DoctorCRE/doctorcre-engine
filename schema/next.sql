@@ -970,15 +970,16 @@ end $$;
 create trigger candidate_review after insert or update on candidate
 	for each row execute function candidate_review();
 
--- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
+-- An introduction between a vendor and the team, or a client bringing a vendor to their deal.
 create table introduction (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	vendor_id uuid not null,
 	vendor_role text not null default 'vendor' check (vendor_role = 'vendor'),
-	made_by text not null check (made_by in ('vendor', 'team')),
+	made_by text not null check (made_by in ('vendor', 'team', 'client')),
+	maker_client_role text,
 	introduced_by_user_id uuid references app_user,
-	-- Whom the vendor introduced to the team, or the team to the vendor.
+	-- The introduced party, or the client who brought the vendor.
 	introduced_party_id uuid not null references party,
 	introduced_on date,
 	deal_id uuid references deal,
@@ -989,6 +990,12 @@ create table introduction (
 	constraint introduction_email_evidence check (
 		(confirmed or source_job_id is not null) and (source_job_id is null or introduced_on is not null)
 	),
+	constraint introduction_client_maker_names_deal check (
+		(made_by = 'client') = (maker_client_role is not null)
+		and (maker_client_role is null or (maker_client_role = 'client' and deal_id is not null))
+	),
+	constraint introduction_maker_is_deal_client
+		foreign key (deal_id, introduced_party_id, maker_client_role) references deal_party on update cascade,
 	constraint introduction_of_someone_else check (introduced_party_id <> vendor_id),
 	constraint introduction_team_names_its_user check ((made_by = 'team') = (introduced_by_user_id is not null)),
 	-- Only a merge changes a party_role key, and its introductions move with it.
@@ -4543,6 +4550,8 @@ alter table introduction add foreign key (source_job_id) references doc_judgment
 alter table introduction enable row level security;
 create policy confirmed_introduction on introduction to engine, engine_reader
 	using (confirmed) with check (confirmed or current_setting('engine.job', true) = 'mail_capture');
+create policy remove_recorded_introduction on introduction as restrictive for delete to engine
+	using (confirmed and source_job_id is null);
 
 -- A recorded row wins, including when a partner records it after the mail job.
 create function keep_recorded_introduction() returns trigger

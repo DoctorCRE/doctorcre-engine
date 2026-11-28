@@ -20,7 +20,7 @@ erDiagram
   "Lease suite" }o--|| "Lease" : "lease ID, property ID"
   "Lease suite" }o--|| "Lease version" : "lease version ID, lease ID"
   "Lease version" }o--|| "Lease" : "lease ID"
-  "Lease version" }o--o| "Lease version" : "lease ID, previous version"
+  "Lease version" }o--o| "Lease version" : "lease ID, previous version#160;#160;#160;#160;"
 ```
 
 ## Tables
