@@ -64,6 +64,8 @@ with `kysely-codegen`, and runs TypeScript and tests in parallel once the databa
 types are ready.
 A test that needs its own database copies that restore, because one restore
 holds about 2,100 locks and many at once exhaust the server's lock table (#237).
+The check drops each test database when its tests finish. On SIGINT or SIGTERM,
+the runner stops its child processes and drops any databases this check created.
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
 query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops` tables, which the generated types leave out.

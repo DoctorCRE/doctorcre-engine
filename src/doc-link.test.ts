@@ -6,6 +6,7 @@ import { runDocLink } from "../scripts/doc-link.ts";
 import { withPartnerAuth } from "./partner-auth.ts";
 import { isArguments } from "./save-door.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
+import { blockedBy } from "./test-lock.ts";
 import worker, { partnerApp, type WorkerEnv } from "./worker.ts";
 
 const appOrigin = "https://app.example.test";
@@ -23,14 +24,10 @@ async function runSubtest(
 		body = run(context);
 		return body;
 	});
-	// Node can finish reporting a cancelled subtest before its body stops using the database.
-	await Promise.allSettled([body]);
-	parent.signal.throwIfAborted();
+	await body;
 }
 
-test("Doc link migration, private credentials and Mac polling", {
-	timeout: 30_000,
-}, async (t) => {
+test("Doc link migration, private credentials and Mac polling", async (t) => {
 	const { db, setup, cleanup, connectionString } = copyTest();
 	const reader = `doc_read_${randomUUID().replaceAll("-", "")}`;
 	const writer = `doc_write_${randomUUID().replaceAll("-", "")}`;
@@ -84,6 +81,14 @@ test("Doc link migration, private credentials and Mac polling", {
 		};
 	}
 	try {
+		const databaseTime = "2100-01-01 00:00:00+00";
+		// The live presence and lease windows must stand still while requests run.
+		await db.query(`create or replace function pg_catalog.clock_timestamp()
+			returns timestamptz language sql volatile
+			as $$ select timestamptz '${databaseTime}' $$;
+			create or replace function pg_catalog.statement_timestamp()
+			returns timestamptz language sql stable
+			as $$ select timestamptz '${databaseTime}' $$`);
 		await db.query(`create role ${reader} login in role engine_reader;
 			create role ${writer} login in role engine;`);
 		await db.query("drop table next.doc_link");
@@ -602,7 +607,7 @@ test("Doc link migration, private credentials and Mac polling", {
 						);
 						const request = poll(credential, capable);
 						try {
-							await waitForBlockedRequest(request);
+							await blockedBy(db, request);
 							await db.query(
 								"update next.doc_turn set claim_until = '-infinity' where claim_id = $1",
 								[turn.claim_id],
@@ -787,27 +792,6 @@ test("Doc link migration, private credentials and Mac polling", {
 		assert.equal((await poll(otherCredential)).status, 401);
 		assert.deepEqual(await presence(first), { ...status, backend: "claude" });
 
-		async function waitForBlockedRequest(
-			request: Promise<unknown>,
-			blocker?: number,
-		) {
-			let finished = false;
-			const finish = () => {
-				finished = true;
-			};
-			void request.then(finish, finish);
-			while (!finished && !t.signal.aborted) {
-				const { rows } = await db.query<{ pid: number }>(
-					`select pid from pg_locks
-					where not granted
-					and coalesce($1, pg_backend_pid()) = any(pg_blocking_pids(pid))`,
-					[blocker ?? null],
-				);
-				if (rows[0]) return rows[0].pid;
-			}
-			assert.ok(finished, "Test timed out waiting for a database lock");
-		}
-
 		async function queueLinkRequests<First, Second>(
 			startFirst: () => Promise<First>,
 			startSecond: () => Promise<Second>,
@@ -820,11 +804,11 @@ test("Doc link migration, private credentials and Mac polling", {
 			const firstRequest = startFirst();
 			let secondRequest: Promise<Second> | undefined;
 			try {
-				const firstPid = await waitForBlockedRequest(firstRequest);
+				const firstPid = await blockedBy(db, firstRequest);
 				assert.ok(firstPid, "First request did not wait for the lock");
 				secondRequest = startSecond();
 				assert.ok(
-					await waitForBlockedRequest(secondRequest, firstPid),
+					await blockedBy(db, secondRequest, firstPid),
 					"Second request did not wait for the lock",
 				);
 			} finally {
@@ -865,12 +849,6 @@ test("Doc link migration, private credentials and Mac polling", {
 			t,
 			"polls refresh presence at most every 15 seconds and keep their order with revoke",
 			async () => {
-				// Keep the fixture ahead of PostgreSQL's real statement clock.
-				const now = "2100-01-01 00:00:00+00";
-				await db.query(`create or replace function pg_catalog.clock_timestamp()
-					returns timestamptz language sql volatile
-					as $$ select timestamptz '${now}' $$`);
-
 				async function lastSeen() {
 					const { rows } = await db.query<{ last_seen_at: string | null }>(
 						"select last_seen_at::text from next.doc_link where owner_user_id = $1",
@@ -881,7 +859,7 @@ test("Doc link migration, private credentials and Mac polling", {
 
 				const credential = await issue(first);
 				assert.equal((await poll(credential)).status, 204);
-				assert.equal(await lastSeen(), now);
+				assert.equal(await lastSeen(), databaseTime);
 				await db.query(
 					`update next.doc_link set last_seen_at = clock_timestamp() - interval '14 seconds'
 					where owner_user_id = $1`,
@@ -897,7 +875,7 @@ test("Doc link migration, private credentials and Mac polling", {
 					[appUserId],
 				);
 				assert.equal((await poll(credential)).status, 204);
-				assert.equal(await lastSeen(), now);
+				assert.equal(await lastSeen(), databaseTime);
 				assert.equal((await presence(first)).connected, true);
 
 				const [pollBeforeRevoke, revoked] = await queueLinkRequests(
@@ -910,7 +888,6 @@ test("Doc link migration, private credentials and Mac polling", {
 			},
 		);
 	} finally {
-		// A timed-out test can still be finishing a request.
 		try {
 			await db.query(`drop role if exists ${reader}, ${writer}`);
 		} finally {
