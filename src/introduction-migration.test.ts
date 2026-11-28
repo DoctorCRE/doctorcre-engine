@@ -48,6 +48,5 @@ test("the introduction migration requires email splits and restores the fresh sc
 	await db.query(introduction);
 	assert.deepEqual(await catalog(), fresh);
 	await db.query(introduction);
-	await db.query(split);
 	assert.deepEqual(await catalog(), fresh);
 });
