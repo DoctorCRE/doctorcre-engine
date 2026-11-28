@@ -425,7 +425,7 @@ export async function runDocLink(
 	}
 }
 
-export async function readDocLinkConfig(path: string) {
+export async function readDocLinkConfigFile(path: string) {
 	await using file = await open(
 		path,
 		constants.O_RDONLY | constants.O_NONBLOCK,
@@ -440,12 +440,18 @@ export async function readDocLinkConfig(path: string) {
 			`Doc link needs a private configuration file. Run chmod 600 "${path}".`,
 		);
 	}
+	const contents = await file.readFile();
 	const config = docLinkConfigSchema.safeParse(
-		readJson(await file.readFile("utf8")),
+		readJson(contents.toString("utf8")),
 	);
-	if (!config.success)
+	return { contents, mode: info.mode & 0o777, config: config.data };
+}
+
+export async function readDocLinkConfig(path: string) {
+	const { config } = await readDocLinkConfigFile(path);
+	if (!config)
 		throw new Error("Doc link could not read its configuration file.");
-	return config.data;
+	return config;
 }
 
 if (import.meta.main) {
