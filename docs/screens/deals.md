@@ -282,13 +282,16 @@ Coming later: when the client last opened the site, once the engine records it. 
 
 ## Wiring
 
-What draws each deal page part from the engine. App files are in `src/ui/` of `DoctorCRE/doctorcre-app`.
+What draws each deal page part from the engine. App files are in `DoctorCRE/doctorcre-app`; `js/pipeline.js` lays out the page and `js/live-client.js` reads the deal.
 
-| Screen part     | App files                            | Engine doors                                                         | Tables                                                                                           |
-| --------------- | ------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| The path        | `deal-path.ts`, `deal-checklist.tsx` | `GET /api/engine/deals/{id}` `checklist`                             | `lease`, `lease_version`, `commission_payment`, `critical_date`, `deal_phase_change`             |
-| Needs attention | Not built yet                        | `GET /api/engine/deals/{id}` and `GET /api/engine/deals` `attention` | `next_step`, `critical_date`, `proposal`, `email`, `activity`, `deal_party`, `deal_phase_change` |
-| Invoice         | Not built yet                        | `GET /api/engine/deals/{id}` `invoice`                               | `commission_payment`, `lease`, `lease_version`, `deal_phase_change`                              |
+| Screen part     | App files                                          | Engine doors                                                                                                                                                                               | Tables                                                                                           |
+| --------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| The path        | `src/ui/deal-path.ts`, `src/ui/deal-checklist.tsx` | `GET /api/engine/deals/{id}` `checklist`                                                                                                                                                   | `lease`, `lease_version`, `commission_payment`, `critical_date`, `deal_phase_change`             |
+| Needs attention | `js/deal-items.js` (`attentionLineHtml`)           | `GET /api/engine/deals/{id}` and `GET /api/engine/deals` `attention`                                                                                                                       | `next_step`, `critical_date`, `proposal`, `email`, `activity`, `deal_party`, `deal_phase_change` |
+| Latest activity | `src/ui/deal-activity.ts` (`renderLatestActivity`) | `GET /api/engine/deals/{id}` `thread`, `correspondence`, `activities`, `documents`; a note saves through `POST /api/engine/activities`                                                     | `activity`, `activity_about`, `email`, `change`, `document`                                      |
+| Invoice         | `src/ui/deal-overview-side.ts`                     | `GET /api/engine/deals/{id}` `invoice`                                                                                                                                                     | `commission_payment`, `lease`, `lease_version`, `deal_phase_change`                              |
+| People          | `src/ui/deal-overview-side.ts` (`dealPeopleHtml`)  | `GET /api/engine/deals/{id}` `client_id`, `client_name`, `participants`: every party by role in the order client, client contact, vendors, referring agent, listing side; partners skipped | `deal_party`, `party`, `party_role`                                                              |
+| One-screen fit  | `css/deal-overview.css`, `src/ui/scroll-thumb.ts`  | none                                                                                                                                                                                       | none                                                                                             |
 
 ## Questions for the owner
 
@@ -310,9 +313,9 @@ What draws each deal page part from the engine. App files are in `src/ui/` of `D
 
 ## Not yet true
 
-Checked against app main on 2026-11-19. The new Deals paths depend on the switches in [The system](../system.md#switches).
+Checked against app main at `7ca0527` (#1728) with #1730 at `e2f4bc81`. The new Deals paths depend on the switches in [The system](../system.md#switches).
 
-- The deal page still shows deal watch settings, which save to the old database and cover only copied deals (#805).
+- Tours cannot list the properties on the client's website: the engine keeps no record of a site's contents, only its registration. Tours adds stops by search until it does.
 - With the old read, the Documents tab's Deliverables section can say "Request unavailable or version changed" when it cannot list files (old system #3232). The tab also says "retained text" and "loaded documents".
 - With the old read, email follow-ups can offer File to existing deal and New deal. They can also show "Sender unavailable", "Summary unavailable" or a role code such as `landlord_side`. The new read offers Accept and Dismiss when the new saves are on.
 - With the old read, a critical date filed as Other can show a lowercase note as its label. The countdown still uses a bare day count for future dates, such as "864 days".
