@@ -38,7 +38,7 @@ What the assistant could not settle alone. The goal is zero.
 
 ## In motion and waiting
 
-- [ ] One line per item: what it is and what it waits for, such as "Reply to Sam Reed is sending · Checking Sent" or "Send the parking study · Snoozed until Dec 1". It shows work still being processed, held or snoozed.
+- [ ] Each row shows what the item is and what it waits for, such as "Reply to Sam Reed is sending · Checking Sent" or "Send the parking study · Snoozed until Dec 1". The title and reason follow the shared two-line preview rule. The tile shows work still being processed, held or snoozed.
 - [ ] A snoozed item offers **Wake**.
 
 ## Today's meetings
