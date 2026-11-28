@@ -17,7 +17,15 @@ before(async () => {
 	await setup();
 	await db.query(`create role ${role} login bypassrls; grant pg_read_all_data to ${role};
 		alter role ${role} set default_transaction_read_only = on;
-		grant usage on schema next to ${role};`);
+		grant usage on schema next to ${role};
+		revoke execute on function pg_catalog.pg_advisory_xact_lock(bigint),
+			pg_catalog.pg_advisory_xact_lock(integer, integer),
+			pg_catalog.pg_try_advisory_xact_lock(bigint),
+			pg_catalog.pg_try_advisory_xact_lock(integer, integer),
+			pg_catalog.pg_advisory_lock(bigint),
+			pg_catalog.pg_advisory_lock(integer, integer),
+			pg_catalog.pg_try_advisory_lock(bigint),
+			pg_catalog.pg_try_advisory_lock(integer, integer) from public;`);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values
 			('${joe}', 'person', 'Joe Fixture'), ('${person}', 'person', 'Morgan Fixture'),
@@ -54,6 +62,11 @@ const run = (url: string, ...args: string[]) =>
 
 test("read-only preview counts three pages and apply queues each eligible email once", async () => {
 	assert.equal(typeof main, "function");
+	const privileges = await db.query(
+		"select has_function_privilege($1, 'pg_catalog.pg_advisory_xact_lock(bigint)', 'execute') as can_lock",
+		[role],
+	);
+	assert.equal(privileges.rows[0].can_lock, false);
 	const preview = run(readUrl.href, "--dry-run");
 	assert.equal(preview.status, 0, preview.stderr);
 	assert.equal(
