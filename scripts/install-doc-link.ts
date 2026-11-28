@@ -11,22 +11,59 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, URL } from "node:url";
 import {
+	configuredBackends,
 	docLinkConfigSchema,
 	docLinkEngineSchema,
-	hasManagedPolicy,
 	postDocLink,
+	type RegisteredBackend,
+	readDocLinkConfig,
 } from "./doc-link.ts";
-import { ownClaudePlanMessage, signInStatus } from "./doc-link-backends.ts";
+import {
+	backends,
+	checkCodexSignIn,
+	codexHome,
+	codexVersion,
+	ownClaudePlanMessage,
+	signInStatus,
+} from "./doc-link-backends.ts";
 
 const label = "com.doctorcre.doc-link";
-const managedSettingsMessage =
-	"Use a Mac without managed Claude Code settings.";
 
 class SetupError extends Error {}
+
+type Setup =
+	| { kind: "claude"; origin: string }
+	| { kind: "codex"; origin: string; binary: string };
+
+function parseSetup(args: readonly string[]): Setup {
+	const [first, binary, origin] = args;
+	if (args.length === 3 && first === "--codex" && binary && origin) {
+		if (!isAbsolute(binary))
+			throw new SetupError("Pass the absolute path to Codex after --codex.");
+		return { kind: "codex", origin, binary };
+	}
+	if (args.length === 1 && first && first !== "--codex")
+		return { kind: "claude", origin: first };
+	throw new SetupError(
+		"Run bash scripts/install-doc-link.sh with the HTTPS engine origin. For Codex, put --codex and its absolute path before the origin.",
+	);
+}
+
+function findOnPath(name: RegisteredBackend["backend"]) {
+	const lookup = spawnSync(
+		"/bin/bash",
+		["-c", 'type -P -- "$1"', "bash", name],
+		{
+			encoding: "utf8",
+		},
+	);
+	const path = lookup.stdout?.trim();
+	return lookup.status === 0 && path ? resolve(path) : undefined;
+}
 
 async function findClaude() {
 	// Keep Anthropic's launcher path so native updates can move its symlink.
@@ -41,11 +78,7 @@ async function findClaude() {
 	) {
 		return nativeLauncher;
 	}
-	const lookup = spawnSync("/bin/bash", ["-c", "type -P claude"], {
-		encoding: "utf8",
-	});
-	const path = lookup.stdout?.trim();
-	return lookup.status === 0 && path ? resolve(path) : undefined;
+	return findOnPath("claude");
 }
 
 async function installClaude() {
@@ -99,7 +132,12 @@ async function replaceFile(path: string, contents: string) {
 	await rename(pending, path);
 }
 
-async function writeLaunchAgent(agent: string, config: string, log: string) {
+async function writeLaunchAgent(
+	agent: string,
+	config: string,
+	log: string,
+	codexDirectory: string | undefined,
+) {
 	const template = await readFile(
 		new URL(`./launchd/${label}.plist`, import.meta.url),
 		"utf8",
@@ -111,6 +149,8 @@ async function writeLaunchAgent(agent: string, config: string, log: string) {
 		),
 		__DOC_LINK_CONFIG_PATH__: config,
 		__DOC_LINK_ERROR_LOG_PATH__: log,
+		__DOC_LINK_PATH__: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+		__CODEX_HOME__: codexDirectory ?? "",
 	};
 	await replaceFile(
 		agent,
@@ -127,35 +167,93 @@ function launchctl(...args: string[]) {
 	return spawnSync("launchctl", args, { stdio: "ignore" }).status === 0;
 }
 
-export async function installDocLink(
-	origin: string | undefined,
-	managedSettings?: Parameters<typeof hasManagedPolicy>[0],
-) {
+async function prepareClaude(
+	recorded: string | undefined,
+): Promise<RegisteredBackend> {
+	const previous =
+		recorded &&
+		(await access(recorded, constants.X_OK).then(
+			() => recorded,
+			() => undefined,
+		));
+	const claude = (await findClaude()) ?? previous ?? (await installClaude());
+	const status = await signInStatus(claude);
+	if (status === "signed_out")
+		throw new SetupError(
+			"Run claude and sign in with your Claude subscription, then run setup again. Try ~/.local/bin/claude if needed.",
+		);
+	if (status === "personal_plan_required")
+		throw new SetupError(ownClaudePlanMessage);
+	if (status !== "ready")
+		throw new SetupError(
+			"Could not check Claude Code sign-in. Run claude to check your sign-in, then run setup again.",
+		);
+	return { backend: "claude", binary: claude };
+}
+
+async function prepareCodex(binary: string): Promise<RegisteredBackend> {
+	const status = await checkCodexSignIn(binary);
+	if (status === "wrong_version")
+		throw new SetupError(
+			`Pass the absolute path to the Codex CLI ${codexVersion} binary after --codex.`,
+		);
+	if (status === "personal_plan_required")
+		throw new SetupError("Switch Codex to your personal ChatGPT plan.");
+	if (status !== "ready") {
+		const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+		const command = `CODEX_HOME=${quote(codexHome())} ${quote(binary)} login`;
+		const store = `-c 'cli_auth_credentials_store="auto"'`;
+		throw new SetupError(
+			status === "signed_out"
+				? `Sign in with your personal ChatGPT plan.\n${command} ${store}`
+				: `Check your Codex sign-in with this command.\n${command} status ${store}`,
+		);
+	}
+	return { backend: "codex", binary };
+}
+
+async function discoverBackend(
+	name: RegisteredBackend["backend"],
+	paths: (string | undefined)[],
+): Promise<RegisteredBackend | undefined> {
+	for (const binary of new Set(paths)) {
+		if (binary && (await backends[name].signIn(binary)) === "ready")
+			return { backend: name, binary };
+	}
+}
+
+export async function installDocLink(args: readonly string[]) {
 	try {
-		const engine = docLinkEngineSchema.safeParse(origin);
+		const setup = parseSetup(args);
+		const engine = docLinkEngineSchema.safeParse(setup.origin);
 		if (!engine.success)
 			throw new SetupError(
 				"Use the HTTPS engine origin supplied with your Doc setup command.",
 			);
-		if (await hasManagedPolicy(managedSettings))
-			throw new SetupError(managedSettingsMessage);
+		const library = join(homedir(), "Library");
+		const support = join(library, "Application Support", "DoctorCRE Doc");
+		const agents = join(library, "LaunchAgents");
+		const configPath = join(support, "link.json");
+		const existing = await readDocLinkConfig(configPath).catch(() => undefined);
+		const registrations = existing ? configuredBackends(existing) : [];
+		const recorded = (name: RegisteredBackend["backend"]) =>
+			registrations.find(({ backend }) => backend === name)?.binary;
 
-		const claude = (await findClaude()) ?? (await installClaude());
-		if (await hasManagedPolicy(managedSettings))
-			throw new SetupError(managedSettingsMessage);
-		const status = await signInStatus(claude);
-		if (status === "signed_out")
-			throw new SetupError(
-				"Run claude and sign in with your Claude subscription, then run setup again. Try ~/.local/bin/claude if needed.",
-			);
-		if (status === "personal_plan_required")
-			throw new SetupError(ownClaudePlanMessage);
-		if (status !== "ready")
-			throw new SetupError(
-				"Could not check Claude Code sign-in. Run claude to check your sign-in, then run setup again.",
-			);
-		if (await hasManagedPolicy(managedSettings))
-			throw new SetupError(managedSettingsMessage);
+		const selected =
+			setup.kind === "codex"
+				? await prepareCodex(setup.binary)
+				: await prepareClaude(recorded("claude"));
+		const other =
+			setup.kind === "codex"
+				? await discoverBackend("claude", [
+						await findClaude(),
+						recorded("claude"),
+					])
+				: await discoverBackend("codex", [
+						findOnPath("codex"),
+						recorded("codex"),
+					]);
+		const registered = other ? [selected, other] : [selected];
 
 		const domain = `gui/${process.getuid?.()}`;
 		const service = `${domain}/${label}`;
@@ -166,7 +264,8 @@ export async function installDocLink(
 
 		const config = docLinkConfigSchema.safeParse({
 			engine: engine.data,
-			claude,
+			default_backend: selected.backend,
+			backends: registered,
 			credential: await readCredential(),
 		});
 		if (!config.success)
@@ -188,9 +287,6 @@ export async function installDocLink(
 				`The engine could not verify the Doc link code (HTTP ${poll.status}). Check the engine origin and try again.`,
 			);
 
-		const library = join(homedir(), "Library");
-		const support = join(library, "Application Support", "DoctorCRE Doc");
-		const agents = join(library, "LaunchAgents");
 		await mkdir(support, { recursive: true, mode: 0o700 });
 		const info = await lstat(support);
 		if (
@@ -202,9 +298,15 @@ export async function installDocLink(
 				"Check that you own the DoctorCRE Doc folder in Library/Application Support and set its permissions to 700.",
 			);
 		await mkdir(agents, { recursive: true });
-		const configPath = join(support, "link.json");
 		const agent = join(agents, `${label}.plist`);
-		await writeLaunchAgent(agent, configPath, join(support, "link.log"));
+		await writeLaunchAgent(
+			agent,
+			configPath,
+			join(support, "link.log"),
+			registered.some(({ backend }) => backend === "codex")
+				? codexHome()
+				: undefined,
+		);
 		await replaceFile(configPath, `${JSON.stringify(config.data)}\n`);
 
 		if (launchctl("print", service) && !launchctl("bootout", service))
@@ -226,4 +328,4 @@ export async function installDocLink(
 	}
 }
 
-if (import.meta.main) await installDocLink(process.argv[2]);
+if (import.meta.main) await installDocLink(process.argv.slice(2));

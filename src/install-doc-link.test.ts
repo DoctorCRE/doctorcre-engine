@@ -5,6 +5,7 @@ import {
 	mkdtempDisposableSync,
 	readFileSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -42,7 +43,6 @@ function fakeMac(
 	const bin = join(scratch, "bin");
 	const claude = join(home, ".local/bin/claude");
 	const commands = join(scratch, "commands");
-	const managed = join(scratch, "managed");
 	const agent = join(home, "Library", "LaunchAgents", `${label}.plist`);
 	const config = join(
 		home,
@@ -52,6 +52,8 @@ function fakeMac(
 		"link.json",
 	);
 	const loaded = join(scratch, "loaded");
+	const codex = join(bin, "codex cli");
+	const codexHome = join(home, ".codex");
 
 	mkdirSync(bin);
 	mkdirSync(join(home, ".local/bin"), { recursive: true });
@@ -109,7 +111,11 @@ esac`,
 		ACTIVITY_READ_SCHEMA: "next",
 		RELATIONSHIPS_READ_SCHEMA: "next",
 	} as const;
-	function run(input = firstCredential) {
+	function run(
+		input = firstCredential,
+		args = [engine],
+		codexDirectory?: string,
+	) {
 		const invocation = join(scratch, "run-installer.mjs");
 		writeFileSync(
 			invocation,
@@ -128,22 +134,195 @@ globalThis.fetch = async (url, init) => {
 	appendFileSync(${JSON.stringify(commands)}, "engine credential checked\\n");
 	return new Response(null, { status: ${engineStatus} });
 };
-await installDocLink(process.argv[2], {
-	directory: process.argv[3],
-	preferences: [process.argv[3] + ".plist"],
-	cache: process.env.HOME + "/.claude/remote-settings.json"
-});
+await installDocLink(process.argv.slice(2));
 `,
 		);
-		return spawnSync(process.execPath, [invocation, engine, managed], {
-			env,
+		return spawnSync(process.execPath, [invocation, ...args], {
+			env: { ...env, CODEX_HOME: codexDirectory },
 			input: `${input}\n`,
 			encoding: "utf8",
 			timeout: 5_000,
 		});
 	}
-	return { run, home, bin, env, claude, agent, config, commands };
+	function runCodex({
+		codexDirectory,
+		defaultBackend = "codex",
+		version = "codex-cli 0.172.0",
+		plan = "plus",
+		signedIn = true,
+	}: {
+		codexDirectory?: string;
+		defaultBackend?: "claude" | "codex";
+		version?: string;
+		plan?: string;
+		signedIn?: boolean;
+	} = {}) {
+		writeFileSync(
+			codex,
+			`#!/bin/sh
+printf 'codex %s\n' "$1" >> "${commands}"
+[ "$CODEX_HOME" = "${codexDirectory ?? codexHome}" ] || exit 3
+case "$1" in
+	--version) printf '%s\n' '${version}' ;;
+	login)
+		[ "$2" = status ] || exit 3
+		case "$*" in *'cli_auth_credentials_store="auto"'*) ;; *) exit 3;; esac
+		printf '%s\n' '${signedIn ? "Logged in using ChatGPT" : "Not logged in"}' >&2
+		exit ${signedIn ? 0 : 1} ;;
+	app-server)
+		while IFS= read -r request; do
+			case "$request" in
+				*'"method":"account/read"'*)
+					printf '%s\n' '{"id":2,"result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt","planType":"${plan}"}}}'
+					;;
+			esac
+		done ;;
+	*) exit 3 ;;
+esac
+`,
+			{ mode: 0o700 },
+		);
+		if (defaultBackend === "claude") {
+			symlinkSync(codex, join(bin, "codex"));
+			return run(firstCredential, [engine], codexDirectory);
+		}
+		return run(firstCredential, ["--codex", codex, engine], codexDirectory);
+	}
+	return {
+		run,
+		runCodex,
+		home,
+		bin,
+		env,
+		claude,
+		codex,
+		agent,
+		config,
+		commands,
+	};
 }
+
+test("Codex setup verifies the credential and loads the same job without using Claude", (t) => {
+	const mac = fakeMac(t, { installed: false });
+	mkdirSync(join(mac.home, ".claude"));
+	writeFileSync(join(mac.home, ".claude", "remote-settings.json"), "{}");
+	const result = mac.runCodex();
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stdout.trim(), "Doc link is ready.");
+	assert.equal(statSync(mac.config).mode & 0o777, 0o600);
+	assert.deepEqual(JSON.parse(readFileSync(mac.config, "utf8")), {
+		engine,
+		credential: firstCredential,
+		default_backend: "codex",
+		backends: [{ backend: "codex", binary: mac.codex }],
+	});
+	const commands = readFileSync(mac.commands, "utf8");
+	assert.match(
+		commands,
+		/codex app-server\n[\s\S]*engine credential checked\n[\s\S]*launchctl bootstrap/,
+	);
+	assert.doesNotMatch(commands, /claude|curl/);
+});
+
+for (const defaultBackend of ["claude", "codex"] as const) {
+	test(`setup registers both signed-in CLIs with ${defaultBackend} as default`, async (t) => {
+		const mac = fakeMac(t);
+		const result = mac.runCodex({
+			defaultBackend,
+			codexDirectory: join(mac.home, "Codex & tools"),
+		});
+		assert.equal(result.status, 0, result.stderr);
+		const codex =
+			defaultBackend === "claude" ? join(mac.bin, "codex") : mac.codex;
+		const entries = {
+			claude: { backend: "claude", binary: mac.claude },
+			codex: { backend: "codex", binary: codex },
+		};
+		assert.deepEqual(await readDocLinkConfig(mac.config), {
+			engine,
+			credential: firstCredential,
+			default_backend: defaultBackend,
+			backends: [
+				entries[defaultBackend],
+				entries[defaultBackend === "claude" ? "codex" : "claude"],
+			],
+		});
+		const plist = readFileSync(mac.agent, "utf8");
+		assert.match(
+			plist,
+			/<key>CODEX_HOME<\/key>\s*<string>[^<]+\/Codex &amp; tools<\/string>/,
+		);
+		assert.ok(plist.includes(`<string>${mac.env.PATH}</string>`));
+	});
+}
+
+test("Claude setup skips an optional signed-out Codex", async (t) => {
+	const mac = fakeMac(t);
+	const result = mac.runCodex({ defaultBackend: "claude", signedIn: false });
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(await readDocLinkConfig(mac.config), {
+		engine,
+		credential: firstCredential,
+		default_backend: "claude",
+		backends: [{ backend: "claude", binary: mac.claude }],
+	});
+});
+
+for (const { name, options, message, expectedCommands } of [
+	{
+		name: "with a different CLI version",
+		options: { version: "codex-cli 0.173.0" },
+		message: /Codex CLI 0\.172\.0/,
+		expectedCommands: "codex --version\n",
+	},
+	{
+		name: "when signed out",
+		options: { signedIn: false },
+		message:
+			/CODEX_HOME=.*codex.* login -c 'cli_auth_credentials_store="auto"'/,
+		expectedCommands: "codex --version\ncodex login\n",
+	},
+	{
+		name: "with a team plan",
+		options: { plan: "team" },
+		message: /personal ChatGPT plan/,
+		expectedCommands: "codex --version\ncodex login\ncodex app-server\n",
+	},
+]) {
+	test(`Codex setup refuses ${name}`, (t) => {
+		const mac = fakeMac(t);
+		const result = mac.runCodex(options);
+		assert.equal(result.status, 1, result.stderr);
+		assert.match(result.stderr, message);
+		assert.equal(readFileSync(mac.commands, "utf8"), expectedCommands);
+		assert.throws(() => statSync(mac.config), { code: "ENOENT" });
+	});
+}
+
+test("the setup command forwards the Codex flag and absolute path intact", (t) => {
+	const mac = fakeMac(t);
+	writeFileSync(
+		join(mac.bin, "node"),
+		`#!/bin/sh
+if [ "$1" = --version ]; then
+	printf '%s\n' v26.0.0
+	exit 0
+fi
+printf '%s\n' "$@"
+`,
+		{ mode: 0o700 },
+	);
+	const args = ["--codex", mac.codex, engine];
+	const result = spawnSync("/bin/bash", [wrapper, ...args], {
+		env: mac.env,
+		encoding: "utf8",
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(
+		result.stdout,
+		[fileURLToPath(installer), ...args, ""].join("\n"),
+	);
+});
 
 test("first setup installs official Claude Code and loads Doc link from private config", async (t) => {
 	const mac = fakeMac(t, { installed: false });
@@ -153,8 +332,9 @@ test("first setup installs official Claude Code and loads Doc link from private 
 	assert.equal(statSync(mac.config).mode & 0o777, 0o600);
 	assert.deepEqual(await readDocLinkConfig(mac.config), {
 		engine,
-		claude: mac.claude,
 		credential: firstCredential,
+		default_backend: "claude",
+		backends: [{ backend: "claude", binary: mac.claude }],
 	});
 	const plist = readFileSync(mac.agent, "utf8");
 	assert.ok(plist.includes(process.execPath));
@@ -257,14 +437,13 @@ test("setup tells a signed-out partner how to sign in and does not load the job"
 	);
 });
 
-test("managed Claude settings block setup before installing or running Claude", (t) => {
+test("managed Claude settings allow Claude chat setup", (t) => {
 	const mac = fakeMac(t, { installed: false });
 	mkdirSync(join(mac.home, ".claude"));
 	writeFileSync(join(mac.home, ".claude", "remote-settings.json"), "{}");
 	const result = mac.run();
-	assert.equal(result.status, 1);
-	assert.match(result.stderr, /without managed Claude Code settings/);
-	assert.equal(readFileSync(mac.commands, "utf8"), "");
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stdout.trim(), "Doc link is ready.");
 });
 
 for (const subscriptionType of ["team", "enterprise"]) {

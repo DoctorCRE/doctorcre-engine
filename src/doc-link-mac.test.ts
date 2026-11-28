@@ -827,6 +827,30 @@ test("Codex config needs an absolute binary path", async () => {
 	);
 });
 
+test("Doc link runs the registered default even when it is listed second", async () => {
+	await runDocLink(
+		{
+			engine,
+			credential,
+			default_backend: "codex",
+			backends: [
+				{ backend: "claude", binary: claude },
+				{ backend: "codex", binary: codex },
+			],
+		},
+		{
+			now: () => 60_000,
+			wait: async () => assert.fail("Did not stop after the poll"),
+			fetch: async (_url, init) => {
+				const headers = new Headers(init?.headers);
+				assert.equal(headers.get("Doc-Link-Backend"), "codex");
+				assert.equal(headers.get("Doc-Link-Readiness"), "ready");
+				return status(401);
+			},
+		},
+	);
+});
+
 for (const [backend, policy] of [
 	["claude", "managed-settings.json"],
 	["codex", "requirements.toml"],

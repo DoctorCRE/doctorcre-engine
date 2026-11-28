@@ -9,15 +9,10 @@ if [[ "$(node --version 2>/dev/null)" != v26.* ]]; then
 	exit 1
 fi
 
-if [[ $# != 1 ]]; then
-	printf '%s\n' 'Run bash scripts/install-doc-link.sh with the HTTPS engine origin.' >&2
-	exit 1
-fi
-
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
 if [[ ! -f "$script_dir/../node_modules/zod/package.json" ]]; then
 	printf '%s\n' 'Run npm ci in the DoctorCRE Engine checkout, then run setup again.' >&2
 	exit 1
 fi
 
-exec node "$script_dir/install-doc-link.ts" "$1"
+exec node "$script_dir/install-doc-link.ts" "$@"

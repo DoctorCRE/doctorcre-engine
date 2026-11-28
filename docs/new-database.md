@@ -2123,7 +2123,7 @@ bash scripts/install-doc-link.sh "$DOC_ENGINE_ORIGIN"
 2. In the app, issue a Doc link credential from your account. Paste it at the hidden Terminal prompt and press Return. A prepared command can also read one line from standard input. Keep the credential out of command arguments and shell history. Setup verifies the credential with the engine before saving it and starting the job. If the code is refused, make a new one in the app and run setup again.
 3. When Terminal says **Doc link is ready.**, open Ask Doc and ask about a deal you can see. Open the source link in the answer to confirm it goes to that deal.
 
-Rerun the command with a new credential to replace the configuration and reload the background job. Setup writes the configuration to `~/Library/Application Support/DoctorCRE Doc/link.json` with mode `0600`. The runner checks the owner and permissions before reading it. The Claude Code command writes the absolute Claude Code path in `claude`. The runner passes the credential to the model process only for chat's Doc MCP connection. It stops on `401` so a revoked credential no longer polls.
+Rerun setup with a new credential to replace the configuration and reload the background job. Setup writes `~/Library/Application Support/DoctorCRE Doc/link.json` with mode `0600`. It records the absolute paths of the signed-in CLIs it finds in `backends` and sets `default_backend` from the setup command. The runner uses that default and can still read earlier single-backend configs. It checks file ownership and permissions before reading the credential, and stops polling on `401`. Mail judgment receives no link credential.
 
 The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts), the configuration, and `link.log` in the same folder as the configuration.
 
@@ -2141,13 +2141,21 @@ If the runner finds a disallowed source or cannot verify its absence, it offers 
 
 Doc chat starts in the partner's home directory and uses that CLI's configured tools and permissions. Claude Code runs `claude -p` and Codex runs `codex exec --json`. The runner adds the claim-scoped Doc MCP connection and reads the final JSON result within the 45-second window. The engine validates the answer and requires confirmation for saves to business records. Mail judgment receives no Doc link credential, and the runner's `allowMailTools` setting is off.
 
-**Switch a Mac to Codex.** Use the macOS login that runs Doc. Install a native binary from the [Codex CLI 0.172.0 release](https://github.com/openai/codex/releases/tag/rust-v0.172.0). If needed, sign in with your personal ChatGPT plan and keep plan usage credits off.
+**Switch a Mac to Codex.** Open Terminal in your usual macOS login. Use the prepared checkout and the HTTPS engine origin supplied with your setup command.
 
-Open `~/Library/Application Support/DoctorCRE Doc/link.json` in a private editor. Keep `engine` and `credential`. Replace `claude` with `backend: "codex"` and `binary` set to the absolute Codex path. Keep the file at mode `0600`. Run `launchctl kickstart -k "gui/$(id -u)/com.doctorcre.doc-link"` and check a sourced answer.
+1. Use the absolute path to a Codex CLI 0.172.0 binary as `DOC_CODEX_BIN`. If you need the binary, get it from the [Codex CLI 0.172.0 release](https://github.com/openai/codex/releases/tag/rust-v0.172.0).
+2. If Codex asks you to sign in, use `"$DOC_CODEX_BIN" login` with your personal ChatGPT plan. Keep plan usage credits off. Setup uses `~/.codex` or the `CODEX_HOME` you set in Terminal.
+3. Run setup. Issue a Doc link credential in the app and paste it at the hidden prompt. Issuing a new credential revokes the previous one.
+
+   ```sh
+   bash scripts/install-doc-link.sh --codex "$DOC_CODEX_BIN" "$DOC_ENGINE_ORIGIN"
+   ```
+
+4. When Terminal says **Doc link is ready.**, ask Doc about a visible test deal and open a source from its answer.
 
 **Switch back to Claude Code.** Run the one-argument setup command above and paste a new Doc link credential. Ask Doc for a sourced answer.
 
-Codex checks `login status` and reads the personal plan type through app-server's `account/read`. It uses `~/.codex` or the `CODEX_HOME` in the background job's environment. Codex mail judgment uses the verified model catalog, a read-only sandbox, and an ephemeral session. It skips user config and rules, sets the project instruction budget to zero, and disables shell, patch, image, web, agent, app, plugin, and hook capabilities. It connects to no MCP server. The runner leaves Codex mail jobs queued if the catalog is missing or changed, or if it finds managed Codex settings or Codex home instructions. When Codex supplies a plan reset time, the runner waits until then. Otherwise it checks again after five minutes.
+Codex checks `login status` and reads the personal plan type through app-server's `account/read`. Setup saves the Codex home in the LaunchAgent so the background job uses the same sign-in and configuration. Codex mail judgment uses the verified model catalog, a read-only sandbox, and an ephemeral session. It skips user config and rules, sets the project instruction budget to zero, and disables shell, patch, image, web, agent, app, plugin, and hook capabilities. It connects to no MCP server. The runner leaves Codex mail jobs queued if the catalog is missing or changed, or if it finds managed Codex settings or Codex home instructions. When Codex supplies a plan reset time, the runner waits until then. Otherwise it checks again after five minutes.
 
 The link retries a dropped claim or completion request after two seconds. While the model runs, a separate poll refreshes presence without asking for work. A completion retry reuses the original claim and answer until the claim expires. The link ignores a `404` completion and polls for new work. The engine can then give an expired turn a fresh claim.
 
