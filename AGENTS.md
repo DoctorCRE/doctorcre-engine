@@ -17,7 +17,7 @@ Code, issues, pull requests, commit messages and CI logs are visible to anyone. 
 5. Once the review passes, the coordinator turns on auto-merge, pinned to the head that was reviewed. The merge queue merges the pull request when the check is green. Never push to main.
 6. Work is done when it is merged and you have checked the result where it runs. Say what you checked in the pull request.
 
-Large work is a parent issue with sub-issues. Each sub-issue gets its own pull request unless it is part of a screen batch or a project batch. A screen batch puts the remaining approved units of one screen on one branch, in one pull request, with one review. A project batch puts the approved slices of one project whose drawing the owner approved on one branch, in one pull request, with one review and one fix round, merged on the owner's word.
+Large work is a parent issue with sub-issues. Each sub-issue gets its own pull request unless it is part of a screen batch or a project batch. A screen batch puts the remaining approved units of one screen on one branch, in one pull request, with one review. A project batch brings together the approved slices of a project whose drawing the owner approved. One worker takes the parent issue and builds the batch on one branch in one pull request. Plan for one review and one round of fixes. Once the review passes and the owner gives the go-ahead, the coordinator turns on auto-merge as described in step 5.
 
 ## Stay on the task
 
