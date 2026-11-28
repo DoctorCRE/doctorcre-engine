@@ -42,7 +42,7 @@ This repo has one check, one ruleset and this file. Do not add hooks, gates, ext
 
 ## Changing the rules
 
-`.github/CODEOWNERS` gives the owner `AGENTS.md`, `CLAUDE.md` and `.github/`. A pull request that changes any of them needs an issue in which the owner asked for the change. Then it merges like any other pull request. A session from the other family reviews it, and the coordinator turns on auto-merge pinned to the head that was reviewed. Nobody uses `--admin` or any other bypass.
+`.github/CODEOWNERS` gives the owner `AGENTS.md`, `CLAUDE.md` and `.github/`. A pull request that changes any of them needs an issue in which the owner asked for the change. Then it merges like any other pull request. A separate session that did not write the change reviews it, and the coordinator turns on auto-merge pinned to the head that was reviewed. Nobody uses `--admin` or any other bypass.
 
 ## Skills
 
@@ -52,11 +52,11 @@ This file wins over any skill or global rule. A skill's advice to add a lint, ch
 
 ## Who does what
 
-A Claude session coordinates: it slices issues, briefs workers, reviews and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
+A Claude session coordinates: it slices issues, briefs workers, arranges each review and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
 
 Codex gpt-6.2-sol builds. Claude Opus 5.5 may also build. Codex gpt-6.1-terra may build routine work such as wording, docs, and small app fixes. Reasoning effort is high, never higher.
 
-Before a pull request merges, a separate session that did not write the change reviews it for correctness and code quality. Codex may review Codex's work. Changes to `AGENTS.md`, `CLAUDE.md`, or `.github/` need a reviewer from the other family. The builder fixes what the review finds. The owner does not review code.
+Before a pull request merges, a separate session that did not write the change reviews it for correctness and code quality. A reviewer from another model family is a bonus when available, never a requirement. The builder fixes what the review finds. The owner does not review code.
 
 Check which models are available each time you start a worker. Never write a provider's usage or balance into this repo.
 
