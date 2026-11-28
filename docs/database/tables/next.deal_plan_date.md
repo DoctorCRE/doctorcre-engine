@@ -12,6 +12,12 @@
 | target_on           | date                     |         | true     |          |                                   |         |
 | todo                | text                     |         | false    |          |                                   |         |
 
+## Viewpoints
+
+| Name                        | Definition                                             |
+| --------------------------- | ------------------------------------------------------ |
+| [Deals](viewpoint-deals.md) | Tables in this area and the foreign keys between them. |
+
 ## Constraints
 
 | Name                                      | Type        | Definition                                                                                                                           |
