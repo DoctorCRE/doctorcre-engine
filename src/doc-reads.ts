@@ -70,12 +70,12 @@ export async function describeDocMatches(
 		from (select distinct unnest(${parties}::uuid[]) as id) matches
 	`.execute(db);
 	const counts = new Map(rows.map(({ id, deal_count }) => [id, deal_count]));
-	return choices.map((choice) => ({
-		...choice,
-		...(choice.ref.kind !== "deal" && {
-			deal_count: counts.get(choice.ref.id),
-		}),
-	}));
+	return choices.map((choice) => {
+		const count = counts.get(choice.ref.id);
+		return choice.ref.kind === "deal" || count === undefined
+			? choice
+			: { ...choice, deal_count: count };
+	});
 }
 
 async function recordFacts(
