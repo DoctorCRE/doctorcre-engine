@@ -18,70 +18,140 @@ erDiagram
   "Party company"
   "Party email"
   "Party phone"
-  "Activity (Activity)" }o--o| "Party" : "from party ID"
-  "Activity about (Activity)" }o--o| "Party" : "party ID"
-  "App user (Users and jobs)" }o--|| "Party" : "ID, kind"
-  "Building ownership (Property)" }o--|| "Party" : "party ID"
-  "Candidate (Leads)" }o--o| "Party" : "promoted party ID"
-  "Change (Changes and preferences)" }o--o| "Merged party" : "merge of"
-  "Client brand (Clients)" }o--o| "Party" : "brand ID, brand kind"
-  "Commission share (Commissions)" }o--|| "Party" : "party ID"
-  "Deal client website (Client websites)" }o--|| "Party" : "client party ID"
-  "Deal party (Deals)" }o--|| "Party" : "party ID"
-  "Do not contact" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Do not contact" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Do not contact" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Activity (area)" {
+    string activity
+    string activity_about
+    string next_step
+  }
+  "Changes and preferences (area)" {
+    string change
+  }
+  "Client websites (area)" {
+    string deal_client_website
+  }
+  "Clients (area)" {
+    string client_brand
+    string national_account
+  }
+  "Commissions (area)" {
+    string commission_share
+  }
+  "Deals (area)" {
+    string deal
+    string deal_party
+  }
+  "Doc (area)" {
+    string doc_judgment_destination
+  }
+  "Documents (area)" {
+    string party_document
+  }
+  "Email (area)" {
+    string email
+  }
+  "Home and calendar (area)" {
+    string home_mark
+  }
+  "Imported deals (area)" {
+    string imported_deal_party
+  }
+  "Leads (area)" {
+    string candidate
+    string lead_contact_draft
+    string lead_email_attention
+    string lead_email_source
+    string lead_stage_move
+  }
+  "Leases (area)" {
+    string lease
+  }
+  "Offers (area)" {
+    string proposal
+  }
+  "Property (area)" {
+    string building_ownership
+  }
+  "Relationships (area)" {
+    string how_found
+    string introduction
+    string party_link
+    string party_role
+    string party_specialty
+  }
+  "Social accounts (area)" {
+    string social_account
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Vendors and territories (area)" {
+    string party_territory
+  }
+  "Activity (area)" }o--o| "Party" : "Activity: from party ID"
+  "Activity (area)" }o--o| "Party" : "Activity about: party ID"
+  "Users and jobs (area)" }o--|| "Party" : "App user: ID, kind"
+  "Property (area)" }o--|| "Party" : "Building ownership: party ID"
+  "Leads (area)" }o--o| "Party" : "Candidate: promoted party ID"
+  "Changes and preferences (area)" }o--o| "Merged party" : "Change: merge of"
+  "Clients (area)" }o--o| "Party" : "Client brand: brand ID, brand kind"
+  "Commissions (area)" }o--|| "Party" : "Commission share: party ID"
+  "Client websites (area)" }o--|| "Party" : "Deal client website: client party ID"
+  "Deals (area)" }o--|| "Party" : "Deal party: party ID"
+  "Do not contact" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Do not contact" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Do not contact" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Do not contact" |o--|| "Party" : "party ID"
-  "Doc judgment destination (Doc)" }o--o| "Party" : "vendor ID"
-  "Home mark (Home and calendar)" }o--o| "Party" : "waiting on party ID"
-  "Imported deal party (Imported deals)" }o--|| "Party" : "party ID"
-  "Introduction (Relationships)" }o--|| "Party" : "introduced party ID"
-  "Lead contact draft (Leads)" |o--|| "Party" : "party ID"
-  "Lead email attention (Leads)" |o--|| "Party" : "party ID"
-  "Lead email source (Leads)" }o--|| "Party" : "party ID"
-  "Lead stage move (Leads)" }o--|| "Party" : "party ID"
-  "Lease (Leases)" }o--|| "Party" : "party ID"
-  "Merged party" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Merged party" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Merged party" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Doc (area)" }o--o| "Party" : "Doc judgment destination: vendor ID"
+  "Home and calendar (area)" }o--o| "Party" : "Home mark: waiting on party ID"
+  "Imported deals (area)" }o--|| "Party" : "Imported deal party: party ID"
+  "Relationships (area)" }o--|| "Party" : "Introduction: introduced party ID"
+  "Leads (area)" |o--|| "Party" : "Lead contact draft: party ID"
+  "Leads (area)" |o--|| "Party" : "Lead email attention: party ID"
+  "Leads (area)" }o--|| "Party" : "Lead email source: party ID"
+  "Leads (area)" }o--|| "Party" : "Lead stage move: party ID"
+  "Leases (area)" }o--|| "Party" : "Lease: party ID"
+  "Merged party" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Merged party" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Merged party" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Merged party" }o--|| "Party" : "survivor ID"
-  "National account (Clients)" }o--o| "Party" : "party ID, kind"
-  "Next step (Activity)" }o--o| "Party" : "call contact party ID"
-  "Next step (Activity)" }o--o| "Party" : "owner party ID"
-  "Next step (Activity)" }o--o| "Party" : "party ID"
-  "Outside ID" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Outside ID" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Outside ID" }o--o| "Deal (Deals)" : "deal ID"
-  "Outside ID" }o--o| "Email (Email)" : "email activity ID"
-  "Outside ID" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Clients (area)" }o--o| "Party" : "National account: party ID, kind"
+  "Activity (area)" }o--o| "Party" : "Next step: call contact party ID"
+  "Activity (area)" }o--o| "Party" : "Next step: owner party ID"
+  "Activity (area)" }o--o| "Party" : "Next step: party ID"
+  "Outside ID" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Outside ID" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Outside ID" }o--o| "Deals (area)" : "deal ID to Deal"
+  "Outside ID" }o--o| "Email (area)" : "email activity ID to Email"
+  "Outside ID" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Outside ID" }o--o| "Party" : "party ID"
-  "Party" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Party" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Party" }o--o| "How found (Relationships)" : "how found"
-  "Party" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Party company" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Party company" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Party company" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Party" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Party" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Party" }o--o| "Relationships (area)" : "how found to How found"
+  "Party" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Party company" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Party company" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Party company" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Party company" }o--|| "Party" : "company ID, company kind"
   "Party company" }o--|| "Party" : "person ID, person kind"
-  "Party document (Documents)" }o--|| "Party" : "party ID"
-  "Party email" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Party email" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Party email" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Documents (area)" }o--|| "Party" : "Party document: party ID"
+  "Party email" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Party email" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Party email" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Party email" }o--|| "Party" : "party ID"
-  "Party link (Relationships)" }o--|| "Party" : "other party ID"
-  "Party link (Relationships)" }o--|| "Party" : "party ID"
-  "Party phone" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Party phone" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Party phone" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Relationships (area)" }o--|| "Party" : "Party link: other party ID"
+  "Relationships (area)" }o--|| "Party" : "Party link: party ID"
+  "Party phone" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Party phone" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Party phone" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Party phone" }o--|| "Party" : "party ID"
-  "Party role (Relationships)" }o--|| "Party" : "party ID"
-  "Party specialty (Relationships)" }o--|| "Party" : "person ID, person kind"
-  "Party territory (Vendors and territories)" }o--|| "Party" : "party ID"
-  "Proposal (Offers)" }o--o| "Party" : "filed vendor ID"
-  "Proposal (Offers)" }o--o| "Party" : "owner party ID"
-  "Proposal (Offers)" }o--o| "Party" : "party ID"
-  "Social account (Social accounts)" }o--|| "Party" : "owner party ID"
+  "Relationships (area)" }o--|| "Party" : "Party role: party ID"
+  "Relationships (area)" }o--|| "Party" : "Party specialty: person ID, person kind"
+  "Vendors and territories (area)" }o--|| "Party" : "Party territory: party ID"
+  "Offers (area)" }o--o| "Party" : "Proposal: filed vendor ID"
+  "Offers (area)" }o--o| "Party" : "Proposal: owner party ID"
+  "Offers (area)" }o--o| "Party" : "Proposal: party ID"
+  "Social accounts (area)" }o--|| "Party" : "Social account: owner party ID"
 ```
 
 ## Connects to

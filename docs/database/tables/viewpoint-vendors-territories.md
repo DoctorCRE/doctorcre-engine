@@ -18,47 +18,63 @@ erDiagram
   "Territory piece"
   "Vendor loan program"
   "Vendor vertical"
-  "Deal (Deals)" }o--o| "Market" : "market ID"
-  "Market" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Market" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Market" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Market city" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Market city" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Market city" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Deals (area)" {
+    string deal
+  }
+  "People (area)" {
+    string party
+  }
+  "Property (area)" {
+    string space_need
+  }
+  "Relationships (area)" {
+    string party_role
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Deals (area)" }o--o| "Market" : "Deal: market ID"
+  "Market" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Market" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Market" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Market city" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Market city" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Market city" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Market city" }o--|| "Market" : "market ID"
-  "Market county" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Market county" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Market county" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Market county" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Market county" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Market county" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Market county" }o--|| "Market" : "market ID"
-  "Party territory" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Party territory" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Party territory" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Party territory" }o--|| "Party (People)" : "party ID"
+  "Party territory" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Party territory" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Party territory" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Party territory" }o--|| "People (area)" : "party ID to Party"
   "Party territory" }o--|| "Territory" : "territory ID"
-  "Party territory review" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Party territory review" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Party territory review" }o--o| "App user (Users and jobs)" : "reviewed by user ID"
-  "Party territory review" }o--o| "App user (Users and jobs)" : "reviewed for user ID"
-  "Party territory review" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Party territory review" }o--o| "Job (Users and jobs)" : "reviewed by job"
+  "Party territory review" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Party territory review" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Party territory review" }o--o| "Users and jobs (area)" : "reviewed by user ID to App user"
+  "Party territory review" }o--o| "Users and jobs (area)" : "reviewed for user ID to App user"
+  "Party territory review" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Party territory review" }o--o| "Users and jobs (area)" : "reviewed by job to Job"
   "Party territory review" |o--|| "Party territory" : "party territory ID"
-  "Space need (Property)" }o--o| "Market" : "market ID"
-  "Territory" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Territory" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Territory" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Territory piece" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Territory piece" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Territory piece" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Property (area)" }o--o| "Market" : "Space need: market ID"
+  "Territory" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Territory" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Territory" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Territory piece" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Territory piece" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Territory piece" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Territory piece" }o--o| "Market" : "market ID"
   "Territory piece" }o--|| "Territory" : "territory ID"
-  "Vendor loan program" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Vendor loan program" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Vendor loan program" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Vendor loan program" }o--|| "Party role (Relationships)" : "party ID, role"
-  "Vendor vertical" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Vendor vertical" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Vendor vertical" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Vendor vertical" }o--|| "Party role (Relationships)" : "party ID, role"
+  "Vendor loan program" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Vendor loan program" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Vendor loan program" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Vendor loan program" }o--|| "Relationships (area)" : "party ID, role to Party role"
+  "Vendor vertical" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Vendor vertical" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Vendor vertical" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Vendor vertical" }o--|| "Relationships (area)" : "party ID, role to Party role"
 ```
 
 ## Connects to

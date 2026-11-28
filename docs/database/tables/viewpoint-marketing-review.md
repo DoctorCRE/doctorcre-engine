@@ -12,16 +12,26 @@ erDiagram
   "Platform metric"
   "Post review"
   "Post text"
-  "Measurement (Property)" }o--|| "Platform metric" : "platform, metric"
-  "Post review" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Post review" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Post review" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Post review" }o--|| "Post (Marketing posts)" : "post ID"
+  "Marketing posts (area)" {
+    string post
+  }
+  "Property (area)" {
+    string measurement
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Property (area)" }o--|| "Platform metric" : "Measurement: platform, metric"
+  "Post review" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Post review" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Post review" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Post review" }o--|| "Marketing posts (area)" : "post ID to Post"
   "Post review" |o--o| "Post text" : "post ID, text version"
-  "Post text" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Post text" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Post text" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Post text" }o--|| "Post (Marketing posts)" : "post ID"
+  "Post text" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Post text" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Post text" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Post text" }o--|| "Marketing posts (area)" : "post ID to Post"
   "Post text" }o--o| "Post text" : "post ID, previous version#160;#160;#160;#160;"
 ```
 

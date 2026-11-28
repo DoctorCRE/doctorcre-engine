@@ -2,33 +2,33 @@
 
 ## Viewpoints
 
-| Name                                                        | Description                                            |
-| ----------------------------------------------------------- | ------------------------------------------------------ |
-| [People](viewpoint-people.md)                               | Tables in this area and the foreign keys between them. |
-| [Relationships](viewpoint-relationships.md)                 | Tables in this area and the foreign keys between them. |
-| [Clients](viewpoint-clients.md)                             | Tables in this area and the foreign keys between them. |
-| [Vendors and territories](viewpoint-vendors-territories.md) | Tables in this area and the foreign keys between them. |
-| [Deals](viewpoint-deals.md)                                 | Tables in this area and the foreign keys between them. |
-| [Imported deals](viewpoint-imported-deals.md)               | Tables in this area and the foreign keys between them. |
-| [Property](viewpoint-property.md)                           | Tables in this area and the foreign keys between them. |
-| [Leases](viewpoint-leases.md)                               | Tables in this area and the foreign keys between them. |
-| [Offers](viewpoint-offers.md)                               | Tables in this area and the foreign keys between them. |
-| [Commissions](viewpoint-commissions.md)                     | Tables in this area and the foreign keys between them. |
-| [Documents](viewpoint-documents.md)                         | Tables in this area and the foreign keys between them. |
-| [Email](viewpoint-email.md)                                 | Tables in this area and the foreign keys between them. |
-| [Leads](viewpoint-leads.md)                                 | Tables in this area and the foreign keys between them. |
-| [Activity](viewpoint-activity.md)                           | Tables in this area and the foreign keys between them. |
-| [Home and calendar](viewpoint-home-calendar.md)             | Tables in this area and the foreign keys between them. |
-| [Doc](viewpoint-doc.md)                                     | Tables in this area and the foreign keys between them. |
-| [Invoices](viewpoint-invoices.md)                           | Tables in this area and the foreign keys between them. |
-| [Marketing posts](viewpoint-marketing-posts.md)             | Tables in this area and the foreign keys between them. |
-| [Marketing categories](viewpoint-marketing-categories.md)   | Tables in this area and the foreign keys between them. |
-| [Marketing review](viewpoint-marketing-review.md)           | Tables in this area and the foreign keys between them. |
-| [Social accounts](viewpoint-social-accounts.md)             | Tables in this area and the foreign keys between them. |
-| [Tours](viewpoint-tours.md)                                 | Tables in this area and the foreign keys between them. |
-| [Client websites](viewpoint-website.md)                     | Tables in this area and the foreign keys between them. |
-| [Users and jobs](viewpoint-users-jobs.md)                   | Tables in this area and the foreign keys between them. |
-| [Changes and preferences](viewpoint-changes-preferences.md) | Tables in this area and the foreign keys between them. |
+| Name                                                        | Description                                                                 |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [People](viewpoint-people.md)                               | Tables in this area and their foreign keys, including links to other areas. |
+| [Relationships](viewpoint-relationships.md)                 | Tables in this area and their foreign keys, including links to other areas. |
+| [Clients](viewpoint-clients.md)                             | Tables in this area and their foreign keys, including links to other areas. |
+| [Vendors and territories](viewpoint-vendors-territories.md) | Tables in this area and their foreign keys, including links to other areas. |
+| [Deals](viewpoint-deals.md)                                 | Tables in this area and their foreign keys, including links to other areas. |
+| [Imported deals](viewpoint-imported-deals.md)               | Tables in this area and their foreign keys, including links to other areas. |
+| [Property](viewpoint-property.md)                           | Tables in this area and their foreign keys, including links to other areas. |
+| [Leases](viewpoint-leases.md)                               | Tables in this area and their foreign keys, including links to other areas. |
+| [Offers](viewpoint-offers.md)                               | Tables in this area and their foreign keys, including links to other areas. |
+| [Commissions](viewpoint-commissions.md)                     | Tables in this area and their foreign keys, including links to other areas. |
+| [Documents](viewpoint-documents.md)                         | Tables in this area and their foreign keys, including links to other areas. |
+| [Email](viewpoint-email.md)                                 | Tables in this area and their foreign keys, including links to other areas. |
+| [Leads](viewpoint-leads.md)                                 | Tables in this area and their foreign keys, including links to other areas. |
+| [Activity](viewpoint-activity.md)                           | Tables in this area and their foreign keys, including links to other areas. |
+| [Home and calendar](viewpoint-home-calendar.md)             | Tables in this area and their foreign keys, including links to other areas. |
+| [Doc](viewpoint-doc.md)                                     | Tables in this area and their foreign keys, including links to other areas. |
+| [Invoices](viewpoint-invoices.md)                           | Tables in this area and their foreign keys, including links to other areas. |
+| [Marketing posts](viewpoint-marketing-posts.md)             | Tables in this area and their foreign keys, including links to other areas. |
+| [Marketing categories](viewpoint-marketing-categories.md)   | Tables in this area and their foreign keys, including links to other areas. |
+| [Marketing review](viewpoint-marketing-review.md)           | Tables in this area and their foreign keys, including links to other areas. |
+| [Social accounts](viewpoint-social-accounts.md)             | Tables in this area and their foreign keys, including links to other areas. |
+| [Tours](viewpoint-tours.md)                                 | Tables in this area and their foreign keys, including links to other areas. |
+| [Client websites](viewpoint-website.md)                     | Tables in this area and their foreign keys, including links to other areas. |
+| [Users and jobs](viewpoint-users-jobs.md)                   | Tables in this area and their foreign keys, including links to other areas. |
+| [Changes and preferences](viewpoint-changes-preferences.md) | Tables in this area and their foreign keys, including links to other areas. |
 
 ## Tables
 

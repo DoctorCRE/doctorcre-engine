@@ -12,15 +12,22 @@ erDiagram
   "Design template"
   "Idea"
   "Platform format"
-  "Design template" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Design template" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Design template" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Idea" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Idea" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Idea" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Post (Marketing posts)" }o--o| "Design template" : "design template ID"
-  "Post (Marketing posts)" }o--o| "Idea" : "idea ID"
-  "Post (Marketing posts)" }o--|| "Platform format" : "platform, format"
+  "Marketing posts (area)" {
+    string post
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Design template" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Design template" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Design template" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Idea" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Idea" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Idea" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Marketing posts (area)" }o--o| "Design template" : "Post: design template ID"
+  "Marketing posts (area)" }o--o| "Idea" : "Post: idea ID"
+  "Marketing posts (area)" }o--|| "Platform format" : "Post: platform, format"
 ```
 
 ## Connects to

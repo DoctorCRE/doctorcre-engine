@@ -14,9 +14,9 @@
 
 ## Viewpoints
 
-| Name                                                        | Definition                                             |
-| ----------------------------------------------------------- | ------------------------------------------------------ |
-| [Vendors and territories](viewpoint-vendors-territories.md) | Tables in this area and the foreign keys between them. |
+| Name                                                        | Definition                                                                  |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [Vendors and territories](viewpoint-vendors-territories.md) | Tables in this area and their foreign keys, including links to other areas. |
 
 ## Constraints
 

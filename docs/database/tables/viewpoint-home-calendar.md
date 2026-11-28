@@ -14,36 +14,61 @@ erDiagram
   "Home mark"
   "Home update"
   "Weekly review"
-  "Calendar agenda" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Calendar agenda" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Calendar agenda" |o--|| "App user (Users and jobs)" : "user ID"
-  "Calendar agenda" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Calendar review dismissal" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Calendar review dismissal" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Calendar review dismissal" }o--|| "App user (Users and jobs)" : "user ID"
-  "Calendar review dismissal" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Home mark" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Home mark" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Home mark" }o--|| "App user (Users and jobs)" : "user ID"
+  "Activity (area)" {
+    string next_step
+  }
+  "Deals (area)" {
+    string deal
+  }
+  "Email (area)" {
+    string reply_draft
+  }
+  "Offers (area)" {
+    string proposal
+  }
+  "People (area)" {
+    string party
+  }
+  "Property (area)" {
+    string property
+  }
+  "Relationships (area)" {
+    string party_role
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Calendar agenda" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Calendar agenda" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Calendar agenda" |o--|| "Users and jobs (area)" : "user ID to App user"
+  "Calendar agenda" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Calendar review dismissal" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Calendar review dismissal" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Calendar review dismissal" }o--|| "Users and jobs (area)" : "user ID to App user"
+  "Calendar review dismissal" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Home mark" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Home mark" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Home mark" }o--|| "Users and jobs (area)" : "user ID to App user"
   "Home mark" }o--o| "Home update" : "home update ID, user ID"
-  "Home mark" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Home mark" }o--o| "Next step (Activity)" : "call follow up ID"
-  "Home mark" }o--o| "Next step (Activity)" : "next step ID"
-  "Home mark" }o--o| "Party (People)" : "waiting on party ID"
-  "Home mark" }o--o| "Proposal (Offers)" : "proposal ID"
-  "Home mark" }o--o| "Reply draft (Email)" : "reply draft ID, user ID"
-  "Home update" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Home update" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Home update" }o--|| "App user (Users and jobs)" : "user ID"
-  "Home update" }o--|| "Deal (Deals)" : "deal ID"
-  "Home update" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Home update" }o--o| "Property (Property)" : "property ID"
-  "Weekly review" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Weekly review" }o--o| "App user (Users and jobs)" : "changed by user ID, reviewer is partner"
-  "Weekly review" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Weekly review" }o--o| "Deal (Deals)" : "deal ID"
-  "Weekly review" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Weekly review" }o--o| "Party role (Relationships)" : "party ID, lead role"
+  "Home mark" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Home mark" }o--o| "Activity (area)" : "call follow up ID to Next step"
+  "Home mark" }o--o| "Activity (area)" : "next step ID to Next step"
+  "Home mark" }o--o| "People (area)" : "waiting on party ID to Party"
+  "Home mark" }o--o| "Offers (area)" : "proposal ID to Proposal"
+  "Home mark" }o--o| "Email (area)" : "reply draft ID, user ID to Reply draft"
+  "Home update" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Home update" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Home update" }o--|| "Users and jobs (area)" : "user ID to App user"
+  "Home update" }o--|| "Deals (area)" : "deal ID to Deal"
+  "Home update" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Home update" }o--o| "Property (area)" : "property ID to Property"
+  "Weekly review" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Weekly review" }o--o| "Users and jobs (area)" : "changed by user ID, reviewer is partner to App user"
+  "Weekly review" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Weekly review" }o--o| "Deals (area)" : "deal ID to Deal"
+  "Weekly review" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Weekly review" }o--o| "Relationships (area)" : "party ID, lead role to Party role"
 ```
 
 ## Connects to

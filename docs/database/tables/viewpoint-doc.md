@@ -14,19 +14,39 @@ erDiagram
   "Doc judgment job"
   "Doc link"
   "Doc turn"
-  "Doc conversation" }o--|| "App user (Users and jobs)" : "owner user ID, is account partner"
-  "Doc judgment destination" }o--o| "Deal (Deals)" : "deal ID"
+  "Changes and preferences (area)" {
+    string save_receipt
+  }
+  "Deals (area)" {
+    string deal
+  }
+  "Email (area)" {
+    string email_mailbox
+    string reply_draft
+  }
+  "People (area)" {
+    string party
+  }
+  "Relationships (area)" {
+    string introduction
+    string party_role
+  }
+  "Users and jobs (area)" {
+    string app_user
+  }
+  "Doc conversation" }o--|| "Users and jobs (area)" : "owner user ID, is account partner to App user"
+  "Doc judgment destination" }o--o| "Deals (area)" : "deal ID to Deal"
   "Doc judgment destination" }o--o| "Doc judgment job" : "job ID, job kind"
-  "Doc judgment destination" }o--o| "Party (People)" : "vendor ID"
-  "Doc judgment destination" }o--o| "Party role (Relationships)" : "vendor ID, vendor role"
-  "Doc judgment job" }o--|| "App user (Users and jobs)" : "owner user ID, is account partner"
+  "Doc judgment destination" }o--o| "People (area)" : "vendor ID to Party"
+  "Doc judgment destination" }o--o| "Relationships (area)" : "vendor ID, vendor role to Party role"
+  "Doc judgment job" }o--|| "Users and jobs (area)" : "owner user ID, is account partner to App user"
   "Doc judgment job" }o--o| "Doc judgment destination" : "ID, first destination"
-  "Doc judgment job" }o--|| "Email mailbox (Email)" : "activity ID, owner user ID"
-  "Doc link" }o--|| "App user (Users and jobs)" : "owner user ID, is account partner"
+  "Doc judgment job" }o--|| "Email (area)" : "activity ID, owner user ID to Email mailbox"
+  "Doc link" }o--|| "Users and jobs (area)" : "owner user ID, is account partner to App user"
   "Doc turn" }o--|| "Doc conversation" : "conversation ID, owner user ID"
-  "Doc turn" |o--o| "Save receipt (Changes and preferences)" : "confirmation key"
-  "Introduction (Relationships)" }o--o| "Doc judgment job" : "source job ID"
-  "Reply draft (Email)" }o--o| "Doc turn" : "confirmed doc turn ID, owner user ID"
+  "Doc turn" |o--o| "Changes and preferences (area)" : "confirmation key to Save receipt"
+  "Relationships (area)" }o--o| "Doc judgment job" : "Introduction: source job ID"
+  "Email (area)" }o--o| "Doc turn" : "Reply draft: confirmed doc turn ID, owner user ID"
 ```
 
 ## Connects to

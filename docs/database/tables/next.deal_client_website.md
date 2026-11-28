@@ -17,9 +17,9 @@
 
 ## Viewpoints
 
-| Name                                    | Definition                                             |
-| --------------------------------------- | ------------------------------------------------------ |
-| [Client websites](viewpoint-website.md) | Tables in this area and the foreign keys between them. |
+| Name                                    | Definition                                                                  |
+| --------------------------------------- | --------------------------------------------------------------------------- |
+| [Client websites](viewpoint-website.md) | Tables in this area and their foreign keys, including links to other areas. |
 
 ## Constraints
 

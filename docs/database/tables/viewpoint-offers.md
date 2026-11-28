@@ -13,48 +13,87 @@ erDiagram
   "Offer claim"
   "Offer document"
   "Proposal"
-  "Critical date (Leases)" }o--o| "Offer" : "offer ID, deal ID"
-  "Home mark (Home and calendar)" }o--o| "Proposal" : "proposal ID"
-  "Lease version (Leases)" }o--o| "Offer" : "offer ID"
-  "Offer" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Offer" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Offer" }o--|| "Deal party (Deals)" : "deal ID, from party ID, from role"
-  "Offer" }o--|| "Deal property (Property)" : "deal ID, property ID"
-  "Offer" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Activity (area)" {
+    string activity
+    string activity_about
+    string next_step
+  }
+  "Deals (area)" {
+    string deal
+    string deal_party
+    string phase
+    string stage
+  }
+  "Documents (area)" {
+    string document
+  }
+  "Home and calendar (area)" {
+    string home_mark
+  }
+  "Leads (area)" {
+    string candidate
+  }
+  "Leases (area)" {
+    string critical_date
+    string lease_version
+  }
+  "People (area)" {
+    string party
+  }
+  "Property (area)" {
+    string deal_property
+    string property
+  }
+  "Relationships (area)" {
+    string claim_type
+    string how_found
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Leases (area)" }o--o| "Offer" : "Critical date: offer ID, deal ID"
+  "Home and calendar (area)" }o--o| "Proposal" : "Home mark: proposal ID"
+  "Leases (area)" }o--o| "Offer" : "Lease version: offer ID"
+  "Offer" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Offer" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Offer" }o--|| "Deals (area)" : "deal ID, from party ID, from role to Deal party"
+  "Offer" }o--|| "Property (area)" : "deal ID, property ID to Deal property"
+  "Offer" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Offer" }o--o| "Offer" : "deal ID, answers round#160;#160;#160;#160;"
-  "Offer claim" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Offer claim" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Offer claim" }o--|| "Claim type (Relationships)" : "claim type"
-  "Offer claim" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Offer claim" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Offer claim" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Offer claim" }o--|| "Relationships (area)" : "claim type to Claim type"
+  "Offer claim" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Offer claim" }o--|| "Offer" : "offer ID"
-  "Offer document" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Offer document" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Offer document" }o--|| "Document (Documents)" : "document ID"
-  "Offer document" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Offer document" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Offer document" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Offer document" }o--|| "Documents (area)" : "document ID to Document"
+  "Offer document" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Offer document" }o--|| "Offer" : "offer ID"
-  "Proposal" }o--o| "Activity (Activity)" : "activity ID, activity kind"
-  "Proposal" }o--o| "Activity about (Activity)" : "activity ID, call deal ID"
-  "Proposal" }o--o| "Activity about (Activity)" : "activity ID, held deal ID"
-  "Proposal" }o--o| "Activity about (Activity)" : "activity ID, party ID"
-  "Proposal" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Proposal" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Proposal" }o--o| "App user (Users and jobs)" : "decided by user ID"
-  "Proposal" |o--o| "Candidate (Leads)" : "candidate ID"
-  "Proposal" }o--o| "Deal (Deals)" : "deal ID"
-  "Proposal" }o--o| "Deal (Deals)" : "filed deal ID"
-  "Proposal" }o--o| "How found (Relationships)" : "how found"
-  "Proposal" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Proposal" }o--|| "Job (Users and jobs)" : "proposed by job"
-  "Proposal" }o--o| "Next step (Activity)" : "merged step ID"
-  "Proposal" }o--o| "Next step (Activity)" : "next step ID, deal ID"
-  "Proposal" }o--o| "Party (People)" : "filed vendor ID"
-  "Proposal" }o--o| "Party (People)" : "owner party ID"
-  "Proposal" }o--o| "Party (People)" : "party ID"
-  "Proposal" }o--o| "Phase (Deals)" : "from phase"
-  "Proposal" }o--o| "Phase (Deals)" : "to phase"
-  "Proposal" }o--o| "Property (Property)" : "property ID"
-  "Proposal" }o--o| "Stage (Deals)" : "lead role, from stage"
-  "Proposal" }o--o| "Stage (Deals)" : "lead role, to stage"
+  "Proposal" }o--o| "Activity (area)" : "activity ID, activity kind to Activity"
+  "Proposal" }o--o| "Activity (area)" : "activity ID, call deal ID to Activity about"
+  "Proposal" }o--o| "Activity (area)" : "activity ID, held deal ID to Activity about"
+  "Proposal" }o--o| "Activity (area)" : "activity ID, party ID to Activity about"
+  "Proposal" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Proposal" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Proposal" }o--o| "Users and jobs (area)" : "decided by user ID to App user"
+  "Proposal" |o--o| "Leads (area)" : "candidate ID to Candidate"
+  "Proposal" }o--o| "Deals (area)" : "deal ID to Deal"
+  "Proposal" }o--o| "Deals (area)" : "filed deal ID to Deal"
+  "Proposal" }o--o| "Relationships (area)" : "how found to How found"
+  "Proposal" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Proposal" }o--|| "Users and jobs (area)" : "proposed by job to Job"
+  "Proposal" }o--o| "Activity (area)" : "merged step ID to Next step"
+  "Proposal" }o--o| "Activity (area)" : "next step ID, deal ID to Next step"
+  "Proposal" }o--o| "People (area)" : "filed vendor ID to Party"
+  "Proposal" }o--o| "People (area)" : "owner party ID to Party"
+  "Proposal" }o--o| "People (area)" : "party ID to Party"
+  "Proposal" }o--o| "Deals (area)" : "from phase to Phase"
+  "Proposal" }o--o| "Deals (area)" : "to phase to Phase"
+  "Proposal" }o--o| "Property (area)" : "property ID to Property"
+  "Proposal" }o--o| "Deals (area)" : "lead role, from stage to Stage"
+  "Proposal" }o--o| "Deals (area)" : "lead role, to stage to Stage"
 ```
 
 ## Connects to

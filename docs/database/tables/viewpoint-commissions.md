@@ -13,25 +13,38 @@ erDiagram
   "Commission payment"
   "Commission share"
   "Commission tier"
-  "Commission" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Commission" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Commission" |o--|| "Deal (Deals)" : "deal ID"
-  "Commission" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Commission payment" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Commission payment" }o--o| "App user (Users and jobs)" : "changed for user ID"
+  "Deals (area)" {
+    string deal
+  }
+  "Invoices (area)" {
+    string invoice_email
+  }
+  "People (area)" {
+    string party
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Commission" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Commission" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Commission" |o--|| "Deals (area)" : "deal ID to Deal"
+  "Commission" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Commission payment" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Commission payment" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
   "Commission payment" }o--|| "Commission" : "deal ID"
-  "Commission payment" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Commission share" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Commission share" }o--o| "App user (Users and jobs)" : "changed for user ID"
+  "Commission payment" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Commission share" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Commission share" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
   "Commission share" }o--|| "Commission" : "deal ID"
-  "Commission share" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Commission share" }o--|| "Party (People)" : "party ID"
-  "Commission tier" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Commission tier" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Commission tier" }o--|| "App user (Users and jobs)" : "partner user ID"
-  "Commission tier" }o--|| "App user (Users and jobs)" : "user ID"
-  "Commission tier" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Invoice email (Invoices)" }o--o| "Commission payment" : "payment ID, deal ID"
+  "Commission share" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Commission share" }o--|| "People (area)" : "party ID to Party"
+  "Commission tier" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Commission tier" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Commission tier" }o--|| "Users and jobs (area)" : "partner user ID to App user"
+  "Commission tier" }o--|| "Users and jobs (area)" : "user ID to App user"
+  "Commission tier" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Invoices (area)" }o--o| "Commission payment" : "Invoice email: payment ID, deal ID"
 ```
 
 ## Connects to

@@ -11,12 +11,22 @@ config:
 erDiagram
   "Social account"
   "Social sign in"
-  "Post (Marketing posts)" }o--|| "Social account" : "social account ID, platform"
-  "Social account" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Social account" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Social account" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Social account" }o--|| "Party (People)" : "owner party ID"
-  "Social sign in" }o--|| "App user (Users and jobs)" : "signed in by user ID"
+  "Marketing posts (area)" {
+    string post
+  }
+  "People (area)" {
+    string party
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Marketing posts (area)" }o--|| "Social account" : "Post: social account ID, platform"
+  "Social account" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Social account" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Social account" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Social account" }o--|| "People (area)" : "owner party ID to Party"
+  "Social sign in" }o--|| "Users and jobs (area)" : "signed in by user ID to App user"
   "Social sign in" }o--|| "Social account" : "social account ID, platform account ID"
 ```
 

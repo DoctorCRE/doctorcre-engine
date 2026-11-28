@@ -11,18 +11,32 @@ config:
 erDiagram
   "Invoice email"
   "Invoice mailbox"
-  "Invoice email" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Invoice email" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Invoice email" }o--o| "Change (Changes and preferences)" : "payment change ID"
-  "Invoice email" }o--o| "Commission payment (Commissions)" : "payment ID, deal ID"
-  "Invoice email" }o--o| "Deal (Deals)" : "deal ID"
-  "Invoice email" }o--o| "Deal phase change (Deals)" : "deal ID, applied phase at"
-  "Invoice email" }o--o| "Deal phase change (Deals)" : "deal ID, prior phase at"
+  "Changes and preferences (area)" {
+    string change
+  }
+  "Commissions (area)" {
+    string commission_payment
+  }
+  "Deals (area)" {
+    string deal
+    string deal_phase_change
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Invoice email" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Invoice email" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Invoice email" }o--o| "Changes and preferences (area)" : "payment change ID to Change"
+  "Invoice email" }o--o| "Commissions (area)" : "payment ID, deal ID to Commission payment"
+  "Invoice email" }o--o| "Deals (area)" : "deal ID to Deal"
+  "Invoice email" }o--o| "Deals (area)" : "deal ID, applied phase at to Deal phase change"
+  "Invoice email" }o--o| "Deals (area)" : "deal ID, prior phase at to Deal phase change"
   "Invoice email" }o--o| "Invoice email" : "application ID, deal ID, payment ID, email date#160;#160;#160;#160;"
-  "Invoice email" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Invoice mailbox" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Invoice mailbox" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Invoice mailbox" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Invoice email" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Invoice mailbox" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Invoice mailbox" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Invoice mailbox" }o--o| "Users and jobs (area)" : "changed by job to Job"
 ```
 
 ## Connects to

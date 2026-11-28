@@ -14,42 +14,64 @@ erDiagram
   "Lease option"
   "Lease suite"
   "Lease version"
-  "Critical date" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Critical date" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Critical date" }o--o| "App user (Users and jobs)" : "confirmed by user ID"
-  "Critical date" }o--o| "App user (Users and jobs)" : "resolved by user ID"
-  "Critical date" }o--|| "Deal (Deals)" : "deal ID"
-  "Critical date" }o--o| "Document (Documents)" : "document ID"
-  "Critical date" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Deals (area)" {
+    string deal
+    string deal_party
+  }
+  "Documents (area)" {
+    string document
+  }
+  "Offers (area)" {
+    string offer
+  }
+  "People (area)" {
+    string party
+  }
+  "Property (area)" {
+    string deal_property
+    string property
+    string suite
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Critical date" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Critical date" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Critical date" }o--o| "Users and jobs (area)" : "confirmed by user ID to App user"
+  "Critical date" }o--o| "Users and jobs (area)" : "resolved by user ID to App user"
+  "Critical date" }o--|| "Deals (area)" : "deal ID to Deal"
+  "Critical date" }o--o| "Documents (area)" : "document ID to Document"
+  "Critical date" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Critical date" }o--o| "Lease option" : "lease version ID, option number"
   "Critical date" }o--o| "Lease version" : "lease version ID"
-  "Critical date" }o--o| "Offer (Offers)" : "offer ID, deal ID"
-  "Deal (Deals)" }o--o| "Lease" : "renews lease ID"
-  "Lease" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Lease" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Lease" |o--o| "Deal (Deals)" : "deal ID"
-  "Lease" }o--o| "Deal party (Deals)" : "deal ID, party ID, client role"
-  "Lease" }o--o| "Deal property (Property)" : "deal ID, property ID"
-  "Lease" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Lease" }o--|| "Party (People)" : "party ID"
-  "Lease" }o--|| "Property (Property)" : "property ID"
-  "Lease option" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Lease option" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Lease option" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Critical date" }o--o| "Offers (area)" : "offer ID, deal ID to Offer"
+  "Deals (area)" }o--o| "Lease" : "Deal: renews lease ID"
+  "Lease" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Lease" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Lease" |o--o| "Deals (area)" : "deal ID to Deal"
+  "Lease" }o--o| "Deals (area)" : "deal ID, party ID, client role to Deal party"
+  "Lease" }o--o| "Property (area)" : "deal ID, property ID to Deal property"
+  "Lease" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Lease" }o--|| "People (area)" : "party ID to Party"
+  "Lease" }o--|| "Property (area)" : "property ID to Property"
+  "Lease option" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Lease option" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Lease option" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Lease option" }o--|| "Lease version" : "lease version ID"
-  "Lease suite" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Lease suite" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Lease suite" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Lease suite" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Lease suite" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Lease suite" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Lease suite" }o--|| "Lease" : "lease ID, property ID"
   "Lease suite" }o--|| "Lease version" : "lease version ID, lease ID"
-  "Lease suite" }o--|| "Suite (Property)" : "suite ID, property ID"
-  "Lease version" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Lease version" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Lease version" }o--|| "Document (Documents)" : "document ID"
-  "Lease version" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Lease suite" }o--|| "Property (area)" : "suite ID, property ID to Suite"
+  "Lease version" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Lease version" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Lease version" }o--|| "Documents (area)" : "document ID to Document"
+  "Lease version" }o--o| "Users and jobs (area)" : "changed by job to Job"
   "Lease version" }o--|| "Lease" : "lease ID"
   "Lease version" }o--o| "Lease version" : "lease ID, previous version#160;#160;#160;#160;"
-  "Lease version" }o--o| "Offer (Offers)" : "offer ID"
+  "Lease version" }o--o| "Offers (area)" : "offer ID to Offer"
 ```
 
 ## Connects to

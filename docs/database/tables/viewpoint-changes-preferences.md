@@ -13,19 +13,32 @@ erDiagram
   "Imported change"
   "Save receipt"
   "User preference"
-  "Change" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Change" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Change" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Change" }o--o| "Merged party (People)" : "merge of"
-  "Doc turn (Doc)" |o--o| "Save receipt" : "confirmation key"
-  "Imported change" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Imported change" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Imported change" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Invoice email (Invoices)" }o--o| "Change" : "payment change ID"
-  "User preference" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "User preference" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "User preference" |o--|| "App user (Users and jobs)" : "user ID"
-  "User preference" }o--o| "Job (Users and jobs)" : "changed by job"
+  "Doc (area)" {
+    string doc_turn
+  }
+  "Invoices (area)" {
+    string invoice_email
+  }
+  "People (area)" {
+    string merged_party
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Change" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Change" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Change" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Change" }o--o| "People (area)" : "merge of to Merged party"
+  "Doc (area)" |o--o| "Save receipt" : "Doc turn: confirmation key"
+  "Imported change" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Imported change" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Imported change" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Invoices (area)" }o--o| "Change" : "Invoice email: payment change ID"
+  "User preference" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "User preference" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "User preference" |o--|| "Users and jobs (area)" : "user ID to App user"
+  "User preference" }o--o| "Users and jobs (area)" : "changed by job to Job"
 ```
 
 ## Connects to

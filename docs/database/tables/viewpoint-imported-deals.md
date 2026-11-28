@@ -15,32 +15,47 @@ erDiagram
   "Imported deal invoiced"
   "Imported deal owner"
   "Imported deal party"
-  "Imported automatic phase move" |o--|| "Deal phase change (Deals)" : "deal ID, happened at"
-  "Imported automatic phase move" }o--|| "Phase (Deals)" : "prior phase"
-  "Imported deal board" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Imported deal board" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Imported deal board" |o--|| "Deal (Deals)" : "deal ID"
-  "Imported deal board" }o--o| "Deal phase change (Deals)" : "deal ID, phase at"
-  "Imported deal board" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Imported deal board" }o--o| "Phase (Deals)" : "phase"
-  "Imported deal history" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Imported deal history" }o--|| "Deal (Deals)" : "deal ID"
-  "Imported deal history" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Imported deal invoiced" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Imported deal invoiced" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Imported deal invoiced" |o--|| "Deal (Deals)" : "deal ID"
-  "Imported deal invoiced" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Imported deal owner" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Imported deal owner" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Imported deal owner" }o--|| "App user (Users and jobs)" : "user ID"
-  "Imported deal owner" }o--|| "Deal (Deals)" : "deal ID"
-  "Imported deal owner" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Imported deal party" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Imported deal party" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Imported deal party" }o--|| "Deal (Deals)" : "deal ID"
-  "Imported deal party" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Imported deal party" }o--|| "Party (People)" : "party ID"
-  "Imported deal party" }o--|| "Role (Relationships)" : "role"
+  "Deals (area)" {
+    string deal
+    string deal_phase_change
+    string phase
+  }
+  "People (area)" {
+    string party
+  }
+  "Relationships (area)" {
+    string role
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Imported automatic phase move" |o--|| "Deals (area)" : "deal ID, happened at to Deal phase change"
+  "Imported automatic phase move" }o--|| "Deals (area)" : "prior phase to Phase"
+  "Imported deal board" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Imported deal board" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Imported deal board" |o--|| "Deals (area)" : "deal ID to Deal"
+  "Imported deal board" }o--o| "Deals (area)" : "deal ID, phase at to Deal phase change"
+  "Imported deal board" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Imported deal board" }o--o| "Deals (area)" : "phase to Phase"
+  "Imported deal history" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Imported deal history" }o--|| "Deals (area)" : "deal ID to Deal"
+  "Imported deal history" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Imported deal invoiced" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Imported deal invoiced" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Imported deal invoiced" |o--|| "Deals (area)" : "deal ID to Deal"
+  "Imported deal invoiced" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Imported deal owner" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Imported deal owner" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Imported deal owner" }o--|| "Users and jobs (area)" : "user ID to App user"
+  "Imported deal owner" }o--|| "Deals (area)" : "deal ID to Deal"
+  "Imported deal owner" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Imported deal party" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Imported deal party" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Imported deal party" }o--|| "Deals (area)" : "deal ID to Deal"
+  "Imported deal party" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Imported deal party" }o--|| "People (area)" : "party ID to Party"
+  "Imported deal party" }o--|| "Relationships (area)" : "role to Role"
 ```
 
 ## Connects to

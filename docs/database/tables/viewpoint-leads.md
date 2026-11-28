@@ -17,39 +17,62 @@ erDiagram
   "Lead lane"
   "Lead source sender"
   "Lead stage move"
-  "Candidate" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Candidate" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Candidate" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Candidate" }o--o| "Party (People)" : "promoted party ID"
-  "Candidate" }o--o| "Party role (Relationships)" : "promoted party ID, lead role"
-  "Lead contact draft" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Lead contact draft" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Lead contact draft" }o--o| "App user (Users and jobs)" : "owner user ID"
-  "Lead contact draft" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Lead contact draft" |o--|| "Party (People)" : "party ID"
-  "Lead contact draft" }o--|| "Party role (Relationships)" : "party ID, role"
-  "Lead email attention" }o--o| "App user (Users and jobs)" : "acknowledged by user ID, acknowledger is partner"
+  "Activity (area)" {
+    string activity
+    string activity_about
+  }
+  "Deals (area)" {
+    string stage
+  }
+  "Email (area)" {
+    string email_mailbox
+  }
+  "Offers (area)" {
+    string proposal
+  }
+  "People (area)" {
+    string party
+  }
+  "Relationships (area)" {
+    string party_role
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Candidate" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Candidate" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Candidate" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Candidate" }o--o| "People (area)" : "promoted party ID to Party"
+  "Candidate" }o--o| "Relationships (area)" : "promoted party ID, lead role to Party role"
+  "Lead contact draft" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Lead contact draft" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Lead contact draft" }o--o| "Users and jobs (area)" : "owner user ID to App user"
+  "Lead contact draft" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Lead contact draft" |o--|| "People (area)" : "party ID to Party"
+  "Lead contact draft" }o--|| "Relationships (area)" : "party ID, role to Party role"
+  "Lead email attention" }o--o| "Users and jobs (area)" : "acknowledged by user ID, acknowledger is partner to App user"
   "Lead email attention" }o--|| "Lead email source" : "activity ID, party ID"
-  "Lead email attention" |o--|| "Party (People)" : "party ID"
-  "Lead email evidence" }o--|| "App user (Users and jobs)" : "mailbox user ID"
-  "Lead email source" |o--|| "Activity about (Activity)" : "activity ID, party ID"
-  "Lead email source" }o--|| "Email mailbox (Email)" : "activity ID, mailbox user ID"
-  "Lead email source" }o--|| "Party (People)" : "party ID"
-  "Lead email source" }o--o| "Party role (Relationships)" : "party ID, lead role"
-  "Lead lane" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Lead lane" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Lead lane" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Lead stage move" }o--o| "Activity (Activity)" : "activity ID"
-  "Lead stage move" }o--o| "Activity about (Activity)" : "activity ID, party ID"
-  "Lead stage move" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Lead stage move" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Lead stage move" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Lead stage move" }o--|| "Party (People)" : "party ID"
-  "Lead stage move" }o--|| "Party role (Relationships)" : "party ID, role"
-  "Lead stage move" }o--|| "Stage (Deals)" : "role, from stage"
-  "Lead stage move" }o--|| "Stage (Deals)" : "role, to stage"
-  "Party role (Relationships)" }o--o| "Lead lane" : "lane"
-  "Proposal (Offers)" |o--o| "Candidate" : "candidate ID"
+  "Lead email attention" |o--|| "People (area)" : "party ID to Party"
+  "Lead email evidence" }o--|| "Users and jobs (area)" : "mailbox user ID to App user"
+  "Lead email source" |o--|| "Activity (area)" : "activity ID, party ID to Activity about"
+  "Lead email source" }o--|| "Email (area)" : "activity ID, mailbox user ID to Email mailbox"
+  "Lead email source" }o--|| "People (area)" : "party ID to Party"
+  "Lead email source" }o--o| "Relationships (area)" : "party ID, lead role to Party role"
+  "Lead lane" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Lead lane" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Lead lane" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Lead stage move" }o--o| "Activity (area)" : "activity ID to Activity"
+  "Lead stage move" }o--o| "Activity (area)" : "activity ID, party ID to Activity about"
+  "Lead stage move" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Lead stage move" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Lead stage move" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Lead stage move" }o--|| "People (area)" : "party ID to Party"
+  "Lead stage move" }o--|| "Relationships (area)" : "party ID, role to Party role"
+  "Lead stage move" }o--|| "Deals (area)" : "role, from stage to Stage"
+  "Lead stage move" }o--|| "Deals (area)" : "role, to stage to Stage"
+  "Relationships (area)" }o--o| "Lead lane" : "Party role: lane"
+  "Offers (area)" |o--o| "Candidate" : "Proposal: candidate ID"
 ```
 
 ## Connects to

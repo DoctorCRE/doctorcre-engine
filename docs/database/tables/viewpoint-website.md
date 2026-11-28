@@ -12,13 +12,23 @@ erDiagram
   "Deal client website"
   "Deal client website attempt"
   "Deal client website grant"
-  "Deal client website" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Deal client website" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Deal client website" }o--|| "Deal (Deals)" : "deal ID"
-  "Deal client website" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Deal client website" }o--|| "Party (People)" : "client party ID"
+  "Deals (area)" {
+    string deal
+  }
+  "People (area)" {
+    string party
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Deal client website" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Deal client website" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Deal client website" }o--|| "Deals (area)" : "deal ID to Deal"
+  "Deal client website" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Deal client website" }o--|| "People (area)" : "client party ID to Party"
   "Deal client website attempt" |o--|| "Deal client website" : "slug"
-  "Deal client website grant" }o--|| "App user (Users and jobs)" : "user ID"
+  "Deal client website grant" }o--|| "Users and jobs (area)" : "user ID to App user"
   "Deal client website grant" }o--|| "Deal client website" : "slug"
 ```
 

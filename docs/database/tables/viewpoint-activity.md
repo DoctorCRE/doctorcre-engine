@@ -13,47 +13,77 @@ erDiagram
   "Activity about"
   "Deal attention alert"
   "Next step"
-  "Activity" }o--o| "App user (Users and jobs)" : "calendar review user ID"
-  "Activity" }o--o| "App user (Users and jobs)" : "call owner user ID"
-  "Activity" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Activity" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Activity" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Activity" }o--o| "Party (People)" : "from party ID"
+  "Deals (area)" {
+    string deal
+    string deal_phase_change
+  }
+  "Email (area)" {
+    string email
+  }
+  "Home and calendar (area)" {
+    string home_mark
+  }
+  "Leads (area)" {
+    string lead_email_source
+    string lead_stage_move
+  }
+  "Offers (area)" {
+    string proposal
+  }
+  "People (area)" {
+    string party
+  }
+  "Property (area)" {
+    string property
+  }
+  "Tours (area)" {
+    string tour_plan
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Activity" }o--o| "Users and jobs (area)" : "calendar review user ID to App user"
+  "Activity" }o--o| "Users and jobs (area)" : "call owner user ID to App user"
+  "Activity" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Activity" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Activity" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Activity" }o--o| "People (area)" : "from party ID to Party"
   "Activity about" }o--|| "Activity" : "activity ID"
-  "Activity about" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Activity about" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Activity about" }o--o| "Deal (Deals)" : "deal ID"
-  "Activity about" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Activity about" }o--o| "Party (People)" : "party ID"
-  "Activity about" }o--o| "Property (Property)" : "property ID"
-  "Deal attention alert" }o--|| "App user (Users and jobs)" : "owner user ID"
-  "Deal attention alert" |o--|| "Deal (Deals)" : "deal ID"
-  "Deal phase change (Deals)" }o--o| "Activity" : "call activity ID, call kind"
-  "Deal phase change (Deals)" }o--o| "Activity about" : "call activity ID, deal ID"
-  "Email (Email)" }o--|| "Activity" : "activity ID, activity kind"
-  "Home mark (Home and calendar)" }o--o| "Next step" : "call follow up ID"
-  "Home mark (Home and calendar)" }o--o| "Next step" : "next step ID"
-  "Lead email source (Leads)" |o--|| "Activity about" : "activity ID, party ID"
-  "Lead stage move (Leads)" }o--o| "Activity" : "activity ID"
-  "Lead stage move (Leads)" }o--o| "Activity about" : "activity ID, party ID"
+  "Activity about" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Activity about" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Activity about" }o--o| "Deals (area)" : "deal ID to Deal"
+  "Activity about" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Activity about" }o--o| "People (area)" : "party ID to Party"
+  "Activity about" }o--o| "Property (area)" : "property ID to Property"
+  "Deal attention alert" }o--|| "Users and jobs (area)" : "owner user ID to App user"
+  "Deal attention alert" |o--|| "Deals (area)" : "deal ID to Deal"
+  "Deals (area)" }o--o| "Activity" : "Deal phase change: call activity ID, call kind"
+  "Deals (area)" }o--o| "Activity about" : "Deal phase change: call activity ID, deal ID"
+  "Email (area)" }o--|| "Activity" : "Email: activity ID, activity kind"
+  "Home and calendar (area)" }o--o| "Next step" : "Home mark: call follow up ID"
+  "Home and calendar (area)" }o--o| "Next step" : "Home mark: next step ID"
+  "Leads (area)" |o--|| "Activity about" : "Lead email source: activity ID, party ID"
+  "Leads (area)" }o--o| "Activity" : "Lead stage move: activity ID"
+  "Leads (area)" }o--o| "Activity about" : "Lead stage move: activity ID, party ID"
   "Next step" }o--o| "Activity" : "call activity ID, call kind"
   "Next step" }o--o| "Activity about" : "call activity ID, deal ID"
-  "Next step" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Next step" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Next step" }o--o| "Deal (Deals)" : "deal ID"
-  "Next step" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Next step" }o--o| "Party (People)" : "call contact party ID"
-  "Next step" }o--o| "Party (People)" : "owner party ID"
-  "Next step" }o--o| "Party (People)" : "party ID"
-  "Next step" }o--o| "Property (Property)" : "property ID"
-  "Proposal (Offers)" }o--o| "Activity" : "activity ID, activity kind"
-  "Proposal (Offers)" }o--o| "Activity about" : "activity ID, call deal ID"
-  "Proposal (Offers)" }o--o| "Activity about" : "activity ID, held deal ID"
-  "Proposal (Offers)" }o--o| "Activity about" : "activity ID, party ID"
-  "Proposal (Offers)" }o--o| "Next step" : "merged step ID"
-  "Proposal (Offers)" }o--o| "Next step" : "next step ID, deal ID"
-  "Tour plan (Tours)" }o--o| "Activity" : "completed activity ID, completed activity kind"
-  "Tour plan (Tours)" }o--o| "Activity about" : "completed activity ID, deal ID"
+  "Next step" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Next step" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Next step" }o--o| "Deals (area)" : "deal ID to Deal"
+  "Next step" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Next step" }o--o| "People (area)" : "call contact party ID to Party"
+  "Next step" }o--o| "People (area)" : "owner party ID to Party"
+  "Next step" }o--o| "People (area)" : "party ID to Party"
+  "Next step" }o--o| "Property (area)" : "property ID to Property"
+  "Offers (area)" }o--o| "Activity" : "Proposal: activity ID, activity kind"
+  "Offers (area)" }o--o| "Activity about" : "Proposal: activity ID, call deal ID"
+  "Offers (area)" }o--o| "Activity about" : "Proposal: activity ID, held deal ID"
+  "Offers (area)" }o--o| "Activity about" : "Proposal: activity ID, party ID"
+  "Offers (area)" }o--o| "Next step" : "Proposal: merged step ID"
+  "Offers (area)" }o--o| "Next step" : "Proposal: next step ID, deal ID"
+  "Tours (area)" }o--o| "Activity" : "Tour plan: completed activity ID, completed activity kind"
+  "Tours (area)" }o--o| "Activity about" : "Tour plan: completed activity ID, deal ID"
 ```
 
 ## Connects to

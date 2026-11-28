@@ -104,17 +104,32 @@ const controlsSpacer = 'title: "\\u00a0"';
 
 function areaPage(area: Area) {
 	const boxes = area.tables.map((table) => `  "${tableName(table)}"`);
+	const externalAreas = [...area.neighbors.keys()].sort((a, b) =>
+		a.name.localeCompare(b.name, "en"),
+	);
+	for (const external of externalAreas) {
+		const tables = [...area.external]
+			.filter(([, owner]) => owner === external)
+			.map(([table]) => table.replace(/^next\./, ""));
+		boxes.push(
+			`  "${external.name} (area)" {`,
+			...tables.sort().map((table) => `    string ${table}`),
+			"  }",
+		);
+	}
 	const display = (table: string) => {
 		const external = area.external.get(table);
-		return external
-			? `${tableName(table)} (${external.name})`
-			: tableName(table);
+		return external ? `${external.name} (area)` : tableName(table);
 	};
 	const lines = area.relations.map((link) => {
 		const [left] = markers[link.cardinality];
 		const [, right] = markers[link.parent_cardinality];
-		const label = link.columns.map(plainName).join(", ");
-		// Nonbreaking spaces keep ELK's self-link labels left of the cardinality markers.
+		const columns = link.columns.map(plainName).join(", ");
+		const label = area.external.has(link.table)
+			? `${tableName(link.table)}: ${columns}`
+			: area.external.has(link.parent_table)
+				? `${columns} to ${tableName(link.parent_table)}`
+				: columns;
 		const padding = link.table === link.parent_table ? "#160;".repeat(4) : "";
 		return `  "${display(link.table)}" ${left}--${right} "${display(link.parent_table)}" : "${label}${padding}"`;
 	});
@@ -168,102 +183,40 @@ function areaPage(area: Area) {
 	].join("\n");
 }
 
-const areaGroups = [
-	[
-		"People and clients",
-		["people", "relationships", "clients", "vendors-territories", "leads"],
-	],
-	[
-		"Deals and property",
-		[
-			"deals",
-			"imported-deals",
-			"property",
-			"leases",
-			"offers",
-			"tours",
-			"website",
-		],
-	],
-	[
-		"Mail and activity",
-		["email", "documents", "activity", "home-calendar", "doc"],
-	],
-	[
-		"Marketing and billing",
-		[
-			"marketing-posts",
-			"marketing-categories",
-			"marketing-review",
-			"social-accounts",
-			"invoices",
-			"commissions",
-		],
-	],
-	["Users and records", ["users-jobs", "changes-preferences"]],
-] as const;
-
 const areaUrl =
 	"https://github.com/DoctorCRE/doctorcre-engine/blob/main/docs/database/tables";
 
 function masterDrawing(areas: Area[]) {
-	const remaining = new Map(areas.map((area) => [area.id, area]));
-	const groups: { name: string; areas: Area[] }[] = areaGroups.map(
-		([name, ids]) => ({
-			name,
-			areas: ids.flatMap((id) => {
-				const area = remaining.get(id);
-				remaining.delete(id);
-				return area ? [area] : [];
-			}),
-		}),
-	);
-	groups.push({ name: "Other areas", areas: [...remaining.values()] });
-	const ordered = groups.flatMap((group) => group.areas);
-	const boxes = groups.flatMap(({ name, areas }, index) =>
-		areas.length > 0
-			? [
-					`  subgraph group${index}[" "]`,
-					`    heading-group${index}["${name}"]:::heading`,
-					...areas.map(({ id, name }) => `    a-${id}["${name}"]`),
-					"  end",
-				]
-			: [],
-	);
-	const lines = ordered.flatMap((area, index) =>
-		ordered.slice(index + 1).flatMap((other) => {
-			const count = area.neighbors.get(other);
-			return count ? [`  a-${area.id} ---|${count}| a-${other.id}`] : [];
-		}),
-	);
-	const links = areas.map(
-		({ id }) => `  click a-${id} href "${areaUrl}/viewpoint-${id}.md"`,
-	);
-	// ELK routes through subgraph titles, so give each heading a node it can route around.
-	const headingOrder = groups.flatMap(({ areas: [first] }, index) =>
-		first ? [`  heading-group${index} ~~~ a-${first.id}`] : [],
-	);
-	return [
-		"```mermaid",
-		"---",
-		controlsSpacer,
-		"config:",
-		"  layout: elk",
-		"  flowchart:",
-		"    titleTopMargin: 56",
-		"    htmlLabels: false",
-		"    diagramPadding: 8",
-		"    nodeSpacing: 25",
-		"    rankSpacing: 35",
-		"---",
-		"flowchart TB",
-		...boxes,
-		...lines,
-		...links,
-		...headingOrder,
-		"  classDef heading fill:none,stroke:none,font-weight:bold",
-		"```",
-	].join("\n");
+	return areas
+		.flatMap((area, index) => {
+			const neighbors = areas
+				.slice(index + 1)
+				.filter((other) => area.neighbors.has(other));
+			if (!neighbors.length && area.neighbors.size) return [];
+			return [
+				`### ${area.name}`,
+				"",
+				"```mermaid",
+				"---",
+				"config:",
+				"  layout: elk",
+				"  flowchart:",
+				"    htmlLabels: false",
+				"---",
+				"flowchart LR",
+				`  a-${area.id}["${area.name}"]`,
+				...neighbors.flatMap((other) => [
+					`  a-${other.id}["${other.name}"]`,
+					`  a-${area.id} ---|${area.neighbors.get(other)}| a-${other.id}`,
+				]),
+				...[area, ...neighbors].map(
+					({ id }) => `  click a-${id} href "${areaUrl}/viewpoint-${id}.md"`,
+				),
+				"```",
+				"",
+			];
+		})
+		.join("\n");
 }
 
 export function drawDatabase(input: unknown) {

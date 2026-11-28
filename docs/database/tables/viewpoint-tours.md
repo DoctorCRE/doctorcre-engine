@@ -11,16 +11,30 @@ config:
 erDiagram
   "Tour plan"
   "Tour stop"
-  "Tour plan" }o--o| "Activity (Activity)" : "completed activity ID, completed activity kind"
-  "Tour plan" }o--o| "Activity about (Activity)" : "completed activity ID, deal ID"
-  "Tour plan" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Tour plan" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Tour plan" }o--|| "Deal (Deals)" : "deal ID"
-  "Tour plan" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Tour stop" }o--o| "App user (Users and jobs)" : "changed by user ID"
-  "Tour stop" }o--o| "App user (Users and jobs)" : "changed for user ID"
-  "Tour stop" }o--o| "Job (Users and jobs)" : "changed by job"
-  "Tour stop" }o--|| "Property (Property)" : "property ID"
+  "Activity (area)" {
+    string activity
+    string activity_about
+  }
+  "Deals (area)" {
+    string deal
+  }
+  "Property (area)" {
+    string property
+  }
+  "Users and jobs (area)" {
+    string app_user
+    string job
+  }
+  "Tour plan" }o--o| "Activity (area)" : "completed activity ID, completed activity kind to Activity"
+  "Tour plan" }o--o| "Activity (area)" : "completed activity ID, deal ID to Activity about"
+  "Tour plan" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Tour plan" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Tour plan" }o--|| "Deals (area)" : "deal ID to Deal"
+  "Tour plan" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Tour stop" }o--o| "Users and jobs (area)" : "changed by user ID to App user"
+  "Tour stop" }o--o| "Users and jobs (area)" : "changed for user ID to App user"
+  "Tour stop" }o--o| "Users and jobs (area)" : "changed by job to Job"
+  "Tour stop" }o--|| "Property (area)" : "property ID to Property"
   "Tour stop" }o--|| "Tour plan" : "tour plan ID"
 ```
 
