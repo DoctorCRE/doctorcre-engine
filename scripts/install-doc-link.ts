@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
 	access,
@@ -7,8 +8,10 @@ import {
 	mkdir,
 	mkdtempDisposable,
 	open,
+	readdir,
 	readFile,
 	rename,
+	rmdir,
 	stat,
 	unlink,
 	writeFile,
@@ -176,6 +179,68 @@ function ignoreMissing(error: unknown): undefined {
 	return undefined;
 }
 
+function isLockConflict(error: unknown) {
+	return (
+		error instanceof Error &&
+		"code" in error &&
+		(error.code === "EEXIST" || error.code === "ENOTEMPTY")
+	);
+}
+
+function pidIsAlive(pid: number) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ESRCH")
+			return false;
+		return true;
+	}
+}
+
+async function clearDeadHolder(path: string) {
+	const holders = (await readdir(path).catch(ignoreMissing)) ?? [];
+	const [holder] = holders;
+	if (!holder) return;
+	const pid = Number(/^(\d+)-[\da-f-]+$/.exec(holder)?.[1]);
+	if (
+		holders.length !== 1 ||
+		!Number.isInteger(pid) ||
+		pid <= 0 ||
+		pidIsAlive(pid)
+	)
+		throw new SetupError("Doc setup is already running on this Mac");
+	await unlink(join(path, holder)).catch(ignoreMissing);
+}
+
+async function takeSetupLock() {
+	const path = join(homedir(), ".doctorcre-doc-setup.lock");
+	await clearDeadHolder(path);
+	await using staged = await mkdtempDisposable(
+		join(homedir(), ".doctorcre-doc-setup-"),
+	);
+	const holder = `${process.pid}-${randomUUID()}`;
+	await writeFile(join(staged.path, holder), "", { mode: 0o600, flag: "wx" });
+	// Publish a nonempty directory atomically so its PID is visible from the start.
+	for (;;) {
+		try {
+			await rename(staged.path, path);
+			break;
+		} catch (error) {
+			if (!isLockConflict(error)) throw error;
+			await clearDeadHolder(path);
+		}
+	}
+	return {
+		async [Symbol.asyncDispose]() {
+			await unlink(join(path, holder)).catch(ignoreMissing);
+			await rmdir(path).catch((error: unknown) => {
+				if (!isLockConflict(error)) ignoreMissing(error);
+			});
+		},
+	};
+}
+
 async function readAgent(path: string) {
 	await using file = await open(
 		path,
@@ -201,7 +266,7 @@ async function verifiesCredential(config: Parameters<typeof postDocLink>[0]) {
 	return true;
 }
 
-async function readSetup(plutil: string) {
+async function readSetup(plutil: string, engine: string) {
 	const library = join(homedir(), "Library");
 	const support = join(library, "Application Support", "DoctorCRE Doc");
 	const agents = join(library, "LaunchAgents");
@@ -215,7 +280,10 @@ async function readSetup(plutil: string) {
 		readAgent(agentPath).catch(ignoreMissing),
 	]);
 	const config = stored?.config;
-	const hadValidCode = config ? await verifiesCredential(config) : false;
+	const previousCredential =
+		config && new URL(config.engine).origin === new URL(engine).origin
+			? { config, accepted: await verifiesCredential(config) }
+			: undefined;
 	const plistHome =
 		agent &&
 		spawnSync(
@@ -249,7 +317,7 @@ async function readSetup(plutil: string) {
 		stored,
 		agent,
 		config,
-		hadValidCode,
+		previousCredential,
 		customHome,
 		home: customHome ? resolve(customHome) : codexHome(),
 	};
@@ -268,11 +336,12 @@ async function restoreSetup(
 	changed: boolean,
 ) {
 	// A code can be revoked while the partner enters its replacement.
+	const previous = snapshot.previousCredential;
 	const signedOut =
-		snapshot.config &&
+		previous &&
 		!(
-			snapshot.hadValidCode &&
-			(await verifiesCredential(snapshot.config).catch(() => false))
+			previous.accepted &&
+			(await verifiesCredential(previous.config).catch(() => false))
 		);
 	if (!changed && !signedOut) return;
 
@@ -359,10 +428,8 @@ async function discoverBackend(
 	}
 }
 
-export async function installDocLink(
-	args: readonly string[],
-	{ plutil = "/usr/bin/plutil" } = {},
-) {
+async function configureLink(args: readonly string[], plutil: string) {
+	await using _lock = await takeSetupLock();
 	let snapshot: Awaited<ReturnType<typeof readSetup>> | undefined;
 	let changed = false;
 	try {
@@ -372,7 +439,7 @@ export async function installDocLink(
 			throw new SetupError(
 				"Use the HTTPS engine origin supplied with your Doc setup command.",
 			);
-		snapshot = await readSetup(plutil);
+		snapshot = await readSetup(plutil, engine.data);
 		const { home, domain, service, configPath, agentPath, support, agents } =
 			snapshot;
 		const registrations = snapshot.config
@@ -409,12 +476,8 @@ export async function installDocLink(
 				"Open Terminal under your macOS login and run setup again.",
 			);
 
-		const cached =
-			snapshot.hadValidCode &&
-			snapshot.config &&
-			new URL(snapshot.config.engine).origin === new URL(engine.data).origin
-				? snapshot.config.credential
-				: undefined;
+		const previous = snapshot.previousCredential;
+		const cached = previous?.accepted ? previous.config.credential : undefined;
 		const config = docLinkConfigSchema.safeParse({
 			engine: engine.data,
 			default_backend: selected.backend,
@@ -461,17 +524,23 @@ export async function installDocLink(
 			throw new SetupError(
 				"Could not start Doc link. Check that your macOS login allows background items and run setup again.",
 			);
+	} catch (error) {
+		if (snapshot) await restoreSetup(snapshot, changed);
+		throw error;
+	}
+}
+
+export async function installDocLink(
+	args: readonly string[],
+	{ plutil = "/usr/bin/plutil" } = {},
+) {
+	try {
+		await configureLink(args, plutil);
 		process.stdout.write("Doc link is ready.\n");
 	} catch (error) {
-		const failure = snapshot
-			? await restoreSetup(snapshot, changed).then(
-					() => error,
-					(reason: unknown) => reason,
-				)
-			: error;
 		const message =
-			failure instanceof SetupError
-				? failure.message
+			error instanceof SetupError
+				? error.message
 				: "Could not finish Doc link setup. Check that you can write to your Library folder and run setup again.";
 		process.stderr.write(`${message}\n`);
 		process.exitCode = 1;
