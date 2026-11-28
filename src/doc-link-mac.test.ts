@@ -261,6 +261,34 @@ test("Doc link runs a private Claude print session and submits only the final an
 	assert.equal(observed.logname, "partner");
 });
 
+for (const [name, settings, readiness] of [
+	[
+		"refuses a configured token for chat",
+		{ env: { ANTHROPIC_AUTH_TOKEN: "fixture token" } },
+		"signed_out",
+	],
+	[
+		"offers chat only when isolated mail is signed out",
+		{ fixtureIsolatedSignedOut: true },
+		"ready",
+	],
+] as const) {
+	test(`Claude ${name}`, async () => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, "claude.ts");
+		await copyFile(claude, binary);
+		await writeFile(
+			join(directory.path, "user-settings.json"),
+			JSON.stringify(settings),
+		);
+		assert.deepEqual(await runLink([status(401)], binary), [
+			{ ...poll(readiness), work: null },
+		]);
+	});
+}
+
 test("Doc link refuses a shared credential file and reads a private one", async (t) => {
 	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
 	const path = join(directory, "config.json");
@@ -653,12 +681,14 @@ test("a ready Doc link advertises all its mail jobs and finishes a split claim",
 
 for (const backend of ["claude", "codex"] as const) {
 	test(`${backend} completes every job kind and keeps engine result validation`, async (t) => {
-		await using directory =
-			backend === "codex"
-				? await mkdtempDisposable(join(process.cwd(), ".scratch."))
-				: undefined;
-		const binary = directory ? join(directory.path, "partner-config") : claude;
-		if (directory) {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(
+			directory.path,
+			backend === "codex" ? "partner-config" : "claude.ts",
+		);
+		if (backend === "codex") {
 			await symlink(codex, binary);
 			await writeFile(
 				join(directory.path, "config.toml"),
@@ -670,6 +700,19 @@ for (const backend of ["claude", "codex"] as const) {
 				if (previous === undefined) delete process.env.CODEX_HOME;
 				else process.env.CODEX_HOME = previous;
 			});
+		} else {
+			await copyFile(claude, binary);
+			await writeFile(
+				join(directory.path, "user-settings.json"),
+				JSON.stringify({
+					permissions: { allow: ["Bash"] },
+					hooks: {
+						PreToolUse: [
+							{ hooks: [{ type: "command", command: "fixture-hook" }] },
+						],
+					},
+				}),
+			);
 		}
 		const destination = { kind: "deal", id: context.id };
 		const mail = {
@@ -706,7 +749,7 @@ for (const backend of ["claude", "codex"] as const) {
 				status(204),
 			],
 			binary,
-			directory?.path,
+			join(directory.path, "managed"),
 			backend,
 		);
 		const summary = judgment({

@@ -101,9 +101,14 @@ const rateLimit = z.object({
 	resetsAt: z.number().optional(),
 });
 
-function runClaude(binary: string, timeout: number, task?: ModelTask) {
+function runClaude(
+	binary: string,
+	timeout: number,
+	allowTools: boolean,
+	task?: ModelTask,
+) {
 	const args = ["--no-session-persistence"];
-	if (!task?.allowTools)
+	if (!allowTools)
 		args.push(
 			"--setting-sources",
 			"",
@@ -121,7 +126,7 @@ function runClaude(binary: string, timeout: number, task?: ModelTask) {
 			"--output-format",
 			"stream-json",
 			"--verbose",
-			...(task.allowTools ? [] : ["--tools", ""]),
+			...(allowTools ? [] : ["--tools", ""]),
 			"--mcp-config",
 			JSON.stringify({
 				mcpServers: task.chat
@@ -150,18 +155,21 @@ function runClaude(binary: string, timeout: number, task?: ModelTask) {
 		args.push("auth", "status");
 	}
 	return runCli(binary, args, timeout, {
-		...(task?.allowTools ? { cwd: homedir() } : {}),
+		...(allowTools ? { cwd: homedir() } : {}),
 		input: task?.input,
 		env: {
 			...childEnvironment(),
-			...(task?.allowTools ? {} : { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" }),
+			...(allowTools ? {} : { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" }),
 			...(task?.chat ? { DOC_LINK_CREDENTIAL: task.chat.credential } : {}),
 		},
 	});
 }
 
-export async function signInStatus(claude: string): Promise<SignInStatus> {
-	const { ok, stdout } = await runClaude(claude, 5_000);
+export async function signInStatus(
+	claude: string,
+	allowTools = true,
+): Promise<SignInStatus> {
+	const { ok, stdout } = await runClaude(claude, 5_000, allowTools);
 	const auth = authStatus.safeParse(readJson(stdout));
 	if (!auth.success) return undefined;
 	if (!auth.data.loggedIn || auth.data.authMethod !== "claude.ai")
@@ -486,7 +494,7 @@ export const backends = {
 	claude: {
 		signIn: signInStatus,
 		run: async (binary, timeout, task) =>
-			claudeOutcome(await runClaude(binary, timeout, task)),
+			claudeOutcome(await runClaude(binary, timeout, task.allowTools, task)),
 		personalPlanMessage: ownClaudePlanMessage,
 		policyMessage: "Doc link needs a Mac without managed Claude Code settings.",
 	},
