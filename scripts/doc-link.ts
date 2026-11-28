@@ -19,6 +19,7 @@ import {
 	codexHome,
 	isCodexCatalogValid,
 	type LinkOutcome,
+	type ModelTask,
 	readJson,
 } from "./doc-link-backends.ts";
 
@@ -92,6 +93,24 @@ const pollEvery = 2_000;
 const allowMailTools = false;
 const probePrompt =
 	'This is a Doc readiness check. Return exactly {"ready":true} as JSON. Do not use any tools.';
+
+function chatTask(
+	config: Config,
+	claimId: string,
+	input: string,
+	prompt = macDocPrompt,
+): ModelTask {
+	return {
+		input,
+		prompt,
+		allowTools: true,
+		chat: {
+			url: new URL("/api/engine/doc/mcp", config.engine).href,
+			claimId,
+			credential: config.credential,
+		},
+	};
+}
 // https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy
 // https://code.claude.com/docs/en/server-managed-settings
 function macManagedSettingsPaths() {
@@ -271,6 +290,12 @@ export async function runDocLink(
 		return false;
 	}
 	function rememberBlocker(kind: DocWorkKind, outcome: LinkOutcome) {
+		if (outcome.kind === "startup_failed")
+			remember(kind, {
+				status: null,
+				reason: outcome.reason ?? backend.settingsMessage,
+				checkAt: now() + retryReadinessAfter,
+			});
 		if (outcome.kind === "signed_out")
 			remember(kind, {
 				status: "signed_out",
@@ -289,21 +314,25 @@ export async function runDocLink(
 	}
 	async function probe(kind: DocWorkKind) {
 		if (!(await verifyPlan(kind))) return;
-		const outcome = await backend.run(binary, 15_000, {
-			allowTools: usesTools(kind),
-			prompt: probePrompt,
-			input: '{"readiness":true}',
-		});
+		const input = '{"readiness":true}';
+		const task =
+			kind === "chat"
+				? chatTask(config, "readiness", input, probePrompt)
+				: {
+						allowTools: allowMailTools,
+						prompt: probePrompt,
+						input,
+					};
+		const outcome = await backend.run(binary, 15_000, task);
 		if (outcome.kind === "answered" && outcome.answer.ready === true)
 			remember(kind, { status: "ready", checkAt: now() + checkReadyEvery });
-		else if (outcome.kind === "signed_out" || outcome.kind === "plan_limited")
-			rememberBlocker(kind, outcome);
 		else
-			remember(kind, {
-				status: null,
-				reason: backend.settingsMessage,
-				checkAt: now() + retryReadinessAfter,
-			});
+			rememberBlocker(
+				kind,
+				outcome.kind === "answered" || outcome.kind === "failed"
+					? { kind: "startup_failed" }
+					: outcome,
+			);
 	}
 	for (; ; await wait()) {
 		const mailPolicy = await mailAllowed();
@@ -350,16 +379,11 @@ export async function runDocLink(
 				void postDocLink(config, "claim", {}, fetch);
 		}, 10_000);
 		const task = chat
-			? {
-					input: JSON.stringify({ turn: claim.turn, history: claim.history }),
-					prompt: macDocPrompt,
-					allowTools: true,
-					chat: {
-						url: new URL("/api/engine/doc/mcp", config.engine).href,
-						claimId: claim.claim_id,
-						credential: config.credential,
-					},
-				}
+			? chatTask(
+					config,
+					claim.claim_id,
+					JSON.stringify({ turn: claim.turn, history: claim.history }),
+				)
 			: { ...judgmentTask(claim), allowTools: allowMailTools };
 		let outcome = await backend
 			.run(binary, timeout, task)

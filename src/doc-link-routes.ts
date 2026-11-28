@@ -146,6 +146,7 @@ export async function completeDocLink(c: Context<WriterEnv>) {
 			kind === "answered" && fields === 3 && Object.hasOwn(body, "answer")
 				? { claim_id, kind, answer: body.answer }
 				: (kind === "failed" ||
+							kind === "startup_failed" ||
 							kind === "signed_out" ||
 							kind === "plan_limited") &&
 						fields === 2

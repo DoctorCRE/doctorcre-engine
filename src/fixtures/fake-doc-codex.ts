@@ -88,22 +88,19 @@ if (command === "--version") {
 	}
 
 	const mcp = args.find((arg) => arg.startsWith("mcp_servers"));
-	if (probe) {
-		assert.equal(mcp, isolated ? "mcp_servers={}" : undefined);
-		assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
-		assert.match(prompt, /Doc readiness check/);
-		if (variant === (isolated ? "mail-probe-fails" : "chat-probe-fails"))
-			process.exit(1);
-	} else if (input.turn) {
-		assert.match(prompt, /Use validate_answer/);
+	if (!isolated && (!probe || mcp)) {
+		assert.match(prompt, probe ? /Doc readiness check/ : /Use validate_answer/);
 		assert.match(
 			mcp ?? "",
 			/^mcp_servers\.doc=\{url="https:\/\/engine\.example\.test\/api\/engine\/doc\/mcp"/,
 		);
 		assert.match(mcp ?? "", /bearer_token_env_var="DOC_LINK_CREDENTIAL"/);
+		assert.match(mcp ?? "", /required=true/);
 		assert.match(
 			mcp ?? "",
-			/"Doc-Claim-Id"="8b97c249-aee2-46a1-9cfb-3c5b9f9d84b6"/,
+			probe
+				? /"Doc-Claim-Id"="readiness"/
+				: /"Doc-Claim-Id"="8b97c249-aee2-46a1-9cfb-3c5b9f9d84b6"/,
 		);
 		assert.match(
 			mcp ?? "",
@@ -111,12 +108,26 @@ if (command === "--version") {
 		);
 		assert.equal(process.env.DOC_LINK_CREDENTIAL, "x".repeat(43));
 		assert.ok(args.every((arg) => !arg.includes("x".repeat(43))));
-	} else {
+	} else if (isolated) {
 		assert.equal(mcp, "mcp_servers={}");
 		assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
-		assert.match(prompt, /untrusted data/);
-		assert.ok(!prompt.includes(input.body));
+		assert.match(prompt, probe ? /Doc readiness check/ : /untrusted data/);
+		if (!probe) assert.ok(!prompt.includes(input.body));
 	}
+	if (probe && variant === (isolated ? "mail-probe-fails" : "chat-probe-fails"))
+		process.exit(1);
+	if (
+		!isolated &&
+		mcp &&
+		(variant === "doc-mcp-offline" || (!probe && variant === "doc-mcp-drops"))
+	) {
+		console.error(
+			"Error: thread/start: required MCP servers failed to initialize: doc",
+		);
+		process.exit(1);
+	}
+	if (!probe && isolated && variant === "mail-startup-fails") process.exit(1);
+	emit({ type: "thread.started" });
 
 	const message = (text: string) =>
 		emit({ type: "item.completed", item: { type: "agent_message", text } });
