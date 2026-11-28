@@ -13,7 +13,7 @@ import {
 // First match wins, in the order in docs/new-database.md#deal-attention.
 // A parked or ended deal stays on its list and answers null. The stored
 // needs_attention flag is not read.
-const openDeal = sql`d.parking_reason is null and ${openBoardDeal(
+export const activeOpenDeal = sql<boolean>`d.parking_reason is null and ${openBoardDeal(
 	boardPhase,
 	boardOutcome,
 	boardClosedOn,
@@ -24,7 +24,7 @@ const central = (at: ReturnType<typeof sql>) =>
 	sql`(${at} at time zone 'America/Chicago')::date`;
 
 export const dealAttention = sql<{ reason: string; since: string } | null>`
-	case when ${openDeal} then (
+	case when ${activeOpenDeal} then (
 		select jsonb_build_object('reason', hit.reason, 'since', hit.since)
 		from (select (now() at time zone 'America/Chicago')::date as today) days
 		cross join lateral (

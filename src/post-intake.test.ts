@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { URL } from "node:url";
 import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import {
+	asAdmin,
+	dropTestDatabase,
+	testDatabaseName,
+} from "../scripts/test-database.ts";
 import { intake } from "./post-intake.ts";
 import app from "./worker.ts";
 
@@ -32,7 +35,7 @@ Object.assign(globalThis, {
 const url = process.env.TEST_DATABASE_URL;
 if (!url)
 	throw new Error("Run npm run check to restore the test database first");
-const name = `engine_intake_${randomUUID().replaceAll("-", "")}`;
+const name = testDatabaseName();
 const target = new URL(url);
 target.pathname = `/${name}`;
 
@@ -55,7 +58,7 @@ before(async () => {
 });
 
 after(async () => {
-	await asAdmin(`drop database "${name}" with (force)`);
+	await dropTestDatabase(name);
 });
 
 const stored = new Map<string, string>();

@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { jsonBuildObject } from "kysely/helpers/postgres";
 import { Refusal, refuse } from "../answer.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { fit } from "../request-shape.ts";
 import { isUuid } from "../uuid.ts";
-import { dealAttention } from "./attention.ts";
-import { CLOSED_PHASES } from "./shared.ts";
+import { activeOpenDeal, dealAttention } from "./attention.ts";
+import { selectDealState } from "./next-board.ts";
+import { hasForecastDate, planFactsOf, planForRead } from "./plan-read.ts";
 
 type EvaluatedDeal = {
 	deal_id: string;
@@ -68,42 +70,71 @@ async function evaluateDeals(
 	tx: Transaction<DB>,
 	dealIds?: string[],
 ): Promise<EvaluatedDeal[]> {
-	const { rows } = await sql<EvaluatedDeal>`
-		with current_deals as (
-			select d.id as deal_id,
-				d.owner_user_id,
-				case when owner.is_account_partner then ${dealAttention} end as attention
-			from deal d
-			join app_user owner on owner.id = d.owner_user_id
-			left join imported_deal_board imported on imported.deal_id = d.id
-			left join lateral (
-				select pc.phase, pc.happened_at, pc.reason, pc.changed_at, pc.changed_by_job
-				from deal_phase_change pc
-				where pc.deal_id = d.id
-				order by pc.happened_at desc
-				limit 1
-			) p on true
-			left join lateral (
-				select pc.happened_at
-				from deal_phase_change pc
-				where pc.deal_id = d.id and pc.phase = 'closed'
-					and p.phase in (${sql.join(CLOSED_PHASES)})
-				order by pc.happened_at desc
-				limit 1
-			) last_close on true
-			${dealIds ? sql`where d.id = any(${dealIds}::uuid[])` : sql``}
+	const current = selectDealState(tx)
+		.select((eb) => [
+			"d.owner_user_id",
+			eb
+				.case()
+				.when("owner.is_account_partner", "=", true)
+				.then(dealAttention)
+				.end()
+				.as("attention"),
+			eb
+				.and([
+					eb("owner.is_account_partner", "=", true),
+					activeOpenDeal,
+					hasForecastDate(eb.ref("d.id")),
+				])
+				.as("forecast_candidate"),
+		])
+		.$if(dealIds !== undefined, (query) =>
+			query.where(sql<boolean>`d.id = any(${dealIds}::uuid[])`),
+		);
+	const rows = await tx
+		.selectFrom(current.as("d"))
+		.leftJoin("deal_attention_alert as a", "a.deal_id", "d.id")
+		.selectAll("d")
+		.select((eb) => [
+			"a.reason as prior_reason",
+			"a.owner_user_id as prior_owner",
+			eb
+				.case()
+				.when(
+					eb.and([
+						eb("d.attention", "is", null),
+						eb("d.forecast_candidate", "=", true),
+					]),
+				)
+				.then(
+					jsonBuildObject(planFactsOf(tx, eb.ref("d.id"), eb.ref("d.kind"))),
+				)
+				.end()
+				.as("facts"),
+		])
+		.where((eb) =>
+			eb.or([
+				eb("d.attention", "is not", null),
+				eb("a.deal_id", "is not", null),
+				eb("d.forecast_candidate", "=", true),
+			]),
 		)
-		select c.deal_id,
-			c.owner_user_id,
-			c.attention ->> 'reason' as reason,
-			a.reason as prior_reason,
-			a.owner_user_id as prior_owner
-		from current_deals c
-		left join deal_attention_alert a on a.deal_id = c.deal_id
-		where c.attention is not null or a.deal_id is not null
-		order by c.deal_id
-	`.execute(tx);
-	return rows;
+		.orderBy("d.id")
+		.execute();
+	return rows.flatMap(({ facts, prior_reason, prior_owner, ...deal }) => {
+		const attention = facts
+			? planForRead({ ...deal, ...facts, steps: [] }).attention
+			: deal.attention;
+		if (!attention && !prior_reason) return [];
+		return [
+			{
+				deal_id: deal.id,
+				owner_user_id: deal.owner_user_id,
+				reason: attention?.reason ?? null,
+				prior_reason,
+				prior_owner,
+			},
+		];
+	});
 }
 
 export async function sweepDealAttentionAlerts(

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
 import pg from "pg";
@@ -22,9 +22,12 @@ function serverUrl() {
 }
 
 // Parallel test processes need the connection slots while tests run (#241).
-export async function asAdmin(...statements: string[]) {
+async function withAdmin<T>(run: (admin: pg.Client) => Promise<T>) {
 	const url = serverUrl();
-	const admin = new pg.Client({ connectionString: url.href });
+	const admin = new pg.Client({
+		connectionString: url.href,
+		application_name: process.env.TEST_DATABASE_PREFIX,
+	});
 	await admin.connect().catch((error: unknown) => {
 		if (!(error instanceof Error && "code" in error)) throw error;
 		if (error.code !== "ECONNREFUSED") throw error;
@@ -34,9 +37,53 @@ export async function asAdmin(...statements: string[]) {
 		);
 	});
 	try {
-		for (const statement of statements) await admin.query(statement);
+		return await run(admin);
 	} finally {
 		await admin.end();
+	}
+}
+
+export function asAdmin(...statements: string[]) {
+	return withAdmin(async (admin) => {
+		for (const statement of statements) await admin.query(statement);
+	});
+}
+
+export function testDatabaseName() {
+	const prefix = process.env.TEST_DATABASE_PREFIX;
+	if (prefix && !/^engine_[a-f0-9]{20}_$/.test(prefix))
+		throw new Error("Invalid test database prefix");
+	return (prefix || "engine_test_") + randomUUID().replaceAll("-", "");
+}
+
+export function dropTestDatabase(name: string) {
+	return asAdmin(`drop database if exists "${name}" with (force)`);
+}
+
+export async function withCheckDatabases(run: () => Promise<void>) {
+	const prefix = `engine_${randomBytes(10).toString("hex")}_`;
+	process.env.TEST_DATABASE_PREFIX = prefix;
+	try {
+		await run();
+	} finally {
+		await withAdmin(async (admin) => {
+			// A cancelled worker can leave a database creation running on the server.
+			while (
+				(
+					await admin.query(
+						`select pg_terminate_backend(pid, 1000) from pg_stat_activity
+					where application_name = $1 and pid <> pg_backend_pid()`,
+						[prefix],
+					)
+				).rowCount
+			) {}
+			const { rows } = await admin.query<{ datname: string }>(
+				"select datname from pg_database where datname ~ $1",
+				[`^${prefix}[a-f0-9]{32}$`],
+			);
+			for (const { datname } of rows)
+				await admin.query(`drop database if exists "${datname}" with (force)`);
+		});
 	}
 }
 
@@ -45,7 +92,7 @@ export async function withSnapshot(
 	run: (url: string, name: string) => Promise<void>,
 	template = process.env.TEST_SNAPSHOT,
 ) {
-	const name = `engine_test_${randomUUID().replaceAll("-", "")}`;
+	const name = testDatabaseName();
 	const url = serverUrl();
 	url.pathname = `/${name}`;
 	try {
@@ -58,7 +105,7 @@ export async function withSnapshot(
 		if (!template) await restore(url.href);
 		await run(url.href, name);
 	} finally {
-		await asAdmin(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+		await dropTestDatabase(name);
 	}
 }
 

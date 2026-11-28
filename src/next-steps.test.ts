@@ -692,7 +692,12 @@ test("a change lands from what the caller saw; a crossed field is refused and ot
 		await act(step, "changes", { seen_change_id: first, due_on: "2026-04-01" }),
 		[
 			200,
-			{ next_step_id: step, rebased: true, intervening_change_ids: [second] },
+			{
+				next_step_id: step,
+				rebased: true,
+				intervening_change_ids: [second],
+				write_change_id: await seen(step),
+			},
 		],
 	);
 	const [crossed, refusal] = await act(step, "changes", {
@@ -708,6 +713,55 @@ test("a change lands from what the caller saw; a crossed field is refused and ot
 		[now.what, now.due_on, now.item_bullets],
 		["Call the example clinic back", "2026-04-01", ["Second example point"]],
 	);
+});
+
+test("undo changes a step date only from the version its save wrote", async () => {
+	const step = await newStep({ item: ITEM, due_on: "2026-04-01" });
+	const first = await seen(step);
+	await act(step, "changes", {
+		seen_change_id: first,
+		what: "Example revised step",
+	});
+	const second = await seen(step);
+	const [saved, receipt] = await act(step, "changes", {
+		seen_change_id: first,
+		due_on: "2026-04-02",
+	});
+	const written = await seen(step);
+	assert.deepEqual(
+		[saved, receipt.rebased, receipt.write_change_id],
+		[200, true, written],
+	);
+	const [noOp, alreadySet] = await act(step, "changes", {
+		seen_change_id: second,
+		hold_until: null,
+	});
+	assert.deepEqual(
+		[noOp, alreadySet.rebased, alreadySet.write_change_id],
+		[200, true, undefined],
+	);
+	await act(step, "changes", {
+		seen_change_id: written,
+		what: "Example newest wording",
+	});
+	const current = await seen(step);
+	const [conflict, refusal] = await act(step, "changes", {
+		seen_change_id: written,
+		strict_version: true,
+		due_on: "2026-04-01",
+	});
+	assert.deepEqual(
+		[conflict, refusal.error, refusal.current_version],
+		[409, "version_conflict", current],
+	);
+	assert.equal((await stepNow(step)).due_on, "2026-04-02");
+	const [restored] = await act(step, "changes", {
+		seen_change_id: current,
+		strict_version: true,
+		due_on: "2026-04-01",
+	});
+	assert.equal(restored, 200);
+	assert.equal((await stepNow(step)).due_on, "2026-04-01");
 });
 
 test("a copied item's dated facts come back through a change, and a new item takes them", async () => {

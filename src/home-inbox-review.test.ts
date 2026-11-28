@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { isArguments } from "./save-door.ts";
 import { doorTest } from "./test-door.ts";
+import { blockedBy } from "./test-lock.ts";
 
 const { db, setup, cleanup, request, save } = doorTest();
 const id = (n: number) =>
@@ -1206,9 +1207,7 @@ test("Home shows a filing suggested on every message of a conversation once and 
 	]);
 });
 
-test("Two accepts of different suggestions in one filing settle it once", {
-	timeout: 10000,
-}, async (t) => {
+test("Two accepts of different suggestions in one filing settle it once", async () => {
 	// Locks are taken in id order, so the race clicks the lowest and highest ids.
 	const [lowest, middle, highest] = (
 		await suggestOnEachMessage("Outlook-racing-filing", "file_to_deal")
@@ -1219,29 +1218,29 @@ test("Two accepts of different suggestions in one filing settle it once", {
 			decision: "accept",
 			reason: "The thread is about this deal.",
 		});
-	const waiting = async (count: number) => {
-		while (
-			(
-				await db.query(
-					`select count(distinct pid)::int as waiting from pg_locks
-					where not granted and pid in (
-						select pid from pg_locks
-						where database = (select oid from pg_database where datname = current_database())
-					)`,
-				)
-			).rows[0].waiting < count
-		)
-			t.signal.throwIfAborted();
-	};
 	// Holding the middle suggestion parks the first accept inside its decision.
 	await db.query("begin");
-	await db.query("select from proposal where id = $1 for update", [middle]);
-	const first = accept(lowest);
-	await waiting(1);
-	const second = accept(highest);
-	await waiting(2);
-	await db.query("commit");
-	const answers = await Promise.all([first, second]);
+	const pending: ReturnType<typeof accept>[] = [];
+	try {
+		await db.query("select from proposal where id = $1 for update", [middle]);
+		const first = accept(lowest);
+		pending.push(first);
+		const firstPid = await blockedBy(db, first);
+		assert.ok(
+			firstPid,
+			"The first accept did not wait for the held suggestion",
+		);
+		const second = accept(highest);
+		pending.push(second);
+		assert.ok(
+			await blockedBy(db, second, firstPid),
+			"The second accept did not wait for the first",
+		);
+	} finally {
+		await db.query("rollback");
+		await Promise.allSettled(pending);
+	}
+	const answers = await Promise.all(pending);
 	assert.deepEqual(
 		answers.map(([status, body]) => [status, body.error ?? body.status]),
 		[

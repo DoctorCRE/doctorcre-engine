@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { URL } from "node:url";
 import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import {
+	asAdmin,
+	dropTestDatabase,
+	testDatabaseName,
+} from "../scripts/test-database.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -564,6 +567,7 @@ const STAMPED = [
 	"introduction",
 	"party_link",
 	"deal_phase_change",
+	"deal_plan_date",
 	"deal_property",
 	"deal_party",
 	"imported_deal_party",
@@ -2887,7 +2891,7 @@ const url = process.env.TEST_DATABASE_URL;
 if (!url)
 	throw new Error("Run npm run check to restore the test database first");
 // Its own database, because this schema's trigger would change the count database.test.ts reads.
-const name = `engine_next_${randomUUID().replaceAll("-", "")}`;
+const name = testDatabaseName();
 const target = new URL(url);
 target.pathname = `/${name}`;
 // Every test works as the engine; only loading the schema needs its owner (role none).
@@ -2947,7 +2951,7 @@ before(async () => {
 
 after(async () => {
 	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
+	await dropTestDatabase(name);
 });
 
 const SUBJECT = id(9000);
@@ -4421,6 +4425,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
 				"deal_open_name",
+				"deal_plan_date",
 				"doc_judgment_destination",
 				"doc_judgment_job",
 				"email_summary",

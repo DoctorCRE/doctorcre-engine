@@ -6,6 +6,7 @@ import { backends } from "../scripts/doc-link-backends.ts";
 import { withPartnerAuth } from "./partner-auth.ts";
 import { isArguments } from "./save-door.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
+import { blockedBy } from "./test-lock.ts";
 import worker, { partnerApp, type WorkerEnv } from "./worker.ts";
 
 const appOrigin = "https://app.example.test";
@@ -25,9 +26,7 @@ async function runSubtest(
 		body = run(context);
 		return body;
 	});
-	// Node can finish reporting a cancelled subtest before its body stops using the database.
-	await Promise.allSettled([body]);
-	parent.signal.throwIfAborted();
+	await body;
 }
 
 async function exerciseDocLink(
@@ -87,6 +86,14 @@ async function exerciseDocLink(
 		};
 	}
 	try {
+		const databaseTime = "2100-01-01 00:00:00+00";
+		// The live presence and lease windows must stand still while requests run.
+		await db.query(`create or replace function pg_catalog.clock_timestamp()
+			returns timestamptz language sql volatile
+			as $$ select timestamptz '${databaseTime}' $$;
+			create or replace function pg_catalog.statement_timestamp()
+			returns timestamptz language sql stable
+			as $$ select timestamptz '${databaseTime}' $$`);
 		await db.query(`create role ${reader} login in role engine_reader;
 			create role ${writer} login in role engine;`);
 		await db.query("drop table next.doc_link");
@@ -168,7 +175,7 @@ async function exerciseDocLink(
 				await db.query(
 					`with link as (
 						insert into next.doc_link (owner_user_id, credential_hash, last_seen_at, readiness, backend)
-						values ($1, $2, now(), 'ready', 'claude')
+						values ($1, $2, clock_timestamp(), 'ready', 'claude')
 					)
 					insert into next.doc_conversation (owner_user_id) values ($1)`,
 					[appUserId, hash],
@@ -631,7 +638,7 @@ async function exerciseDocLink(
 						);
 						const request = poll(credential, capable);
 						try {
-							await waitForBlockedRequest(request);
+							await blockedBy(db, request);
 							await db.query(
 								"update next.doc_turn set claim_until = '-infinity' where claim_id = $1",
 								[turn.claim_id],
@@ -839,27 +846,6 @@ async function exerciseDocLink(
 		assert.equal((await poll(otherCredential)).status, 401);
 		assert.deepEqual(await presence(first), { ...status, backend: "claude" });
 
-		async function waitForBlockedRequest(
-			request: Promise<unknown>,
-			blocker?: number,
-		) {
-			let finished = false;
-			const finish = () => {
-				finished = true;
-			};
-			void request.then(finish, finish);
-			while (!finished && !t.signal.aborted) {
-				const { rows } = await db.query<{ pid: number }>(
-					`select pid from pg_locks
-					where not granted
-					and coalesce($1, pg_backend_pid()) = any(pg_blocking_pids(pid))`,
-					[blocker ?? null],
-				);
-				if (rows[0]) return rows[0].pid;
-			}
-			assert.ok(finished, "Test timed out waiting for a database lock");
-		}
-
 		async function queueLinkRequests<First, Second>(
 			startFirst: () => Promise<First>,
 			startSecond: () => Promise<Second>,
@@ -872,11 +858,11 @@ async function exerciseDocLink(
 			const firstRequest = startFirst();
 			let secondRequest: Promise<Second> | undefined;
 			try {
-				const firstPid = await waitForBlockedRequest(firstRequest);
+				const firstPid = await blockedBy(db, firstRequest);
 				assert.ok(firstPid, "First request did not wait for the lock");
 				secondRequest = startSecond();
 				assert.ok(
-					await waitForBlockedRequest(secondRequest, firstPid),
+					await blockedBy(db, secondRequest, firstPid),
 					"Second request did not wait for the lock",
 				);
 			} finally {
@@ -917,12 +903,6 @@ async function exerciseDocLink(
 			t,
 			"polls refresh presence at most every 15 seconds and keep their order with revoke",
 			async () => {
-				// Keep the fixture ahead of PostgreSQL's real statement clock.
-				const now = "2100-01-01 00:00:00+00";
-				await db.query(`create or replace function pg_catalog.clock_timestamp()
-					returns timestamptz language sql volatile
-					as $$ select timestamptz '${now}' $$`);
-
 				async function lastSeen() {
 					const { rows } = await db.query<{ last_seen_at: string | null }>(
 						"select last_seen_at::text from next.doc_link where owner_user_id = $1",
@@ -933,7 +913,7 @@ async function exerciseDocLink(
 
 				const credential = await issue(first);
 				assert.equal((await poll(credential)).status, 204);
-				assert.equal(await lastSeen(), now);
+				assert.equal(await lastSeen(), databaseTime);
 				await db.query(
 					`update next.doc_link set last_seen_at = clock_timestamp() - interval '14 seconds'
 					where owner_user_id = $1`,
@@ -949,7 +929,7 @@ async function exerciseDocLink(
 					[appUserId],
 				);
 				assert.equal((await poll(credential)).status, 204);
-				assert.equal(await lastSeen(), now);
+				assert.equal(await lastSeen(), databaseTime);
 				assert.equal((await presence(first)).connected, true);
 
 				const [pollBeforeRevoke, revoked] = await queueLinkRequests(
@@ -962,7 +942,6 @@ async function exerciseDocLink(
 			},
 		);
 	} finally {
-		// A timed-out test can still be finishing a request.
 		try {
 			await db.query(`drop role if exists ${reader}, ${writer}`);
 		} finally {
@@ -972,7 +951,5 @@ async function exerciseDocLink(
 }
 
 for (const scenario of ["journey", "polling", "judgment"] as const) {
-	test(`Doc link ${scenario}`, { timeout: 30_000 }, (t) =>
-		exerciseDocLink(t, scenario),
-	);
+	test(`Doc link ${scenario}`, (t) => exerciseDocLink(t, scenario));
 }
