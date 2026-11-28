@@ -333,7 +333,7 @@ _New database_: `candidate`, retaining source context and qualification after pr
 
 **Playbook** is the current deal workflow, applicable guidance, and recorded progress for one deal. A client copy is the exact preview a partner approved for release.
 
-**To-do** is one ordered part of the deal workflow. Its stable checklist slug identifies it across revisions. A next step is a separate action saved on a deal.
+**To-do** is one ordered part of the deal workflow. Its stable key identifies it across revisions, workflows, and deal kinds. Deal progress follows that key. A next step is a separate action saved on a deal.
 
 **Practice type** describes the client's line of practice. **Practice stage** describes where the practice is in its business life. A deal's phase is separate.
 
