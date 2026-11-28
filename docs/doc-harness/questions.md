@@ -34,3 +34,8 @@ Should the next expansion start with the existing vendor and Calendar doors or t
 ## Q7 Preference values and team edits
 
 Should both partners edit team defaults directly or should one partner own those edits? Recommend letting both edit the shared row with the ordinary write proofs. For draft length and comparison format, choose named values or bounded custom values. Recommend starting with named values and leaving rows unset until a partner chooses. Approve the named values and the default in each checked-in preference-key definition before building the keys.
+
+| Preference                  | Proposed fallback for an unset or deleted row                         |
+| --------------------------- | --------------------------------------------------------------------- |
+| Personal draft length       | **Standard**, a concise reply with enough detail to answer the email. |
+| Team deal comparison format | **Side-by-side table**, with one column per deal.                     |
