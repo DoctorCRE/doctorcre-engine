@@ -154,7 +154,10 @@ async function runLink(
 
 const link = (...replies: Reply[]) => runLink(replies);
 
-const poll = (readiness: string, mailReadiness: string | null = readiness) => ({
+const poll = (
+	readiness: string | null,
+	mailReadiness: string | null = readiness,
+) => ({
 	path: "/api/engine/doc/link/claim",
 	readiness,
 	mailReadiness,
@@ -848,7 +851,7 @@ for (const variant of ["signed-out", "api-key", "business", "unsupported"]) {
 		await symlink(codex, binary);
 		const requests: Request[] = [];
 		const paused = Symbol("polling paused");
-		const expectedReadiness = variant === "signed-out" ? "signed_out" : null;
+		const expectedReadiness = variant === "unsupported" ? null : "signed_out";
 		await assert.rejects(
 			runDocLink(
 				{ backend: "codex", binary, engine, credential },
@@ -871,9 +874,42 @@ for (const variant of ["signed-out", "api-key", "business", "unsupported"]) {
 		);
 		assert.deepEqual(
 			requests.map((request) => request.headers.get("Doc-Link-Readiness")),
-			variant === "signed-out" || variant === "unsupported"
-				? [expectedReadiness]
-				: [],
+			[expectedReadiness],
+		);
+	});
+}
+
+for (const [variant, chat, mail] of [
+	["chat-probe-fails", null, "ready"],
+	["mail-probe-fails", "ready", null],
+	["malformed-config", null, null],
+] as const) {
+	test(`Codex reports each work kind when ${variant}`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, variant);
+		await symlink(codex, binary);
+		const errors = t.mock.method(console, "error", () => {});
+		if (variant === "malformed-config") {
+			await writeFile(join(directory.path, "config.toml"), "[features\n");
+			const previous = process.env.CODEX_HOME;
+			process.env.CODEX_HOME = directory.path;
+			t.after(() => {
+				if (previous === undefined) delete process.env.CODEX_HOME;
+				else process.env.CODEX_HOME = previous;
+			});
+		}
+		const requests = await runLink([status(401)], binary, undefined, "codex");
+		assert.deepEqual(requests, [poll(chat, mail)]);
+		const reason =
+			"Codex could not check your settings. Fix or reset them, then rerun setup.";
+		assert.deepEqual(
+			errors.mock.calls.map((call) => String(call.arguments[0])).sort(),
+			[
+				...(chat ? [] : [`Doc chat: ${reason}`]),
+				...(mail ? [] : [`Doc mail: ${reason}`]),
+			],
 		);
 	});
 }
