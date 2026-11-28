@@ -567,6 +567,7 @@ const STAMPED = [
 	"introduction",
 	"party_link",
 	"deal_phase_change",
+	"deal_plan_date",
 	"deal_property",
 	"deal_party",
 	"imported_deal_party",
@@ -4424,6 +4425,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
 				"deal_open_name",
+				"deal_plan_date",
 				"doc_judgment_destination",
 				"doc_judgment_job",
 				"email_summary",
