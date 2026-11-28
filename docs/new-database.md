@@ -1964,7 +1964,7 @@ Track record counts come from `vendor_track_record`. A deal counts even when its
 
 ### Vendors redesign reads
 
-The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 needs the reads below. The vendor summary and the list read's changes are built. Markets a vendor covers are not. Each reads live vendors from the new schema as the list does, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
+The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 uses the reads below. Each reads live vendors from the new schema, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
 
 **Vendor summary.** `GET /api/engine/vendors/summary`, optional `owner`, `all` when absent, answers the category tiles in one read: `{ all, no_category, categories: [{ slug, label, ...counts }] }`. Each `counts` is `{ count, relationship: { core, established, building, prospective, not_rated, parked, avoid }, quiet }`. `categories` lists every vendor category in label order, with zeros for one no vendor holds. A vendor counts once in each category it holds, so the categories can add up to more than `all`. `no_category` counts vendors that hold only the vendor role. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
 
@@ -1980,13 +1980,15 @@ The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 need
 **The list read.** `GET /api/engine/vendors` changes in these ways:
 
 - `no_category=true` narrows the list to the vendors the summary counts under `no_category`. It combines with the other filters, is echoed in `query` only when asked for, and is refused with `category` and on the legacy list.
-- With `category` or `no_category=true`, it answers every matching vendor in one answer, with no next page. Other lists keep pages of 25.
+- With `category`, `no_category=true` or `markets=true`, it answers every matching vendor in one page. Other lists keep pages of 25.
 - Each row answers `categories`, every category the vendor holds as `{ slug, label }` in label order, beside today's single category until the app stops reading it.
 - `quiet=true` narrows the list to the vendors the summary counts as quiet, by the same rule at the default 90-day cadence. It combines with the other filters, is echoed in `query` only when asked for, and is refused on the legacy list.
 - Each row answers `quiet`, true or false, and `quiet_days`, the whole Central days since its last contact while quiet, otherwise null.
 - `sort=relationship` orders by relationship order, then by name, and is the default. The other sorts stay. The legacy list keeps `name` as its default.
 
-**Markets a vendor covers.** The territory tiles are the 19 named markets. A list row answers `markets`, each `{ id, name }` that one of its current territories covers: a market piece names it, or a state piece holds the market's counties. A vendor under no market but with a territory is under Elsewhere, which includes a typed territory not yet drawn into pieces. A vendor with no current territory is under No territory. Matching typed territories to markets is data work on production, with the owner's yes on the reviewed file, and nothing in it is guessed.
+**Markets a vendor covers.** With `markets=true`, the next list answers all matching vendors in one page and echoes the option in `query`. Each row has `markets`, a name-ordered list of `{ id, name }`, and `territory`, the comma-separated names of its current territories or null. Both fields are present with or without a `contract` parameter. The legacy list refuses the option. A market piece names the market directly. A state piece covers any market with a county in that state. Each market appears once per vendor.
+
+Each summary count also answers `markets` as `[{ id, name, count }]` in name order, with one entry per covered market and one count per vendor in it. `elsewhere` counts vendors with a current territory and no covered markets, including typed territories without pieces. `no_territory` counts vendors without a current territory. The reads include memberships with no end date or one on or after today in Central time. Matching typed territories to markets requires the owner's approval of the reviewed file.
 
 ## Doc conversations and turns
 
