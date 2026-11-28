@@ -146,18 +146,27 @@ export async function recordDocPoll(
 	readiness?: DocLinkReadiness,
 	backend?: DocLinkBackend,
 ) {
-	const nextReadiness = sql<DocLinkReadiness | null>`coalesce(${readiness ?? null}, readiness)`;
+	// A backend-only Codex poll reports a failed startup. Headerless legacy polls still refresh presence.
+	const unavailable = backend === "codex" && readiness === undefined;
+	const nextReadiness = unavailable
+		? null
+		: sql<DocLinkReadiness | null>`coalesce(${readiness ?? null}, readiness)`;
+	const presenceChanged = unavailable
+		? sql<boolean>`last_seen_at is not null`
+		: presenceDue;
 	const nextBackend = sql<DocLinkBackend | null>`coalesce(${backend ?? null}, backend)`;
 	await tx
 		.updateTable("doc_link")
 		.set({
-			last_seen_at: sql`case when ${presenceDue} then clock_timestamp() else last_seen_at end`,
+			last_seen_at: unavailable
+				? null
+				: sql`case when ${presenceDue} then clock_timestamp() else last_seen_at end`,
 			readiness: nextReadiness,
 			backend: nextBackend,
 		})
 		.where("owner_user_id", "=", owner)
 		.where(
-			sql<boolean>`(${presenceDue} or readiness is distinct from ${nextReadiness}
+			sql<boolean>`(${presenceChanged} or readiness is distinct from ${nextReadiness}
 				or backend is distinct from ${nextBackend})`,
 		)
 		.execute();

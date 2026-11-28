@@ -644,6 +644,26 @@ test("backup answers an unready partner's turn using Doc's read tools", async (t
 	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
 });
 
+test("a backend-only Codex poll clears stale presence so backup can take fresh work", async (t) => {
+	const credential = await issue(owner);
+	assert.equal((await poll(credential)).status, 204);
+	const { conversation_id } = await askDoc();
+	assert.equal(
+		(await chatTurn(conversation_id))?.waiting_reason_code,
+		"doc_ready",
+	);
+
+	assert.equal((await poll(credential, null, undefined, "codex")).status, 204);
+	const waiting = await chatTurn(conversation_id);
+	assert.equal(waiting?.waiting_reason_code, "doc_mac_off");
+	assert.equal(waiting?.backend, "codex");
+
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
+});
+
 test("backup waits for the ready Mac and a Mac takeover retains its answer", async (t) => {
 	const { conversation_id, turn } = await askDoc();
 	const credential = await issue(owner);
