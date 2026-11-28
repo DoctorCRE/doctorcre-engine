@@ -18,6 +18,7 @@ import {
 	backends,
 	codexHome,
 	isCodexCatalogValid,
+	type LinkOutcome,
 	readJson,
 } from "./doc-link-backends.ts";
 
@@ -60,12 +61,16 @@ const claimSchema = z.discriminatedUnion("kind", [
 ]);
 
 type ReadinessCheck = {
-	status: DocLinkReadiness | "personal_plan_required" | null;
+	status: DocLinkReadiness | null;
+	reason?: string;
 	checkAt: number;
 };
-const checkSignInEvery = 30_000;
+const retryReadinessAfter = 30_000;
+const checkReadyEvery = 300_000;
 const pollEvery = 2_000;
 const allowMailTools = false;
+const probePrompt =
+	'This is a Doc readiness check. Return exactly {"ready":true} as JSON. Do not use any tools.';
 // https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy
 // https://code.claude.com/docs/en/server-managed-settings
 function macManagedSettingsPaths() {
@@ -223,52 +228,72 @@ export async function runDocLink(
 		chat: { status: null, checkAt: 0 },
 		mail: { status: null, checkAt: 0 },
 	};
-	const reportedStatus = (kind: DocWorkKind) => {
-		const { status } = checks[kind];
-		return status === "personal_plan_required" ? "signed_out" : status;
-	};
-	async function refreshReadiness(
-		due: readonly DocWorkKind[],
-		mailPolicy: boolean,
-	) {
-		let normal: ReturnType<typeof backend.signIn> | undefined;
-		for (const kind of due) {
-			const check = checks[kind];
-			if (kind === "mail" && !mailPolicy) {
-				check.status = null;
-				check.checkAt = now();
-				continue;
-			}
-			const isolatedMail =
-				kind === "mail" && name === "claude" && !allowMailTools;
-			if (!isolatedMail) normal ??= backend.signIn(binary);
-			const status = isolatedMail
-				? await backends.claude.signIn(binary, false)
-				: await normal;
-			if (
-				status === "personal_plan_required" &&
-				!kinds.some((work) => checks[work].status === status)
-			)
-				console.error(backend.personalPlanMessage);
-			check.status = status ?? null;
-			check.checkAt = now() + checkSignInEvery;
-		}
+	const usesTools = (kind: DocWorkKind) => kind === "chat" || allowMailTools;
+	function remember(kind: DocWorkKind, next: ReadinessCheck) {
+		if (next.reason && next.reason !== checks[kind].reason)
+			console.error(`Doc ${kind}: ${next.reason}`);
+		checks[kind] = next;
+	}
+	async function verifyPlan(kind: DocWorkKind) {
+		const status = await backend.signIn(binary, usesTools(kind));
+		if (status === "ready") return true;
+		remember(kind, {
+			status: status ? "signed_out" : null,
+			reason: status ? backend.personalPlanMessage : backend.settingsMessage,
+			checkAt: now() + retryReadinessAfter,
+		});
+		return false;
+	}
+	function rememberBlocker(kind: DocWorkKind, outcome: LinkOutcome) {
+		if (outcome.kind === "signed_out")
+			remember(kind, {
+				status: "signed_out",
+				reason: backend.personalPlanMessage,
+				checkAt: now() + retryReadinessAfter,
+			});
+		if (outcome.kind === "plan_limited")
+			remember(kind, {
+				status: "plan_limited",
+				reason: "The plan is at its usage limit.",
+				checkAt:
+					outcome.resetsAt && outcome.resetsAt * 1_000 > now()
+						? outcome.resetsAt * 1_000
+						: now() + checkReadyEvery,
+			});
+	}
+	async function probe(kind: DocWorkKind) {
+		if (!(await verifyPlan(kind))) return;
+		const outcome = await backend.run(binary, 15_000, {
+			allowTools: usesTools(kind),
+			prompt: probePrompt,
+			input: '{"readiness":true}',
+		});
+		if (outcome.kind === "answered" && outcome.answer.ready === true)
+			remember(kind, { status: "ready", checkAt: now() + checkReadyEvery });
+		else if (outcome.kind === "signed_out" || outcome.kind === "plan_limited")
+			rememberBlocker(kind, outcome);
+		else
+			remember(kind, {
+				status: null,
+				reason: backend.settingsMessage,
+				checkAt: now() + retryReadinessAfter,
+			});
 	}
 	for (; ; await wait()) {
 		const mailPolicy = await mailAllowed();
-		await refreshReadiness(
-			kinds.filter((kind) => now() >= checks[kind].checkAt),
-			mailPolicy,
+		if (!mailPolicy) checks.mail = { status: null, checkAt: 0 };
+		await Promise.all(
+			kinds
+				.filter(
+					(kind) =>
+						(kind === "chat" || mailPolicy) && now() >= checks[kind].checkAt,
+				)
+				.map(probe),
 		);
 		const readiness: DocWorkReadiness = {
-			chat: reportedStatus("chat"),
-			mail: mailPolicy ? reportedStatus("mail") : null,
+			chat: checks.chat.status,
+			mail: checks.mail.status,
 		};
-		if (
-			checks.chat.status === "personal_plan_required" &&
-			readiness.mail !== "ready"
-		)
-			continue;
 		const headers = new Headers({
 			"Doc-Link-Backend": name,
 			"Doc-Link-Work-Readiness": JSON.stringify(readiness),
@@ -288,8 +313,7 @@ export async function runDocLink(
 		const kind = chat ? "chat" : "mail";
 		if (readiness[kind] !== "ready" || (!chat && !(await mailAllowed())))
 			continue;
-		await refreshReadiness([kind], true);
-		if (checks[kind].status !== "ready" || (!chat && !(await mailAllowed())))
+		if (!(await verifyPlan(kind)) || (!chat && !(await mailAllowed())))
 			continue;
 		const expires = Date.parse(claim.claim_until);
 		const timeout = Math.min(45_000, expires - 15_000 - now());
@@ -314,15 +338,7 @@ export async function runDocLink(
 		let outcome = await backend
 			.run(binary, timeout, task)
 			.finally(() => clearInterval(heartbeat));
-		if (outcome.kind === "signed_out" || outcome.kind === "plan_limited") {
-			checks[kind].status = outcome.kind;
-			const reset = outcome.kind === "plan_limited" && outcome.resetsAt;
-			checks[kind].checkAt =
-				reset && reset * 1_000 > now()
-					? reset * 1_000
-					: now() +
-						(outcome.kind === "plan_limited" ? 300_000 : checkSignInEvery);
-		}
+		rememberBlocker(kind, outcome);
 		const { claim_id } = claim;
 		while (now() < expires) {
 			const { kind } = outcome;
