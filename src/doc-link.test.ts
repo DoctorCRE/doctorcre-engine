@@ -3,6 +3,8 @@ import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { type TestContext, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runDocLink } from "../scripts/doc-link.ts";
+import { docLinkOwnerTransaction } from "./doc-link.ts";
+import { claimDocWork } from "./doc-queue.ts";
 import { withPartnerAuth } from "./partner-auth.ts";
 import { isArguments } from "./save-door.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
@@ -746,6 +748,34 @@ test("Doc link migration, private credentials and Mac polling", {
 									{ readiness_by_kind: { chat, mail } },
 								]);
 							}
+							const headers = {
+								"Doc-Link-Work-Readiness": '{"chat":"ready","mail":"ready"}',
+							};
+							const chat = await fetchClaim(headers);
+							assert.equal(chat.work.kind, "turn");
+							assert.equal(
+								(
+									await result(bearer, engineOrigin, {
+										kind: "startup_failed",
+										claim_id: chat.claim_id,
+									})
+								).status,
+								204,
+							);
+							const saved = await db.query(
+								"select readiness_by_kind from next.doc_link where owner_user_id = $1",
+								[appUserId],
+							);
+							assert.deepEqual(saved.rows, [
+								{ readiness_by_kind: { chat: null, mail: "ready" } },
+							]);
+							const backup = await docLinkOwnerTransaction(
+								connectionString,
+								appUserId,
+								(tx) => claimDocWork(tx, appUserId, "backup"),
+							);
+							assert.ok(backup?.kind === "turn");
+							assert.equal(backup.turn.id, turn);
 						} finally {
 							await db.query(
 								"delete from next.doc_judgment_job where id = $1",

@@ -914,6 +914,45 @@ for (const [variant, chat, mail] of [
 	});
 }
 
+for (const [variant, claim, expected] of [
+	["doc-mcp-offline", null, [poll(null, "ready")]],
+	[
+		"doc-mcp-drops",
+		claimed("Question"),
+		[
+			poll("ready"),
+			result({ claim_id: firstClaim, kind: "startup_failed" }),
+			poll(null, "ready"),
+		],
+	],
+	[
+		"mail-startup-fails",
+		summaryClaim("Tour"),
+		[poll("ready"), judgment({ kind: "startup_failed" }), poll("ready", null)],
+	],
+] as const) {
+	test(`Codex leaves the other kind ready when ${variant}`, async (t) => {
+		await using directory = await mkdtempDisposable(
+			join(process.cwd(), ".scratch."),
+		);
+		const binary = join(directory.path, variant);
+		await symlink(codex, binary);
+		const errors = t.mock.method(console, "error", () => {});
+		const replies = claim ? [claim, status(204), status(401)] : [status(401)];
+		assert.deepEqual(
+			await runLink(replies, binary, undefined, "codex"),
+			expected,
+		);
+		assert.equal(errors.mock.calls.length, 1);
+		assert.match(
+			String(errors.mock.calls[0]?.arguments[0]),
+			variant === "mail-startup-fails"
+				? /^Doc mail: .*settings/
+				: /^Doc chat: .*engine connection/,
+		);
+	});
+}
+
 test("Codex config needs an absolute binary path", async () => {
 	await using directory = await mkdtempDisposable(
 		join(process.cwd(), ".scratch."),
