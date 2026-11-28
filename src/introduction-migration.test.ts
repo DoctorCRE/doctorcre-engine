@@ -3,8 +3,15 @@ import { after, before, test } from "node:test";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup } = copyTest();
-before(setup);
-after(cleanup);
+const clientSetup = copyTest();
+before(async () => {
+	await setup();
+	await clientSetup.setup();
+});
+after(async () => {
+	await clientSetup.cleanup();
+	await cleanup();
+});
 
 test("the introduction migration requires email splits and restores the fresh schema on repeated runs", async () => {
 	const catalog = async () =>
@@ -31,6 +38,7 @@ test("the introduction migration requires email splits and restores the fresh sc
 		drop trigger keep_recorded_introduction on introduction;
 		drop trigger dedup_moved_introduction on introduction;
 		drop policy confirmed_introduction on introduction;
+		drop policy remove_recorded_introduction on introduction;
 		alter table introduction disable row level security;
 		alter table introduction drop column source, drop column source_job_id, drop column confirmed;
 		drop index doc_judgment_job_one_introduction;
@@ -48,5 +56,29 @@ test("the introduction migration requires email splits and restores the fresh sc
 	await db.query(introduction);
 	assert.deepEqual(await catalog(), fresh);
 	await db.query(introduction);
+	assert.deepEqual(await catalog(), fresh);
+});
+
+test("the client introduction migration adds the fresh schema's constraints and removal policy", async () => {
+	const { db } = clientSetup;
+	const catalog = async () =>
+		(
+			await db.query(`select
+			array(select conname || ':' || pg_get_constraintdef(oid) from pg_constraint
+				where conrelid = 'introduction'::regclass order by conname) as constraints,
+			(select to_jsonb(p) from pg_policies p where schemaname = 'next'
+				and policyname = 'remove_recorded_introduction') as policy`)
+		).rows[0];
+	const migration = await readSchema("add-client-introduction.sql");
+	const fresh = await catalog();
+	await db.query(`
+		drop policy remove_recorded_introduction on introduction;
+		alter table introduction
+			drop constraint introduction_maker_is_deal_client,
+			drop constraint introduction_client_maker_names_deal,
+			drop constraint introduction_made_by_check,
+			drop column maker_client_role,
+			add constraint introduction_made_by_check check (made_by in ('vendor', 'team'))`);
+	await db.query(migration);
 	assert.deepEqual(await catalog(), fresh);
 });

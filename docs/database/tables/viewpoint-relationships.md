@@ -10,7 +10,7 @@ Tables in this area and the foreign keys between them.
 | ----------------------------------------------------- | ------- | ------- | ---------- |
 | [next.claim_type](next.claim_type.md)                 | 6       |         | BASE TABLE |
 | [next.how_found](next.how_found.md)                   | 6       |         | BASE TABLE |
-| [next.introduction](next.introduction.md)             | 17      |         | BASE TABLE |
+| [next.introduction](next.introduction.md)             | 18      |         | BASE TABLE |
 | [next.party_link](next.party_link.md)                 | 12      |         | BASE TABLE |
 | [next.party_role](next.party_role.md)                 | 25      |         | BASE TABLE |
 | [next.party_specialty](next.party_specialty.md)       | 8       |         | BASE TABLE |

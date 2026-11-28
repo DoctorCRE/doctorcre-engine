@@ -9,6 +9,7 @@ import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { ACTING_USER, userId } from "../next-save.ts";
 import {
 	fit,
+	isBoolean,
 	isOneOf,
 	isStoredText,
 	isUuid,
@@ -18,13 +19,17 @@ import {
 import { SaveRefusal } from "../save.ts";
 import { changing, edit, unchangedSince } from "./edit.ts";
 
-const isMaker = (value: unknown): value is "vendor" | "team" =>
-	value === "vendor" || value === "team";
+const isVersion = (value: unknown): value is string =>
+	typeof value === "string" && /^\d{1,10}$/.test(value);
+const MAKERS = ["vendor", "team", "client"] as const;
 
 const NEW_INTRODUCTION = {
 	idempotency_key: isUuid,
 	vendor_id: isUuid,
-	made_by: isMaker,
+	made_by: (value: unknown) => isOneOf(MAKERS, value),
+	unrecorded_only: optional(isBoolean),
+	replaces: optional(isUuid),
+	replace_version: optional(isVersion),
 	introduced_party_id: isUuid,
 	introduced_on: isCalendarDate,
 	note: optional(isStoredText),
@@ -47,6 +52,7 @@ const introductionRead = (tx: Transaction<DB>, id: string) =>
 		.leftJoin("app_user as u", "u.id", "i.introduced_by_user_id")
 		.select([
 			"i.id as introduction_id",
+			sql<string>`i.xmin::text`.as("version"),
 			"i.vendor_id",
 			"i.made_by",
 			"u.slug as introduced_by",
@@ -67,6 +73,11 @@ function parseIntroduction(body: JsonObject) {
 		"introduced_on",
 	]);
 	if (request instanceof Refusal) return request;
+	if (
+		(request.made_by === "client" || request.unrecorded_only) &&
+		!request.deal_id
+	)
+		return new Refusal(400, "missing_required", { fields: ["deal_id"] });
 	const invalid = (field: string) =>
 		new Refusal(400, "invalid_field_value", { fields: [field] });
 	if (
@@ -74,6 +85,9 @@ function parseIntroduction(body: JsonObject) {
 		request.introduced_party_id.toLowerCase()
 	)
 		return invalid("introduced_party_id");
+	if (request.replaces && !request.unrecorded_only) return invalid("replaces");
+	if (Boolean(request.replaces) !== Boolean(request.replace_version))
+		return invalid("replace_version");
 	if (request.introduced_by && request.made_by !== "team")
 		return invalid("introduced_by");
 	return request;
@@ -107,6 +121,36 @@ async function addIntroduction(
 		.execute();
 	if (parties.length !== 2) throw notFound();
 	await lockDeal(tx, request.deal_id ?? null);
+	if (request.unrecorded_only && request.deal_id) {
+		const record = tx
+			.selectFrom("introduction")
+			.select("id")
+			.where("vendor_id", "=", request.vendor_id)
+			.where("deal_id", "=", request.deal_id)
+			.where("confirmed", "=", true);
+		// An edit holds the row before the introduction trigger takes the vendor lock.
+		if (request.replaces)
+			await record
+				.where("id", "=", request.replaces)
+				.forUpdate()
+				.executeTakeFirst();
+		await sql`select pg_advisory_xact_lock(hashtextextended('introduction:' || ${request.vendor_id}::uuid::text, 0))`.execute(
+			tx,
+		);
+		const recorded = await record.limit(2).execute();
+		if (
+			request.replaces &&
+			request.replace_version &&
+			recorded.length === 1 &&
+			recorded[0]?.id === request.replaces
+		)
+			await removeIntroduction(tx, {
+				introduction_id: request.replaces,
+				version: request.replace_version,
+			});
+		else if (recorded.length || request.replaces)
+			throw new SaveRefusal(new Refusal(409, "introduction_already_recorded"));
+	}
 	const introducer = request.introduced_by
 		? await userId(tx, request.introduced_by)
 		: ACTING_USER;
@@ -115,6 +159,7 @@ async function addIntroduction(
 		.values({
 			vendor_id: request.vendor_id,
 			made_by: request.made_by,
+			...(request.made_by === "client" && { maker_client_role: "client" }),
 			introduced_by_user_id: request.made_by === "team" ? introducer : null,
 			introduced_party_id: request.introduced_party_id,
 			introduced_on: request.introduced_on,
@@ -165,6 +210,37 @@ async function editIntroduction(
 	return { ...(await introductionRead(tx, introduction_id)) };
 }
 
+function parseRemove(introduction_id: string, body: JsonObject) {
+	if (!isUuid(introduction_id)) return new Refusal(404, "not_found");
+	const request = fit(body, { idempotency_key: isUuid, version: isVersion }, [
+		"idempotency_key",
+		"version",
+	]);
+	return request instanceof Refusal ? request : { ...request, introduction_id };
+}
+
+async function removeIntroduction(
+	tx: Transaction<DB>,
+	{ introduction_id, version }: { introduction_id: string; version: string },
+) {
+	const current = await tx
+		.selectFrom("introduction")
+		.where("id", "=", introduction_id)
+		.where("confirmed", "=", true)
+		.where("source_job_id", "is", null)
+		.select(sql<string>`xmin::text`.as("version"))
+		.forUpdate()
+		.executeTakeFirst();
+	if (!current) throw notFound();
+	if (current.version !== version)
+		throw new SaveRefusal(new Refusal(409, "version_conflict"));
+	await tx
+		.deleteFrom("introduction")
+		.where("id", "=", introduction_id)
+		.execute();
+	return { introduction_id };
+}
+
 export const introductions = new Hono<NextSaveEnv>()
 	.post("/introductions", (c) =>
 		answerNextSave(
@@ -181,5 +257,13 @@ export const introductions = new Hono<NextSaveEnv>()
 			"edit-introduction",
 			(body) => parseEdit(c.req.param("introduction"), body),
 			editIntroduction,
+		),
+	)
+	.post("/introductions/:introduction/remove", (c) =>
+		answerNextSave(
+			c,
+			"remove-introduction",
+			(body) => parseRemove(c.req.param("introduction"), body),
+			removeIntroduction,
 		),
 	);
