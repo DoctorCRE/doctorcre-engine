@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
 	access,
-	link,
+	chmod,
 	lstat,
 	mkdir,
 	mkdtempDisposable,
+	open,
 	readFile,
 	rename,
 	stat,
@@ -23,7 +23,7 @@ import {
 	docLinkEngineSchema,
 	postDocLink,
 	type RegisteredBackend,
-	readDocLinkConfig,
+	readDocLinkConfigFile,
 } from "./doc-link.ts";
 import {
 	checkCodexSignIn,
@@ -125,12 +125,17 @@ async function readCredential() {
 	}
 }
 
-async function replaceFile(path: string, contents: string) {
+async function replaceFile(
+	path: string,
+	contents: string | Buffer,
+	mode = 0o600,
+) {
 	await using directory = await mkdtempDisposable(
 		join(dirname(path), ".doc-link-"),
 	);
 	const pending = join(directory.path, "pending");
 	await writeFile(pending, contents, { mode: 0o600, flag: "wx" });
+	if (mode !== 0o600) await chmod(pending, mode);
 	await rename(pending, path);
 }
 
@@ -165,75 +170,130 @@ function launchctl(...args: string[]) {
 	return spawnSync("launchctl", args, { stdio: "ignore" }).status === 0;
 }
 
-type LinkFile = {
-	path: string;
-	contents: string;
-	backup?: string;
-	changed?: true;
-};
-
-function ignoreMissing(error: unknown) {
+function ignoreMissing(error: unknown): undefined {
 	if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
 		throw error;
+	return undefined;
 }
 
-async function activateLink(
-	domain: string,
-	service: string,
-	agent: LinkFile,
-	config: LinkFile,
-) {
-	const files = [agent, config];
+async function readAgent(path: string) {
+	await using file = await open(
+		path,
+		constants.O_RDONLY | constants.O_NONBLOCK,
+	);
+	const info = await file.stat();
+	if (!info.isFile()) throw new Error("Doc needs a regular LaunchAgent file.");
+	return { contents: await file.readFile(), mode: info.mode & 0o777 };
+}
+
+async function verifiesCredential(config: Parameters<typeof postDocLink>[0]) {
+	// A poll without readiness verifies the credential without claiming work.
+	const poll = await postDocLink(config, "claim");
+	if (poll?.status === 401 || poll?.status === 403) return false;
+	if (!poll)
+		throw new SetupError(
+			"Could not reach the engine. Check your internet connection and the HTTPS engine origin, then run setup again.",
+		);
+	if (poll.status !== 204)
+		throw new SetupError(
+			`The engine could not verify the Doc link code (HTTP ${poll.status}). Check the engine origin and try again.`,
+		);
+	return true;
+}
+
+async function readSetup() {
+	const library = join(homedir(), "Library");
+	const support = join(library, "Application Support", "DoctorCRE Doc");
+	const agents = join(library, "LaunchAgents");
+	const configPath = join(support, "link.json");
+	const agentPath = join(agents, `${label}.plist`);
+	const domain = `gui/${process.getuid?.()}`;
+	const service = `${domain}/${label}`;
 	const wasRunning = launchctl("print", service);
-	try {
-		if (wasRunning && !launchctl("bootout", service))
-			throw new SetupError(
-				"Could not stop the existing Doc link. Sign out of macOS and back in, then run setup again.",
-			);
-		for (const file of files) {
-			const backup = `${file.path}.backup-${randomUUID()}`;
-			await link(file.path, backup)
-				.then(() => {
-					file.backup = backup;
-				})
-				.catch(ignoreMissing);
-			file.changed = true;
-			await replaceFile(file.path, file.contents);
-		}
-		if (
-			!launchctl("enable", service) ||
-			!launchctl("bootstrap", domain, agent.path)
-		)
-			throw new SetupError(
-				"Could not start Doc link. Check that your macOS login allows background items and run setup again.",
-			);
-	} catch (error) {
-		const stopped =
-			!files.some(({ changed }) => changed) ||
-			!launchctl("print", service) ||
-			launchctl("bootout", service);
-		const restored = await Promise.allSettled(
-			files.map(async (file) => {
-				if (file.backup) await rename(file.backup, file.path);
-				else if (file.changed) await unlink(file.path).catch(ignoreMissing);
-			}),
+	const [stored, agent] = await Promise.all([
+		readDocLinkConfigFile(configPath).catch(ignoreMissing),
+		readAgent(agentPath).catch(ignoreMissing),
+	]);
+	const config = stored?.config;
+	const hadValidCode = config ? await verifiesCredential(config) : false;
+	const plistHome =
+		agent &&
+		spawnSync(
+			"/usr/bin/plutil",
+			[
+				"-extract",
+				"EnvironmentVariables.CODEX_HOME",
+				"raw",
+				"-o",
+				"-",
+				"--",
+				"-",
+			],
+			{ input: agent.contents, encoding: "utf8" },
 		);
-		if (
-			!stopped ||
-			restored.some(({ status }) => status === "rejected") ||
-			(wasRunning &&
-				!launchctl("print", service) &&
-				!launchctl("bootstrap", domain, agent.path))
-		)
-			throw new SetupError(
-				"Restore the previous Doc link files from the .backup files if present, then reload Doc link in your macOS login.",
-			);
-		await Promise.allSettled(
-			files.map(({ backup }) => backup && unlink(backup)),
+	const agentHome =
+		plistHome?.status === 0
+			? plistHome.stdout.replace(/\r?\n$/, "")
+			: undefined;
+	const configHome =
+		config && "backends" in config ? config.codex_home : undefined;
+	const customHome = process.env.CODEX_HOME || agentHome || configHome;
+	return {
+		support,
+		agents,
+		configPath,
+		agentPath,
+		domain,
+		service,
+		wasRunning,
+		stored,
+		agent,
+		config,
+		hadValidCode,
+		customHome,
+		home: customHome ? resolve(customHome) : codexHome(),
+	};
+}
+
+async function restoreFile(
+	path: string,
+	file: { contents: Buffer; mode: number } | undefined,
+) {
+	if (file) await replaceFile(path, file.contents, file.mode);
+	else await unlink(path).catch(ignoreMissing);
+}
+
+async function restoreSetup(
+	snapshot: Awaited<ReturnType<typeof readSetup>>,
+	changed: boolean,
+) {
+	// A code can be revoked while the partner enters its replacement.
+	const signedOut =
+		snapshot.config &&
+		!(
+			snapshot.hadValidCode &&
+			(await verifiesCredential(snapshot.config).catch(() => false))
 		);
-		throw error;
-	}
-	await Promise.allSettled(files.map(({ backup }) => backup && unlink(backup)));
+	if (!changed && !signedOut) return;
+
+	const stopped =
+		!launchctl("print", snapshot.service) ||
+		launchctl("bootout", snapshot.service);
+	const restored = await Promise.allSettled([
+		restoreFile(snapshot.agentPath, snapshot.agent),
+		restoreFile(snapshot.configPath, signedOut ? undefined : snapshot.stored),
+	]);
+	if (
+		!stopped ||
+		restored.some(({ status }) => status === "rejected") ||
+		(!signedOut &&
+			snapshot.wasRunning &&
+			!launchctl("bootstrap", snapshot.domain, snapshot.agentPath))
+	)
+		throw new SetupError(
+			"Could not restore Doc link. Check your Library folder and run setup again.",
+		);
+	if (signedOut) throw new SetupError("Setup didn't finish; run it again.");
 }
 
 async function prepareClaude(
@@ -300,6 +360,8 @@ async function discoverBackend(
 }
 
 export async function installDocLink(args: readonly string[]) {
+	let snapshot: Awaited<ReturnType<typeof readSetup>> | undefined;
+	let changed = false;
 	try {
 		const setup = parseSetup(args);
 		const engine = docLinkEngineSchema.safeParse(setup.origin);
@@ -307,16 +369,12 @@ export async function installDocLink(args: readonly string[]) {
 			throw new SetupError(
 				"Use the HTTPS engine origin supplied with your Doc setup command.",
 			);
-		const library = join(homedir(), "Library");
-		const support = join(library, "Application Support", "DoctorCRE Doc");
-		const agents = join(library, "LaunchAgents");
-		const configPath = join(support, "link.json");
-		const existing = await readDocLinkConfig(configPath).catch(() => undefined);
-		const savedCodexHome =
-			existing && "backends" in existing ? existing.codex_home : undefined;
-		const home =
-			!process.env.CODEX_HOME && savedCodexHome ? savedCodexHome : codexHome();
-		const registrations = existing ? configuredBackends(existing) : [];
+		snapshot = await readSetup();
+		const { home, domain, service, configPath, agentPath, support, agents } =
+			snapshot;
+		const registrations = snapshot.config
+			? configuredBackends(snapshot.config)
+			: [];
 		const recorded = (name: RegisteredBackend["backend"]) =>
 			registrations.find(({ backend }) => backend === name)?.binary;
 
@@ -338,12 +396,11 @@ export async function installDocLink(args: readonly string[]) {
 					);
 		const registered = other ? [selected, other] : [selected];
 		const codexDirectory =
-			savedCodexHome || registered.some(({ backend }) => backend === "codex")
+			snapshot.customHome ||
+			registered.some(({ backend }) => backend === "codex")
 				? home
 				: undefined;
 
-		const domain = `gui/${process.getuid?.()}`;
-		const service = `${domain}/${label}`;
 		if (!launchctl("print", domain))
 			throw new SetupError(
 				"Open Terminal under your macOS login and run setup again.",
@@ -360,19 +417,9 @@ export async function installDocLink(args: readonly string[]) {
 			throw new SetupError(
 				"Copy a Doc link credential from the app and run setup again.",
 			);
-		// A poll without a readiness header verifies the credential without claiming a turn.
-		const poll = await postDocLink(config.data, "claim");
-		if (poll?.status === 401 || poll?.status === 403)
+		if (!(await verifiesCredential(config.data)))
 			throw new SetupError(
 				"The Doc link code was refused. Make a new one in the app and run this again.",
-			);
-		if (!poll)
-			throw new SetupError(
-				"Could not reach the engine. Check your internet connection and the HTTPS engine origin, then run setup again.",
-			);
-		if (poll.status !== 204)
-			throw new SetupError(
-				`The engine could not verify the Doc link code (HTTP ${poll.status}). Check the engine origin and try again.`,
 			);
 
 		await mkdir(support, { recursive: true, mode: 0o700 });
@@ -386,25 +433,36 @@ export async function installDocLink(args: readonly string[]) {
 				"Check that you own the DoctorCRE Doc folder in Library/Application Support and set its permissions to 700.",
 			);
 		await mkdir(agents, { recursive: true });
-		const agent = join(agents, `${label}.plist`);
-		await activateLink(
-			domain,
-			service,
-			{
-				path: agent,
-				contents: await renderLaunchAgent(
-					configPath,
-					join(support, "link.log"),
-					codexDirectory,
-				),
-			},
-			{ path: configPath, contents: `${JSON.stringify(config.data)}\n` },
+		const plist = await renderLaunchAgent(
+			configPath,
+			join(support, "link.log"),
+			codexDirectory,
 		);
+		if (snapshot.wasRunning && !launchctl("bootout", service))
+			throw new SetupError(
+				"Could not stop the existing Doc link. Sign out of macOS and back in, then run setup again.",
+			);
+		changed = true;
+		await replaceFile(agentPath, plist);
+		await replaceFile(configPath, `${JSON.stringify(config.data)}\n`);
+		if (
+			!launchctl("enable", service) ||
+			!launchctl("bootstrap", domain, agentPath)
+		)
+			throw new SetupError(
+				"Could not start Doc link. Check that your macOS login allows background items and run setup again.",
+			);
 		process.stdout.write("Doc link is ready.\n");
 	} catch (error) {
+		const failure = snapshot
+			? await restoreSetup(snapshot, changed).then(
+					() => error,
+					(reason: unknown) => reason,
+				)
+			: error;
 		const message =
-			error instanceof SetupError
-				? error.message
+			failure instanceof SetupError
+				? failure.message
 				: "Could not finish Doc link setup. Check that you can write to your Library folder and run setup again.";
 		process.stderr.write(`${message}\n`);
 		process.exitCode = 1;

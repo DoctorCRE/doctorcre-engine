@@ -2130,7 +2130,7 @@ bash scripts/install-doc-link.sh "$DOC_ENGINE_ORIGIN"
 
 Rerun setup with a new credential to replace the configuration and reload the background job. Setup writes `~/Library/Application Support/DoctorCRE Doc/link.json` with mode `0600`. It records the absolute paths of the signed-in CLIs it finds in `backends` and sets `default_backend` from the setup command. The runner uses that default and can still read earlier single-backend configs. It checks file ownership and permissions before reading the credential, and stops polling on `401`. Mail judgment receives no link credential.
 
-The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts), the configuration, and `link.log` in the same folder as the configuration. If a reload fails, setup restores the previous files and restarts the old job.
+The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts), the configuration, and `link.log` in the same folder as the configuration. If a reload fails, setup restores the previous files and restarts the old job when the engine still accepts its link code. If setup cannot confirm the old code is still valid during rollback, it leaves Doc signed out. Run setup again to link it.
 
 **Claude Code.** The partner signs in through Claude Code and keeps plan usage credits off. Setup and the link use `claude auth status` to confirm a personal Pro, Max, or Ultra subscription. Team, Enterprise, and unrecognized plans stop setup or pause the link. The link checks sign-in in the settings mode it uses for each kind of work. It also checks sign-in before starting a claimed turn or job. It reports an expired sign-in from a failed session. On a reported plan limit, the work returns to the queue and the Mac waits until the reported reset before claiming again. If Claude Code gives no reset time, the link checks again after five minutes.
 
@@ -2159,7 +2159,7 @@ cd "$doc_checkout" && npm ci
 ```
 
 1. Use the absolute path to a Codex CLI 0.172.0 binary as `DOC_CODEX_BIN`. If you need the binary, get it from the [Codex CLI 0.172.0 release](https://github.com/openai/codex/releases/tag/rust-v0.172.0).
-2. If Codex asks you to sign in, use `"$DOC_CODEX_BIN" login` with your personal ChatGPT plan. Keep plan usage credits off. Setup uses the `CODEX_HOME` you set in Terminal, a previously saved Codex home, or `~/.codex` in that order.
+2. If Codex asks you to sign in, use `"$DOC_CODEX_BIN" login` with your personal ChatGPT plan. Keep plan usage credits off. Setup uses the `CODEX_HOME` you set in Terminal, the home saved in the LaunchAgent, the home saved in the link configuration, or `~/.codex` in that order.
 3. Run setup. Issue a Doc link credential in the app and paste it at the hidden prompt. Issuing a new credential revokes the previous one.
 
    ```sh

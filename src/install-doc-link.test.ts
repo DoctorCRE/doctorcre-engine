@@ -120,8 +120,17 @@ esac`,
 	} as const;
 	function run(
 		input = firstCredential,
-		args = [engine],
-		codexDirectory?: string,
+		{
+			args = [engine],
+			codexDirectory,
+			polls,
+			revokeOnNew = false,
+		}: {
+			args?: string[];
+			codexDirectory?: string | undefined;
+			polls?: [string, number, string?][] | undefined;
+			revokeOnNew?: boolean;
+		} = {},
 	) {
 		const invocation = join(scratch, "run-installer.mjs");
 		writeFileSync(
@@ -130,18 +139,34 @@ esac`,
 import assert from "node:assert/strict";
 import { appendFileSync } from "node:fs";
 import { installDocLink } from ${JSON.stringify(installer.href)};
+const polls = ${JSON.stringify(polls ?? null)};
+let revoked = false;
+let fetchError;
 globalThis.fetch = async (url, init) => {
+	try {
 	const request = new Request(url, init);
-	assert.equal(request.url, ${JSON.stringify(`${engine}/api/engine/doc/link/claim`)});
 	assert.equal(request.method, "POST");
-	assert.equal(request.headers.get("Authorization"), ${JSON.stringify(`Bearer ${input}`)});
+	const credential = request.headers.get("Authorization")?.slice(7);
+	const [expectedCredential, status, origin] = polls?.shift() ?? [];
+	if (polls) assert.equal(credential, expectedCredential);
+	else assert.ok([${JSON.stringify(firstCredential)}, ${JSON.stringify(secondCredential)}].includes(credential));
+	assert.equal(request.url, new URL("/api/engine/doc/link/claim", origin ?? ${JSON.stringify(args.at(-1))}).href);
+	if (${revokeOnNew} && credential === ${JSON.stringify(secondCredential)}) revoked = true;
 	assert.equal(request.headers.get("Doc-Link-Readiness"), null);
 	assert.equal(request.headers.get("Cookie"), null);
 	assert.equal(request.redirect, "error");
 	appendFileSync(${JSON.stringify(commands)}, "engine credential checked\\n");
-	return new Response(null, { status: ${engineStatus} });
+	return new Response(null, {
+		status: revoked && credential === ${JSON.stringify(firstCredential)} ? 401 : (status ?? ${engineStatus}),
+	});
+	} catch (error) {
+		fetchError = error;
+		throw error;
+	}
 };
 await installDocLink(process.argv.slice(2));
+if (fetchError) throw fetchError;
+if (polls) assert.equal(polls.length, 0);
 `,
 		);
 		return spawnSync(process.execPath, [invocation, ...args], {
@@ -154,12 +179,16 @@ await installDocLink(process.argv.slice(2));
 	function runCodex({
 		codexDirectory,
 		defaultBackend = "codex",
+		input = firstCredential,
+		polls,
 		version = "codex-cli 0.172.0",
 		plan = "plus",
 		signedIn = true,
 	}: {
 		codexDirectory?: string;
 		defaultBackend?: "claude" | "codex";
+		input?: string;
+		polls?: [string, number, string?][];
 		version?: string;
 		plan?: string;
 		signedIn?: boolean;
@@ -191,9 +220,13 @@ esac
 		);
 		if (defaultBackend === "claude") {
 			symlinkSync(codex, join(bin, "codex"));
-			return run(firstCredential, [engine], codexDirectory);
+			return run(input, { codexDirectory, polls });
 		}
-		return run(firstCredential, ["--codex", codex, engine], codexDirectory);
+		return run(input, {
+			args: ["--codex", codex, engine],
+			codexDirectory,
+			polls,
+		});
 	}
 	return {
 		run,
@@ -306,6 +339,51 @@ test("a rejected new launch restores both files and reloads the working job", (t
 	assert.ok(statSync(mac.loaded).isFile());
 });
 
+test("a failed switch leaves Doc signed out when the old credential is revoked", async (t) => {
+	const mac = fakeMac(t);
+	assert.equal(mac.runCodex().status, 0);
+	const agent = readFileSync(mac.agent, "utf8");
+	mac.rejectBootstrap(true);
+
+	const result = mac.run(secondCredential, { revokeOnNew: true });
+
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /Setup didn't finish; run it again/);
+	for (const path of [mac.config, mac.loaded])
+		assert.throws(() => statSync(path), { code: "ENOENT" });
+	assert.equal(readFileSync(mac.agent, "utf8"), agent);
+});
+
+test("switching a legacy Codex link preserves the home saved only in launchd", async (t) => {
+	const mac = fakeMac(t);
+	const codexDirectory = join(mac.home, "Codex & tools");
+	assert.equal(mac.runCodex({ codexDirectory }).status, 0);
+	writeFileSync(
+		mac.config,
+		JSON.stringify({
+			engine,
+			backend: "codex",
+			binary: mac.codex,
+			credential: firstCredential,
+		}),
+	);
+
+	const result = mac.run();
+
+	assert.equal(result.status, 0, result.stderr);
+	const config = await readDocLinkConfig(mac.config);
+	assert.ok("backends" in config);
+	assert.deepEqual(config.backends, [
+		{ backend: "claude", binary: mac.claude },
+		{ backend: "codex", binary: mac.codex },
+	]);
+	assert.equal(config.codex_home, codexDirectory);
+	assert.match(
+		readFileSync(mac.agent, "utf8"),
+		/<key>CODEX_HOME<\/key>\s*<string>[^<]+Codex &amp; tools<\/string>/,
+	);
+});
+
 test("a rejected first launch removes both new files", (t) => {
 	const mac = fakeMac(t);
 	mac.rejectBootstrap();
@@ -353,7 +431,13 @@ for (const { name, options, message, expectedCommands } of [
 		const result = mac.runCodex(options);
 		assert.equal(result.status, 1, result.stderr);
 		assert.match(result.stderr, message);
-		assert.equal(readFileSync(mac.commands, "utf8"), expectedCommands);
+		assert.equal(
+			readFileSync(mac.commands, "utf8").replace(
+				/^launchctl print [^\n]*\n/,
+				"",
+			),
+			expectedCommands,
+		);
 		assert.throws(() => statSync(mac.config), { code: "ENOENT" });
 	});
 }
@@ -511,7 +595,10 @@ for (const subscriptionType of ["team", "enterprise"]) {
 		const result = mac.run();
 		assert.equal(result.status, 1, result.stderr);
 		assert.match(result.stderr, /Doc needs your own Claude plan/);
-		assert.doesNotMatch(readFileSync(mac.commands, "utf8"), /launchctl|engine/);
+		assert.doesNotMatch(
+			readFileSync(mac.commands, "utf8"),
+			/launchctl (?:bootout|bootstrap)|engine/,
+		);
 	});
 }
 
