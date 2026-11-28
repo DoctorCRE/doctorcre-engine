@@ -280,11 +280,15 @@ test("a changed choice replaces only the named introduction, in the same save", 
 });
 
 test("a stale removal leaves an introduction that moved to another deal", async () => {
+	const otherDeal = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into deal (id, name, owner_user_id) values ('${otherDeal}', 'Example Destination Deal', '${joeId}');
+		commit;`);
 	const [, added] = await introduce({ deal_id: deal });
 	const path = `introductions/${added.introduction_id}`;
 	const [moved] = await save(joe, path, {
 		...key(),
-		deal_id: { from: deal, to: freshDeal },
+		deal_id: { from: deal, to: otherDeal },
 	});
 	assert.equal(moved, 200);
 	const [status, refused] = await save(joe, `${path}/remove`, {
@@ -297,7 +301,7 @@ test("a stale removal leaves an introduction that moved to another deal", async 
 		"select deal_id from introduction where id = $1",
 		[added.introduction_id],
 	);
-	assert.deepEqual(rows, [{ deal_id: freshDeal }]);
+	assert.deepEqual(rows, [{ deal_id: otherDeal }]);
 });
 
 test("a replacement using an earlier receipt preserves the newer note", async () => {
