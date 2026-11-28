@@ -71,6 +71,22 @@ end $$;
 
 alter function check_deal_plan_todo() set search_path = next, pg_temp;
 
+-- Plan-date writes take the same deal lock as workflow edits before touching dates.
+create or replace function write_deal_plan_date(for_deal uuid, plan_todo text, end_on date) returns void
+language plpgsql security definer as $$
+begin
+	perform from deal where id = for_deal for update;
+	if plan_todo is null then
+		update deal_plan_date set target_on = null where deal_id = for_deal and target_on is not null;
+	else
+		insert into deal_plan_date (deal_id, todo, target_on) values (for_deal, plan_todo, end_on)
+		on conflict (deal_id, todo) do update set target_on = excluded.target_on
+		where deal_plan_date.target_on is distinct from excluded.target_on;
+	end if;
+end $$;
+revoke execute on function write_deal_plan_date(uuid, text, date) from public;
+alter function write_deal_plan_date(uuid, text, date) set search_path = next, pg_temp;
+
 drop trigger if exists deal_plan_date_workflow_todo on deal_plan_date;
 drop trigger if exists deal_plan_date_workflow_todo on deal;
 create constraint trigger deal_plan_date_workflow_todo after insert or update on deal_plan_date
@@ -84,7 +100,8 @@ create or replace trigger stamp_change before insert or update on deal_plan_date
 create or replace trigger record_change after insert or update or delete on deal_plan_date
 	for each row execute function record_change('deal_id', 'todo');
 
-grant select, insert, update (target_on) on deal_plan_date to engine;
-grant select on deal_plan_date to engine_reader;
+revoke insert, update (target_on) on deal_plan_date from engine;
+grant select on deal_plan_date to engine, engine_reader;
+grant execute on function write_deal_plan_date(uuid, text, date) to engine;
 
 commit;

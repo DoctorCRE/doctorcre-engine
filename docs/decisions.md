@@ -434,3 +434,5 @@ Doc link requires an individual plan confirmed by `claude auth status`. It refus
 226\. **Deal stars are retired (2026-11-28).** The owner removed stars from Deals board cards and List rows and approved dropping the unused `next.deal_star` table. Fresh schemas omit it. [The drop migration](../schema/drop-deal-stars.sql) removes it from existing schemas and keeps prior change history (#1495).
 
 227\. **Forecast attention comes last (2026-11-28, seat dq).** A deal on pace to miss a critical date gets that reason only after the six concrete reasons. Its start is the first Central day in its current phase when the forecast passed that date, using current records and lengths. It is computed on the read.
+
+228\. **Plan dates lock the deal first (2026-11-28, seat ds).** The engine writes and clears plan dates through `write_deal_plan_date`, which locks the deal before touching any date row. The engine role reads the table directly. The function owns its writes so a direct upsert cannot deadlock a partner save.

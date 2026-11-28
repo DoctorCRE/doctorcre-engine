@@ -80,20 +80,10 @@ async function save(tx: Transaction<DB>, request: Request) {
 		)
 			throw new SaveRefusal(bad("target_on"));
 	}
-	if (!todo) {
-		await tx
-			.updateTable("deal_plan_date")
-			.set({ target_on: null })
-			.where("deal_id", "=", deal_id)
-			.where("target_on", "is not", null)
-			.execute();
-	} else if (target_on !== undefined && target_on !== previous_on) {
-		await sql`insert into deal_plan_date (deal_id, todo, target_on)
-			values (${deal_id}, ${todo}, ${target_on})
-			on conflict (deal_id, todo) do update set target_on = excluded.target_on`.execute(
+	if (!todo || target_on !== previous_on)
+		await sql`select write_deal_plan_date(${deal_id}::uuid, ${todo ?? null}::text, ${target_on ?? null}::date)`.execute(
 			tx,
 		);
-	}
 	const version = await tx
 		.selectNoFrom(planVersionOf(sql.val(deal_id)).as("version"))
 		.executeTakeFirstOrThrow();

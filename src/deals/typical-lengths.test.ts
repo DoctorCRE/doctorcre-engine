@@ -475,6 +475,90 @@ test("concurrent plan edits accept one writer per base version", async (t) => {
 	assert.equal(saved.own_dates.representation, winner === 0 ? first : second);
 });
 
+test("direct table writes cannot deadlock the Worker on an existing plan date", async (t) => {
+	const { db, deal, day, read, submit } = await planDateFixture(t);
+	const [seeded] = await submit((await read()).base_version, {
+		todo: "representation",
+		target_on: await day(40),
+	});
+	assert.equal(seeded, 200);
+	const gate = 1496;
+	await db.query(`create function pause_plan_date_for_test() returns trigger language plpgsql as $$
+		begin
+			if current_setting('engine.user_id', true) = '${blair}' then
+				perform pg_advisory_xact_lock(${gate});
+			end if;
+			return new;
+		end $$;
+		create trigger pause_plan_date_for_test before insert on deal_plan_date
+		for each row execute function pause_plan_date_for_test()`);
+	async function waitForWorker(lockTypes: string[]) {
+		const deadline = AbortSignal.timeout(15_000);
+		while (!deadline.aborted) {
+			const { rowCount } = await db.query(
+				`select from pg_locks where not granted and locktype = any($1::text[])
+				and pg_backend_pid() = any(pg_blocking_pids(pid))`,
+				[lockTypes],
+			);
+			if (rowCount) return;
+		}
+		assert.fail(`the Worker did not wait for ${lockTypes.join(" or ")}`);
+	}
+	for (const workerFirst of [false, true]) {
+		await t.test(
+			workerFirst
+				? "the Worker takes the deal lock first"
+				: "the date row is held first",
+			async () => {
+				const { base_version } = await read();
+				const target_on = await day(workerFirst ? 55 : 50);
+				const save = () =>
+					submit(base_version, { todo: "representation", target_on });
+				let saving: ReturnType<typeof save> | undefined;
+				let directCode: string | undefined;
+				let gateHeld = false;
+				await db.query("begin; set local deadlock_timeout = '25ms'");
+				try {
+					if (workerFirst) {
+						await db.query("select pg_advisory_lock($1)", [gate]);
+						gateHeld = true;
+						saving = save();
+						await waitForWorker(["advisory"]);
+					}
+					await db.query(
+						"select from deal_plan_date where deal_id = $1 for update",
+						[deal],
+					);
+					if (gateHeld) {
+						await db.query("select pg_advisory_unlock($1)", [gate]);
+						gateHeld = false;
+					}
+					saving ??= save();
+					await waitForWorker(["transactionid", "tuple"]);
+					await db.query(
+						`set local role engine; set local engine.user_id = '${alex}'`,
+					);
+					await db
+						.query(
+							`insert into deal_plan_date (deal_id, todo, target_on) values ($1, 'representation', current_date + 80)
+					on conflict (deal_id, todo) do update set target_on = excluded.target_on`,
+							[deal],
+						)
+						.catch((error: unknown) => {
+							if (!(error instanceof pg.DatabaseError)) throw error;
+							directCode = error.code;
+						});
+				} finally {
+					await db.query("rollback");
+					if (gateHeld) await db.query("select pg_advisory_unlock($1)", [gate]);
+					await saving;
+				}
+				assert.deepEqual([directCode, (await saving)?.[0]], ["42501", 200]);
+			},
+		);
+	}
+});
+
 test("a date that leaves no room for the forecast is rejected before saving", async (t) => {
 	const { read, submit } = await planDateFixture(t);
 	const before = await read();
@@ -503,9 +587,9 @@ test("workflow changes and incompatible plan dates cannot both commit across sna
 	});
 	await writer.connect();
 	const changeWorkflow = "update deal set kind = 'purchase' where id = $1";
-	const saveDate = `insert into deal_plan_date (deal_id, todo, target_on)
-		values ($1, 'commencement_letter', current_date + 40) on conflict (deal_id, todo)
-		do update set target_on = excluded.target_on`;
+	const saveDate =
+		"select write_deal_plan_date($1, 'commencement_letter', current_date + 40)";
+	const reset = "select write_deal_plan_date($1, null, null)";
 	const begin = (client: pg.Client, isolation: string) =>
 		client.query(
 			`begin isolation level ${isolation}; set local role engine; set local engine.user_id = '${alex}'`,
@@ -539,10 +623,7 @@ test("workflow changes and incompatible plan dates cannot both commit across sna
 				await db.query("rollback");
 			}
 			await begin(writer, isolation);
-			await writer.query(
-				"update deal_plan_date set target_on = null where deal_id = $1",
-				[deal],
-			);
+			await writer.query(reset, [deal]);
 			await writer.query("update deal set kind = 'lease' where id = $1", [
 				deal,
 			]);
@@ -561,18 +642,22 @@ test("the database accepts only to-dos from the deal's workflow", async (t) => {
 		}
 		await db.query("begin");
 		try {
+			const { rows } = await db.query(
+				"select has_function_privilege('engine_reader', 'write_deal_plan_date(uuid,text,date)', 'execute') as can_write",
+			);
+			assert.deepEqual(rows, [{ can_write: false }]);
 			await db.query("set local role engine");
 			await db.query("select set_config('engine.user_id', $1, true)", [alex]);
 			const insert = (todo: string) =>
-				db.query(
-					"insert into deal_plan_date (deal_id, todo, target_on) values ($1, $2, current_date + 40)",
-					[deal, todo],
-				);
+				db.query("select write_deal_plan_date($1, $2, current_date + 40)", [
+					deal,
+					todo,
+				]);
 			await insert("commencement_letter");
 			await db.query("savepoint invalid_date");
 			await assert.rejects(
 				db.query(
-					"update deal_plan_date set target_on = '9999-12-31' where deal_id = $1",
+					"select write_deal_plan_date($1, 'commencement_letter', '9999-12-31')",
 					[deal],
 				),
 				{ code: "23514" },
@@ -588,10 +673,7 @@ test("the database accepts only to-dos from the deal's workflow", async (t) => {
 			await db.query("savepoint change_workflow");
 			await assert.rejects(reclassify(), { code: "23514" });
 			await db.query("rollback to savepoint change_workflow");
-			await db.query(
-				"update deal_plan_date set target_on = null where deal_id = $1",
-				[deal],
-			);
+			await db.query("select write_deal_plan_date($1, null, null)", [deal]);
 			await reclassify();
 		} finally {
 			await db.query("rollback");

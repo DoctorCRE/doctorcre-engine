@@ -2681,7 +2681,6 @@ const CHANGEABLE: Record<string, string[]> = {
 	phase: ["label"],
 	deal_kind: ["label"],
 	typical_length: ["days"],
-	deal_plan_date: ["target_on"],
 	deal_reason: ["label"],
 	specialty: ["label"],
 	party: ["city", "how_found", "how_found_detail", "name", "npi"],
@@ -4423,6 +4422,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
 				"deal_open_name",
+				"deal_plan_date",
 				"doc_judgment_destination",
 				"doc_judgment_job",
 				"email_summary",

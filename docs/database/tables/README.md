@@ -477,6 +477,7 @@
 | next.tstz_dist                                | interval      | timestamp with time zone, timestamp with time zone                                                                                                           | FUNCTION |
 | next.vendor_reason_not_recorded_only_imported | trigger       |                                                                                                                                                              | FUNCTION |
 | next.weekly_review_undo_by_partner            | trigger       |                                                                                                                                                              | FUNCTION |
+| next.write_deal_plan_date                     | void          | for_deal uuid, plan_todo text, end_on date                                                                                                                   | FUNCTION |
 
 ---
 

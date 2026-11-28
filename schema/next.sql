@@ -619,8 +619,24 @@ begin
 	return null;
 end $$;
 
+-- Plan-date writes take the same deal lock as workflow edits before touching dates.
+create function write_deal_plan_date(for_deal uuid, plan_todo text, end_on date) returns void
+language plpgsql security definer as $$
+begin
+	perform from deal where id = for_deal for update;
+	if plan_todo is null then
+		update deal_plan_date set target_on = null where deal_id = for_deal and target_on is not null;
+	else
+		insert into deal_plan_date (deal_id, todo, target_on) values (for_deal, plan_todo, end_on)
+		on conflict (deal_id, todo) do update set target_on = excluded.target_on
+		where deal_plan_date.target_on is distinct from excluded.target_on;
+	end if;
+end $$;
+revoke execute on function write_deal_plan_date(uuid, text, date) from public;
+
 do $$ begin
 	execute format('alter function check_deal_plan_todo() set search_path = %I, pg_temp', current_schema());
+	execute format('alter function write_deal_plan_date(uuid, text, date) set search_path = %I, pg_temp', current_schema());
 end $$;
 
 create constraint trigger deal_plan_date_workflow_todo after insert or update on deal_plan_date
@@ -4244,11 +4260,13 @@ revoke insert on lead_source_sender from engine;
 -- Only a merge leaves a pointer.
 revoke insert on merged_party from engine;
 revoke insert on deal_open_name from engine;
+revoke insert on deal_plan_date from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change, imported_change, imported_deal_history from engine;
 -- Only the owner's copy adds the old system's earlier people, owners and board facts.
 revoke insert on imported_automatic_phase_move, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board from engine;
 grant execute on function merge_party to engine;
+grant execute on function write_deal_plan_date(uuid, text, date) to engine;
 grant execute on function carry_weekly_review to engine;
 grant execute on function lock_weekly_review(date, uuid, uuid) to engine;
 grant execute on function npi_check_digit_holds(text), is_time_zone(text) to engine;
@@ -4267,7 +4285,6 @@ grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, pa
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
-grant select, insert, update (target_on) on deal_plan_date to engine;
 grant update (days) on typical_length to engine;
 grant update (lead_client_id) on party_role to engine;
 grant update (relationship_origin, rivalry_note, refers_business, offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id, needs_attention) on party_role to engine;
