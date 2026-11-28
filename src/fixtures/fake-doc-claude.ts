@@ -17,13 +17,32 @@ const finished = (result: unknown) =>
 if (args.includes("auth")) {
 	const capture = join(import.meta.dirname, "auth-args.json");
 	if (existsSync(capture)) writeFileSync(capture, JSON.stringify(args));
-	emit({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro" });
+	const path = join(import.meta.dirname, "user-settings.json");
+	const settings = existsSync(path)
+		? JSON.parse(readFileSync(path, "utf8"))
+		: {};
+	const isolated = args.includes("--setting-sources");
+	emit({
+		loggedIn: !(isolated && settings.fixtureIsolatedSignedOut),
+		authMethod:
+			!isolated && settings.env?.ANTHROPIC_AUTH_TOKEN
+				? "oauth_token"
+				: "claude.ai",
+		subscriptionType: "pro",
+	});
 } else {
 	const input = JSON.parse(readFileSync(0, "utf8"));
 	const question = input.turn?.question ?? input.subject;
 	let prompt = "";
 	if (!input.turn) {
 		const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
+		assert.equal(valueAfter("--setting-sources"), "");
+		assert.deepEqual(JSON.parse(valueAfter("--settings") ?? ""), {
+			disableAllHooks: true,
+			disableClaudeAiConnectors: true,
+		});
+		assert.equal(valueAfter("--permission-mode"), "dontAsk");
+		assert.ok(args.includes("--no-chrome"));
 		assert.ok(args.includes("--strict-mcp-config"));
 		assert.equal(valueAfter("--tools"), "");
 		assert.deepEqual(JSON.parse(valueAfter("--mcp-config") ?? ""), {
