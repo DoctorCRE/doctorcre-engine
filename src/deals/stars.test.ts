@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { copyTest, readSchema } from "../test-copy.ts";
-import { type Caller, doorTest } from "../test-door.ts";
+import { doorTest } from "../test-door.ts";
 
 const { db, setup, cleanup, save, request } = doorTest();
 const alex = randomUUID();
@@ -11,7 +11,6 @@ const client = randomUUID();
 const starred = randomUUID();
 const plain = randomUUID();
 const alexCaller = { user: "alex" };
-const blairCaller = { user: "blair" };
 const key = () => ({ idempotency_key: randomUUID() });
 
 before(async () => {
@@ -32,75 +31,25 @@ before(async () => {
 });
 after(cleanup);
 
-async function stars(caller: Caller) {
+// The doors and the board's mark are gone; the table stays until its drop has the owner's yes.
+test("no star door answers and the board marks no deal starred", async () => {
+	await db.query(`begin; set local role engine; set local engine.user_id = '${alex}';
+		insert into deal_star (user_id, deal_id) values ('${alex}', '${starred}'); commit;`);
+	for (const door of ["star", "unstar"])
+		assert.equal(
+			(await save(alexCaller, `deals/${starred}/${door}`, key()))[0],
+			404,
+		);
 	const response = await request(
-		caller,
+		alexCaller,
 		"deals",
 		{ method: "GET" },
 		{ DEALS_READ_SCHEMA: "next" },
 	);
 	assert.equal(response.status, 200);
-	const board = (await response.json()) as {
-		deals: { id: string; starred: boolean }[];
-	};
-	return Object.fromEntries(board.deals.map((d) => [d.id, d.starred]));
-}
-
-test("a partner's star shows only on their own board and repeats leave the same state", async () => {
-	assert.deepEqual(await stars(alexCaller), {
-		[starred]: false,
-		[plain]: false,
-	});
-	for (let i = 0; i < 2; i++)
-		assert.deepEqual(
-			await save(alexCaller, `deals/${starred.toUpperCase()}/star`, key()),
-			[200, { deal_id: starred, starred: true }],
-		);
-	assert.deepEqual(await stars(alexCaller), {
-		[starred]: true,
-		[plain]: false,
-	});
-	assert.deepEqual(await stars(blairCaller), {
-		[starred]: false,
-		[plain]: false,
-	});
-
-	await save(blairCaller, `deals/${plain}/star`, key());
-	for (let i = 0; i < 2; i++)
-		assert.deepEqual(await save(alexCaller, `deals/${starred}/unstar`, key()), [
-			200,
-			{ deal_id: starred, starred: false },
-		]);
-	assert.deepEqual(await stars(alexCaller), {
-		[starred]: false,
-		[plain]: false,
-	});
-	assert.deepEqual(await stars(blairCaller), {
-		[starred]: false,
-		[plain]: true,
-	});
-});
-
-test("a retried star replays its answer and a missing deal or key is refused", async () => {
-	const retry = key();
-	await save(alexCaller, `deals/${starred}/star`, retry);
-	assert.deepEqual(await save(alexCaller, `deals/${starred}/star`, retry), [
-		200,
-		{ replayed: true, deal_id: starred, starred: true },
-	]);
-	assert.equal(
-		(await save(alexCaller, `deals/${randomUUID()}/star`, key()))[0],
-		404,
-	);
-	assert.equal(
-		(await save(alexCaller, "deals/not-a-deal/star", key()))[0],
-		404,
-	);
-	assert.equal((await save(alexCaller, `deals/${starred}/star`, {}))[0], 400);
-	assert.equal(
-		(await save({ job: "agent" }, `deals/${starred}/star`, key()))[0],
-		404,
-	);
+	const { deals } = (await response.json()) as { deals: object[] };
+	assert.equal(deals.length, 2);
+	assert.ok(deals.every((deal) => !("starred" in deal)));
 });
 
 for (const migrated of [false, true]) {

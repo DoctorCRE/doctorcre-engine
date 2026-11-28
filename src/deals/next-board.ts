@@ -393,11 +393,7 @@ const openActions = (about: RawBuilder<unknown>, clientStep = false) =>
 		order by s.due_on nulls last, s.id limit 3
 	) action)`;
 
-export async function readNextBoard(
-	db: Transaction<DB>,
-	viewerId: string,
-	input: BoardInputs,
-) {
+export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 	const scope = {
 		workspace: input.workspace ?? "all",
 		account: input.account_client_id || null,
@@ -407,14 +403,6 @@ export async function readNextBoard(
 			clientWebsiteOf(db, eb.ref("board.id"), eb.ref("board.client_id")).as(
 				"client_portal_url",
 			),
-			eb
-				.exists(
-					eb
-						.selectFrom("deal_star")
-						.whereRef("deal_star.deal_id", "=", "board.id")
-						.where("deal_star.user_id", "=", viewerId),
-				)
-				.as("starred"),
 			openActions(sql`s.deal_id = board.id`).as("open_actions"),
 			openActions(sql`s.party_id = board.client_id`, true).as("client_actions"),
 			// Deal notes have their own section and did not feed the old card summary.
