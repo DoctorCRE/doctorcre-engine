@@ -201,7 +201,7 @@ async function verifiesCredential(config: Parameters<typeof postDocLink>[0]) {
 	return true;
 }
 
-async function readSetup() {
+async function readSetup(plutil: string) {
 	const library = join(homedir(), "Library");
 	const support = join(library, "Application Support", "DoctorCRE Doc");
 	const agents = join(library, "LaunchAgents");
@@ -219,7 +219,7 @@ async function readSetup() {
 	const plistHome =
 		agent &&
 		spawnSync(
-			"/usr/bin/plutil",
+			plutil,
 			[
 				"-extract",
 				"EnvironmentVariables.CODEX_HOME",
@@ -359,7 +359,10 @@ async function discoverBackend(
 	}
 }
 
-export async function installDocLink(args: readonly string[]) {
+export async function installDocLink(
+	args: readonly string[],
+	{ plutil = "/usr/bin/plutil" } = {},
+) {
 	let snapshot: Awaited<ReturnType<typeof readSetup>> | undefined;
 	let changed = false;
 	try {
@@ -369,7 +372,7 @@ export async function installDocLink(args: readonly string[]) {
 			throw new SetupError(
 				"Use the HTTPS engine origin supplied with your Doc setup command.",
 			);
-		snapshot = await readSetup();
+		snapshot = await readSetup(plutil);
 		const { home, domain, service, configPath, agentPath, support, agents } =
 			snapshot;
 		const registrations = snapshot.config

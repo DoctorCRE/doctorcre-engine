@@ -77,6 +77,23 @@ exit ${signedIn ? 0 : 1}
 	function command(name: string, body: string) {
 		writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
 	}
+	const plistFixture = join(scratch, "plutil.mjs");
+	writeFileSync(
+		plistFixture,
+		String.raw`
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+assert.deepEqual(process.argv.slice(2), [
+	"-extract", "EnvironmentVariables.CODEX_HOME", "raw", "-o", "-", "--", "-",
+]);
+const plist = readFileSync(0, "utf8");
+const value = /<key>EnvironmentVariables<\/key>\s*<dict>[^]*?<key>CODEX_HOME<\/key>\s*<string>(.*?)<\/string>/s.exec(plist)?.[1];
+if (value === undefined) process.exit(1);
+const entities = { amp: "&", lt: "<", gt: ">" };
+console.log(value.replace(/&(amp|lt|gt);/g, (_, name) => entities[name]));
+`,
+	);
+	command("plutil", `exec "${process.execPath}" "${plistFixture}" "$@"`);
 	command("uname", "printf '%s\\n' Darwin");
 	command(
 		"curl",
@@ -160,7 +177,7 @@ globalThis.fetch = async (url, init) => {
 		throw error;
 	}
 };
-await installDocLink(process.argv.slice(2));
+await installDocLink(process.argv.slice(2), { plutil: ${JSON.stringify(join(bin, "plutil"))} });
 if (fetchError) throw fetchError;
 if (polls) assert.equal(polls.length, 0);
 `,
