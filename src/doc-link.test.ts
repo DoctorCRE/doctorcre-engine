@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { type TestContext, test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { runDocLink } from "../scripts/doc-link.ts";
+import { backends } from "../scripts/doc-link-backends.ts";
 import { withPartnerAuth } from "./partner-auth.ts";
 import { isArguments } from "./save-door.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
@@ -32,7 +32,7 @@ async function runSubtest(
 
 async function exerciseDocLink(
 	t: TestContext,
-	scenario: "polling" | "judgment",
+	scenario: "journey" | "polling" | "judgment",
 ) {
 	const { db, setup, cleanup, connectionString } = copyTest();
 	const reader = `doc_read_${randomUUID().replaceAll("-", "")}`;
@@ -159,16 +159,23 @@ async function exerciseDocLink(
 			send({ ...partner, ...proof }, "POST", `/revoke${suffix}`);
 
 		const { credential, status } = await (async () => {
-			if (scenario === "judgment") {
+			if (scenario !== "journey") {
 				await db.query(await readSchema("add-doc-link.sql"));
 				await db.query(await readSchema("add-doc-link-readiness.sql"));
 				await db.query(await readSchema("add-doc-link-backend.sql"));
-				const credential = await issue(first);
+				const credential = randomBytes(32).toString("base64url");
+				const hash = createHash("sha256").update(credential).digest("hex");
 				await db.query(
-					"insert into next.doc_conversation (owner_user_id) values ($1)",
-					[appUserId],
+					`with link as (
+						insert into next.doc_link (owner_user_id, credential_hash, last_seen_at, readiness, backend)
+						values ($1, $2, now(), 'ready', 'claude')
+					)
+					insert into next.doc_conversation (owner_user_id) values ($1)`,
+					[appUserId, hash],
 				);
-				return { credential, status: undefined };
+				const status =
+					scenario === "polling" ? await presence(first) : undefined;
+				return { credential, status };
 			}
 			const wrongCredential = randomBytes(32).toString("base64url");
 			for (const response of await Promise.all([
@@ -391,6 +398,7 @@ async function exerciseDocLink(
 
 			return { credential, status };
 		})();
+		if (scenario === "journey") return;
 		const otherCredential = await issue(second, `?owner_user_id=${appUserId}`);
 		assert.equal((await poll(otherCredential)).status, 204);
 		assert.equal((await presence(second)).connected, true);
@@ -729,15 +737,35 @@ async function exerciseDocLink(
 						let requests = 0;
 						let waits = 0;
 						let now = 0;
-						await runDocLink(
-							{
-								engine: engineOrigin,
-								claude: fileURLToPath(
-									new URL("./fixtures/fake-doc-claude.ts", import.meta.url)
-										.href,
-								),
-								credential,
+						mac.mock.method(backends.claude, "signIn", async () => "ready");
+						mac.mock.method(
+							backends.claude,
+							"run",
+							async (...[, , task]: Parameters<typeof backends.claude.run>) => {
+								const input: unknown = JSON.parse(task.input);
+								assert.ok(isArguments(input));
+								if ("turn" in input)
+									return {
+										kind: "answered",
+										answer: {
+											kind: "clarification",
+											text: "Which client?",
+											sources: [],
+										},
+									};
+								assert.match(task.prompt, /untrusted data/);
+								assert.ok(!task.prompt.includes(instruction));
+								return {
+									kind: "answered",
+									answer:
+										"destinations" in input
+											? { facts: [{ destination: deal, text: quote, quote }] }
+											: { summary: quote, action_title: null, quote },
+								};
 							},
+						);
+						await runDocLink(
+							{ engine: engineOrigin, claude: "/fake-claude", credential },
 							{
 								now: () => now,
 								wait: async () => {
@@ -943,7 +971,7 @@ async function exerciseDocLink(
 	}
 }
 
-for (const scenario of ["polling", "judgment"] as const) {
+for (const scenario of ["journey", "polling", "judgment"] as const) {
 	test(`Doc link ${scenario}`, { timeout: 30_000 }, (t) =>
 		exerciseDocLink(t, scenario),
 	);
