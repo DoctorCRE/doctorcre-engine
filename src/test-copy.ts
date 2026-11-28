@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
 import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import {
+	asAdmin,
+	releaseTestDatabase,
+	testDatabaseName,
+} from "../scripts/test-database.ts";
 
 export function readSchema(file: string): Promise<string> {
 	return readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
 }
 
 export function copyTest() {
-	const name = `copy_${randomUUID().replaceAll("-", "")}`;
+	const name = testDatabaseName();
 	const url = new URL(
 		process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
 	);
@@ -31,7 +34,7 @@ export function copyTest() {
 	};
 	const cleanup = async () => {
 		await db.end();
-		await asAdmin(`drop database if exists "${name}" with (force)`);
+		await releaseTestDatabase(name);
 	};
 	return { db, setup, cleanup, connectionString: url.href };
 }

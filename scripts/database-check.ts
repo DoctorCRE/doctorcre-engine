@@ -4,7 +4,11 @@ import { readFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { URL } from "node:url";
 import pg from "pg";
-import { NoDatabase, withSnapshot } from "./test-database.ts";
+import {
+	NoDatabase,
+	withCheckDatabases,
+	withSnapshot,
+} from "./test-database.ts";
 
 async function run(command: string, args: string[], env: NodeJS.ProcessEnv) {
 	const child = spawn(command, args, { env, stdio: "inherit" });
@@ -52,19 +56,28 @@ await withSnapshot((_, snapshot) =>
 			await npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
 			// Small runners can run more files while their tests wait for PostgreSQL.
 			const cpus = availableParallelism();
-			const concurrency = Math.max(cpus - 1, Math.min(2 * cpus, 6));
-			// Both commands must finish before the snapshots are dropped.
-			const results = await Promise.allSettled([
-				npmRun("types", env),
-				run(
-					process.execPath,
-					["--test", `--test-concurrency=${concurrency}`, "src/**/*.test.ts"],
-					{ ...env, TEST_COPY_SNAPSHOT: copySnapshot },
-				),
-			]);
-			for (const result of results) {
-				if (result.status === "rejected") throw result.reason;
-			}
+			const concurrency = Math.min(
+				8,
+				Math.max(cpus - 1, Math.min(2 * cpus, 6)),
+			);
+			await withCheckDatabases(async (prefix) => {
+				// Both commands must finish before the snapshots are dropped.
+				const results = await Promise.allSettled([
+					npmRun("types", env),
+					run(
+						process.execPath,
+						["--test", `--test-concurrency=${concurrency}`, "src/**/*.test.ts"],
+						{
+							...env,
+							TEST_COPY_SNAPSHOT: copySnapshot,
+							TEST_DATABASE_PREFIX: prefix,
+						},
+					),
+				]);
+				for (const result of results) {
+					if (result.status === "rejected") throw result.reason;
+				}
+			});
 		}, snapshot);
 	}, snapshot),
 ).catch((error: unknown) => {

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
-import { setTimeout } from "node:timers/promises";
 import { Hono } from "hono";
 import { type CompiledQuery, PostgresDriver, sql } from "kysely";
 import pg from "pg";
@@ -740,23 +739,23 @@ for (const { name, response, otherState } of [
 			]);
 			return response();
 		});
-		const deadline = new AbortController();
+		const warnings = t.mock.method(console, "warn", () => {});
+		const writer = new URL(connectionString);
+		// A missing lock timeout trips the statement guard with a different SQLSTATE.
+		writer.searchParams.set("options", "-c statement_timeout=30s");
 		await db.query("begin");
-		const dispatch = tick();
 		try {
-			await Promise.race([
-				dispatch,
-				setTimeout(5_000, undefined, { signal: deadline.signal }).then(() => {
-					assert.fail(
-						"Backup dispatch did not finish while the turn was locked",
-					);
-				}),
-			]);
+			await tick({
+				...backupEnv,
+				DATABASE_WRITER: { connectionString: writer.href },
+			});
 		} finally {
-			deadline.abort();
 			await db.query("rollback");
-			await dispatch;
 		}
+		assert.deepEqual(
+			warnings.mock.calls.map(({ arguments: args }) => args),
+			[["Doc backup completion failed:", "55P03"]],
+		);
 		assert.equal(
 			(await chatTurn(blocked.conversation_id, first))?.state,
 			"working",
