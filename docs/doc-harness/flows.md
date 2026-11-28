@@ -4,6 +4,25 @@ Steps describe the stored outcome as well as what the partner sees. All app read
 
 ## F1 Ask
 
+Retries and replacement claims use the same saved turn. The partner sees its current state.
+
+```mermaid
+flowchart TD
+    Ask["Partner sends a question"] --> Queue["Save the queued turn"]
+    Queue -->|Mac ready| Run["Claim and read current facts"]
+    Queue -->|Backup eligible| Run
+    Queue -->|Neither can run| Wait["Show why the turn waits"]
+    Wait --> Queue
+    Run -->|Sign-out, limit, or expired lease| Queue
+    Run -->|Failure| Failed["Keep the failed turn visible"]
+    Failed -->|Eligible retry| Queue
+    Run -->|Ambiguous or missing evidence| Clarify["Save clarification and show choices"]
+    Clarify -->|Partner replies| Ask
+    Run -->|Validated answer or refusal| Answer["Save the answer"]
+    Answer -->|Has a proposal| Card["Show the editable save card"]
+    Card -->|Partner confirms| Save["Recheck the target and save the receipt"]
+```
+
 1. The partner sends a nonblank question up to 4,000 characters with a new ask key. A deal, lead, client or exact mail activity can be supplied as context. A draft review supplies its exact draft ID and version. The engine checks access and saves the validated draft binding with its email activity and mailbox IDs. An unknown or foreign draft returns 404. A changed version or finished draft needs a fresh review.
 2. The engine saves the question, context, key and position as `queued`. First send creates the conversation in the same transaction. The same key and request replay the saved turn. Changing the request under that key gives `key_reuse`. With the current turn contract, a new key in a busy chat gives `turn_in_progress`. The next-question feature uses the separate [waiting turn contract](../new-database.md#the-next-question).
 3. A ready Mac takes the oldest queued or expired turn ahead of mail jobs, under one active lease per partner. The engine commits `working`, claim ID, deadline and empty claim evidence. The driver gets context, up to 12 prior answered turns, and only relevant preferences when available. The model and reads have up to 45 seconds within the 60-second lease. Four calls are available for `find`, `read`, `mail_priorities`, and `read_mail` together. The claim tracks their count and authorized sources. An expired claim returns to the same queue position with a new claim ID and fresh evidence.
@@ -35,6 +54,25 @@ Steps describe the stored outcome as well as what the partner sees. All app read
 
 ## F6 Approve an action
 
+An approval card belongs to its original claim. A standing grant can apply to later actions. The late decision branch shows the recommendation in [Q1](questions.md#q1-standing-grant-scope).
+
+```mermaid
+flowchart TD
+    Check["Doc checks the proposed action"] -->|Policy permits or grant matches| Run["Dispatch under a live Mac claim"]
+    Check -->|Approval required| Card["Show an approval card for this claim"]
+    Card -->|Deny| Deny["Close card without a grant"]
+    Card -->|Approve while current| Grant["Save one standing grant"]
+    Grant -->|Original claim and model window live| Run
+    Grant -->|Original run ended| NoRun["Keep grant without dispatch"]
+    Grant -->|Later action| Check
+    Grant -->|Partner revokes in Settings| Revoked["Grant unavailable to later actions"]
+    Card -->|Lease expires| Expired["Old action loses dispatch permission"]
+    Expired -->|Q1 recommendation, approve before reclaim| Grant
+    Expired -->|Mac reclaims first| Mac["Close old card and check the new action"]
+    Mac --> Check
+    Expired -->|Backup takes over first| Backup["Close old card and use Doc tools only"]
+```
+
 1. The driver gives Doc the proposed action before dispatch. Doc checks its action type and scope against the signed-in partner's standing grants. A grant is a typed row with the partner's ID, action kind, scope and time granted. Run without a prompt if Doc's policy permits the action or an active grant covers it. The base CLI runs with its own restriction and approval layer off. A driver that cannot get a decision from Doc before dispatch cannot offer approval-controlled chat actions. The action types and interception mechanism need [Q1](questions.md#q1-standing-grant-scope).
 2. When an action needs approval and has no grant, Ask Doc shows the action and the scope a standing grant would cover. The engine records a pending request bound to the partner, turn, claim and exact proposed action. The proposed action waits for the partner's decision in Ask Doc, including when they are away from the Mac. The partner's **Approve** writes a typed standing grant for that partner and scope. Settings lists the signed-in partner's active grants and lets that partner revoke them. No business record is written by the approval itself. Denial leaves no grant and the action does not run. An unauthorized decision cannot grant execution.
 3. Resume only the approved action while the originating Mac claim and model window are both live. Use the same request and decision key when retrying a lost response. A repeated decision returns the saved result without creating another grant or dispatch. A conflicting decision changes neither. On a later request for the same kind of action within that grant, Doc rechecks the grant and runs it without asking again. Revocation takes effect before the next dispatch. F4 still owns committing a specific app save and submitting a reply. The relationship between standing grants and any future automatic business saves is in [Q3](questions.md#q3-business-confirmations).
@@ -43,6 +81,21 @@ Steps describe the stored outcome as well as what the partner sees. All app read
 5. [Q1](questions.md#q1-standing-grant-scope) keeps late grant storage open for the owner. The recommended behavior leaves an expired request visible as grant-only while it is still current. Approving it saves the grant once and dispatches nothing. The next Mac claim uses current facts before acting under that grant. The engine orders the grant decision and any reclaim under the same turn lock. If a Mac or backup claims the turn first, it supersedes the old request and the card closes without a grant. Show that a decision already recorded succeeded even if a new runner has since claimed the turn.
 
 ## F7 Unattended mail
+
+Mail uses its own readiness check. Chat and mail share one active claim slot per partner.
+
+```mermaid
+flowchart TD
+    Intake["Save the email and queue a judgment job"] --> Queue["Wait for an eligible runner"]
+    Queue -->|Configured Mac backend ready| Claim["Claim current input and hash"]
+    Queue -->|Backup eligible for summary or filing| Claim
+    Claim --> Judge["Run the job without tools"]
+    Judge -->|Mac sign-out or limit| Queue
+    Judge -->|Backup credits exhausted| Queue
+    Judge -->|Valid result and current claim| Save["Save summary, filing, split, or introduction finding"]
+    Judge -->|Failed, invalid, or empty filing result| Review["Leave a Home filing review when available"]
+    Judge -->|Expired claim or changed input| Stale["Refuse the old result"]
+```
 
 1. Intake queues a job for the mailbox partner when an existing rule asks for judgment. It stores the job kind, exact email, owner and idempotency key, plus allowed destinations for filing. A Mac ready for that kind of mail job takes it after waiting chats, using the configured mail backend. It claims the current input and its hash. A job never appears in chat history.
 2. Pass the job instructions separately from subject, body and any candidate destinations or introductions. The current mail runner gives mail no tools or link credential. The drawing keeps this behavior pending [Q2](questions.md#q2-unattended-mail). If the configured backend fails its mail checks, leave the job queued for an eligible runner. A ready chat provider does not make mail ready. A provider sign-out or limit requeues and records readiness. A changed input or expired claim cannot save. An invalid result returns 422 within the lease. A failure ends the job under its existing rules.
