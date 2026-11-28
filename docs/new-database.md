@@ -2141,7 +2141,19 @@ If any source exists or the runner cannot verify its absence, it logs that Doc l
 
 The link sends the claimed question, context and answered history to `claude -p` on stdin. It reads the final result from the JSON event stream and keeps the model run inside the 45-second window. It disables personal settings, hooks, skills, browser integration, Claude.ai connectors and built-in tools, limits chat MCP to the Doc server and its six tools, and disables local session persistence. Claude Code handles the partner's sign-in. The runner passes only the Doc link credential to the engine. The engine validates the final answer again before saving it.
 
-**Switch a Mac to Codex.** Use a separate standard macOS account for Doc, as in decision 219. Install and link Doc in that account if you are moving it. Issuing a new link credential revokes the previous one. Keep plan usage credits off and sign in to your own personal ChatGPT plan before changing the runner.
+**Switch a Mac to Codex.** In macOS Users & Groups, create a dedicated **Standard** account with the short name `doctorcre-doc` and the home directory `/Users/doctorcre-doc`. Sign into that account and keep it for Doc. If Doc already runs under another login, use the setup above to install and link it in the dedicated account. Issuing a new link credential revokes the previous one. Keep plan usage credits off and use your own personal ChatGPT plan.
+
+Before editing the config, update the checkout that the LaunchAgent runs. Read the runner path from its property list, then update that checkout to the merged version.
+
+```sh
+doc_agent="$HOME/Library/LaunchAgents/com.doctorcre.doc-link.plist"
+doc_runner=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:1' "$doc_agent")
+doc_checkout=$(git -C "$(dirname "$doc_runner")" rev-parse --show-toplevel)
+git -C "$doc_checkout" pull --ff-only origin main
+(cd "$doc_checkout" && npm ci)
+```
+
+If the checkout cannot fast-forward, resolve its local changes before switching. Confirm that the updated checkout contains `scripts/doc-link-codex-model.json`.
 
 1. From the [Codex CLI 0.172.0 release](https://github.com/openai/codex/releases/tag/rust-v0.172.0), install the native `codex` binary for your Mac's architecture. Use the binary's absolute path as `DOC_CODEX_BIN`. Run `"$DOC_CODEX_BIN" --version` and check for `codex-cli 0.172.0`.
 2. Sign in through Codex under the Doc account. Keep its dedicated Codex home private.
@@ -2154,9 +2166,11 @@ The link sends the claimed question, context and answered history to `claude -p`
    ```
 
 3. Open `"$doc_support/link.json"` in a private editor. Keep the existing `engine` and `credential` and replace `claude` with `"backend": "codex"` and `"binary": "/absolute/path/to/codex"`. Set the actual binary path. Run `chmod 600 "$doc_support/link.json"` and `launchctl kickstart -k "gui/$(id -u)/com.doctorcre.doc-link"`.
-4. Ask Doc about a visible test deal and open a source from its answer. To switch back, set `backend` to `claude`, set `binary` to the absolute Claude Code path, and restart the LaunchAgent.
+4. Ask Doc about a visible test deal and open a source from its answer.
 
-Codex checks sign-in with `login status` and reads the personal plan type through app-server's `account/read`. It runs the fixed Doc prompt through `exec --json` using GPT-6.2-Sol. The runner pins the tested CLI version, uses a read-only sandbox with no approvals, and turns off shell, file-editing, image, web, agent, app, plugin, and hook capabilities. Codex starts outside the checkout, skips user config and rules, sets the project instruction budget to zero, and starts an ephemeral session. The runner pauses if it finds system or managed Codex configuration, or config or instruction files in Doc's dedicated Codex home. Chat can call the six claim-scoped Doc tools, and Codex's MCP resource requests have no resources to read. Mail judgment connects to no MCP server and receives no link credential. The engine applies the same result checks, including exact quotes, to both backends.
+**Switch back to Claude Code.** Use the same updated checkout. Sign in to Claude Code in the account running Doc. In `link.json`, remove `backend` and `binary` and restore `claude` with the absolute Claude Code path. Keep `engine` and `credential` and leave the file at mode `0600`. Run `launchctl kickstart -k "gui/$(id -u)/com.doctorcre.doc-link"` and check a sourced answer.
+
+Codex checks sign-in with `login status` and reads the personal plan type through app-server's `account/read`. It runs the fixed Doc prompt through `exec --json` using GPT-6.2-Sol. The runner pins the tested CLI version, uses a read-only sandbox with no approvals, and turns off shell, file-editing, image, web, agent, app, plugin, and hook capabilities. Codex starts outside the checkout, skips user config and rules, sets the project instruction budget to zero, and starts an ephemeral session. The runner checks the account name, home owner, and group membership before starting. It pauses if the verified model catalog is missing, unreadable, or changed. System or managed Codex configuration and local config or instruction files also pause the runner. When Codex supplies a plan reset time, the runner waits until that time. Otherwise it checks again after five minutes. Chat can call the six claim-scoped Doc tools, and Codex's MCP resource requests have no resources to read. Mail judgment connects to no MCP server and receives no link credential. The engine applies the same result checks, including exact quotes, to both backends.
 
 The link retries a dropped claim or completion request after two seconds. While the model runs, a separate poll refreshes presence without asking for work. A completion retry reuses the original claim and answer until the claim expires. The link ignores a `404` completion and polls for new work. The engine can then give an expired turn a fresh claim.
 

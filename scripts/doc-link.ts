@@ -1,15 +1,22 @@
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open, readdir } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { z } from "zod";
 import {
 	judgmentClaimSchema,
 	judgmentTask,
 } from "../src/doc-judgment-prompt.ts";
 import { docPrompt } from "../src/doc-prompt.ts";
-import { backends, codexHome, readJson } from "./doc-link-backends.ts";
+import {
+	backends,
+	codexHome,
+	isCodexCatalogValid,
+	readJson,
+} from "./doc-link-backends.ts";
 
 export const docLinkEngineSchema = z.url().refine((value) => {
 	const url = new URL(value);
@@ -139,12 +146,41 @@ function macCodexPolicyPaths() {
 	];
 }
 
+async function isDedicatedCodexAccount() {
+	if (process.platform !== "darwin") return false;
+	try {
+		const login = userInfo();
+		if (
+			login.username !== "doctorcre-doc" ||
+			login.homedir !== "/Users/doctorcre-doc" ||
+			homedir() !== login.homedir ||
+			login.uid < 501 ||
+			login.uid !== process.geteuid?.()
+		)
+			return false;
+		const home = await lstat(login.homedir);
+		if (!home.isDirectory() || home.uid !== login.uid) return false;
+		const { stdout } = await promisify(execFile)("/usr/bin/id", ["-Gn"], {
+			timeout: 5_000,
+		});
+		const groups = stdout.trim().split(/\s+/);
+		return (
+			Boolean(groups[0]) &&
+			!groups.some((group) => ["admin", "wheel", "sudo"].includes(group))
+		);
+	} catch {
+		return false;
+	}
+}
+
 type LinkRuntime = {
 	fetch: typeof globalThis.fetch;
 	now: () => number;
 	wait: () => Promise<void>;
 	managedSettings?: Parameters<typeof hasManagedPolicy>[0];
 	managedCodexPolicy?: string[];
+	codexAccountAllowed?: () => Promise<boolean>;
+	codexCatalog?: string;
 };
 
 export function postDocLink(
@@ -166,7 +202,15 @@ export function postDocLink(
 
 export async function runDocLink(
 	config: Config,
-	{ fetch, now, wait, managedSettings, managedCodexPolicy }: LinkRuntime = {
+	{
+		fetch,
+		now,
+		wait,
+		managedSettings,
+		managedCodexPolicy,
+		codexAccountAllowed = isDedicatedCodexAccount,
+		codexCatalog,
+	}: LinkRuntime = {
 		fetch: globalThis.fetch,
 		now: Date.now,
 		wait: () => delay(pollEvery),
@@ -175,19 +219,27 @@ export async function runDocLink(
 	},
 ) {
 	const name = "backend" in config ? config.backend : "claude";
+	if (name === "codex" && !(await codexAccountAllowed()))
+		throw new Error(
+			"Run Codex Doc link in the dedicated standard macOS account doctorcre-doc.",
+		);
 	const backend = backends[name];
 	const binary = "binary" in config ? config.binary : config.claude;
-	let policyBlocked = false;
+	let policyError: string | undefined;
 	async function policyAllowsTurns() {
-		const blocked =
-			name === "codex"
-				? await hasPolicyFiles(managedCodexPolicy ?? [])
-				: managedSettings
-					? await hasManagedPolicy(managedSettings)
-					: false;
-		if (blocked && !policyBlocked) console.error(backend.policyMessage);
-		policyBlocked = blocked;
-		return !blocked;
+		let error: string | undefined;
+		if (name === "codex") {
+			if (await hasPolicyFiles(managedCodexPolicy ?? []))
+				error = backend.policyMessage;
+			else if (!(await isCodexCatalogValid(codexCatalog)))
+				error =
+					"Restore Doc link's verified Codex model catalog before using Codex.";
+		} else if (managedSettings && (await hasManagedPolicy(managedSettings))) {
+			error = backend.policyMessage;
+		}
+		if (error && error !== policyError) console.error(error);
+		policyError = error;
+		return !error;
 	}
 
 	let readiness: Readiness | "personal_plan_required" | undefined;

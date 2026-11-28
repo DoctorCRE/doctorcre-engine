@@ -111,6 +111,7 @@ async function runLink(
 						managedCodexPolicy: [join(directory, "requirements.toml")],
 					}
 				: {}),
+			codexAccountAllowed: async () => true,
 			now: () => now,
 			wait: async () => {
 				assert.ok(
@@ -795,6 +796,7 @@ for (const variant of ["signed-out", "api-key", "business", "unsupported"]) {
 			runDocLink(
 				{ backend: "codex", binary, engine, credential },
 				{
+					codexAccountAllowed: async () => true,
 					now: () => 60_000,
 					wait: async () => {
 						throw paused;
@@ -847,6 +849,7 @@ test("The Codex runner pauses before polling if managed settings are present", a
 			{ backend: "codex", binary: codex, engine, credential },
 			{
 				managedCodexPolicy: [policy],
+				codexAccountAllowed: async () => true,
 				fetch: async () => assert.fail("polled despite managed settings"),
 				now: () => 60_000,
 				wait: async () => {
@@ -857,3 +860,79 @@ test("The Codex runner pauses before polling if managed settings are present", a
 		(error) => error === paused,
 	);
 });
+
+test("Codex refuses to start outside its dedicated standard account", async () => {
+	await assert.rejects(
+		runDocLink(
+			{ backend: "codex", binary: codex, engine, credential },
+			{
+				codexAccountAllowed: async () => false,
+				fetch: async () => assert.fail("polled from another account"),
+				now: () => 60_000,
+				wait: async () => assert.fail("runner did not stop"),
+			},
+		),
+		/dedicated standard macOS account/,
+	);
+});
+
+test("Codex advertises no work with a missing or altered isolation catalog", async () => {
+	await using directory = await mkdtempDisposable(
+		join(process.cwd(), ".scratch."),
+	);
+	const catalog = join(directory.path, "catalog.json");
+	for (const invalid of [undefined, "{", '{"models":[]}']) {
+		if (invalid !== undefined) await writeFile(catalog, invalid);
+		const paused = Symbol("polling paused");
+		const work: (string | null)[] = [];
+		await assert.rejects(
+			runDocLink(
+				{ backend: "codex", binary: codex, engine, credential },
+				{
+					codexAccountAllowed: async () => true,
+					codexCatalog: catalog,
+					fetch: async (_url, init) => {
+						work.push(new Headers(init?.headers).get("Doc-Link-Work"));
+						return status(204);
+					},
+					now: () => 60_000,
+					wait: async () => {
+						throw paused;
+					},
+				},
+			),
+			(error) => error === paused,
+		);
+		assert.deepEqual(work, []);
+	}
+});
+
+for (const [question, reset] of [
+	["Plan limit with reset", Date.UTC(1970, 0, 2, 16, 40)],
+	["Plan limit", 360_000],
+] as const) {
+	test(`Codex waits to reclaim work after ${question}`, async () => {
+		assert.deepEqual(
+			await runLink(
+				[
+					claimed(question),
+					status(204),
+					{ reply: status(204), now: reset - 60_000 },
+					{ reply: status(204), now: reset },
+					status(204),
+				],
+				codex,
+				undefined,
+				"codex",
+			),
+			[
+				poll("ready"),
+				result({ claim_id: firstClaim, kind: "plan_limited" }),
+				poll("plan_limited"),
+				poll("plan_limited"),
+				poll("ready"),
+				poll("ready"),
+			],
+		);
+	});
+}

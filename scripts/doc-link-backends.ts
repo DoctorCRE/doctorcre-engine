@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { hash } from "node:crypto";
+import { lstat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -266,8 +268,21 @@ const codexCatalog = fileURLToPath(
 	new URL("./doc-link-codex-model.json", import.meta.url),
 );
 
+export async function isCodexCatalogValid(path = codexCatalog) {
+	try {
+		// Only the catalog used in the tool refusal replay may enable the runner.
+		return (
+			(await lstat(path)).isFile() &&
+			hash("sha256", await readFile(path)) ===
+				"67d5927361faca4dc6600d690f4669d8f442188967f52d3d4a6d8781c0c28bc9"
+		);
+	} catch {
+		return false;
+	}
+}
+
 function codexEnvironment() {
-	return { ...childEnvironment(), CODEX_HOME: codexHome() };
+	return { ...childEnvironment(), CODEX_HOME: codexHome(), TZ: "UTC" };
 }
 
 const codexAccount = z.object({
@@ -369,6 +384,19 @@ const codexMessage = z.object({
 	type: z.literal("agent_message"),
 	text: z.string(),
 });
+function codexReset(message: string) {
+	const time =
+		/try again at (?:(\w{3} \d{1,2})(?:st|nd|rd|th), (\d{4}) )?(\d{1,2}:\d{2} [AP]M)\.$/i.exec(
+			message,
+		);
+	if (!time) return undefined;
+	const day = time[1]
+		? `${time[1]}, ${time[2]}`
+		: new Date().toISOString().slice(0, 10);
+	const milliseconds = Date.parse(`${day} ${time[3]} UTC`);
+	return Number.isFinite(milliseconds) ? milliseconds / 1_000 : undefined;
+}
+
 function codexOutcome({ ok, stdout }: CliResult): LinkOutcome {
 	let completed = false;
 	let finalMessage: string | undefined;
@@ -384,7 +412,7 @@ function codexOutcome({ ok, stdout }: CliResult): LinkOutcome {
 			const message = fields.safeParse(event.error).data?.message;
 			if (typeof message === "string") {
 				if (/^You[’']ve hit your usage limit\b/.test(message))
-					return { kind: "plan_limited", resetsAt: undefined };
+					return { kind: "plan_limited", resetsAt: codexReset(message) };
 				if (
 					/^Your access token could not be refreshed\b|^unexpected status 401\b/i.test(
 						message,

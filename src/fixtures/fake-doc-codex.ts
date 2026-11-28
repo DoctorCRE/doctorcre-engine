@@ -91,15 +91,17 @@ if (command === "--version") {
 		emit({ type: "item.completed", item: { type: "agent_message", text } });
 	if (
 		input.turn?.question === "Expired sign-in" ||
-		input.turn?.question === "Plan limit"
+		input.turn?.question.startsWith("Plan limit")
 	) {
 		emit({
 			type: "turn.failed",
 			error: {
 				message:
-					input.turn.question === "Plan limit"
-						? "You’ve hit your usage limit. Try again later."
-						: "Your access token could not be refreshed. Please log out and sign in again.",
+					input.turn.question === "Plan limit with reset"
+						? "You’ve hit your usage limit. Purchase more credits or try again at Jan 2nd, 1970 4:40 PM."
+						: input.turn.question === "Plan limit"
+							? "You’ve hit your usage limit. Try again later."
+							: "Your access token could not be refreshed. Please log out and sign in again.",
 			},
 		});
 		process.exitCode = 1;
