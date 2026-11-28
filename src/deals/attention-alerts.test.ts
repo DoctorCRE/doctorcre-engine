@@ -6,9 +6,11 @@ import { URL } from "node:url";
 import { sql } from "kysely";
 import { nextTransaction } from "../next-connection.ts";
 import { isArguments } from "../save-door.ts";
-import { copyTest } from "../test-copy.ts";
+import { copyTest, readSchema } from "../test-copy.ts";
 import { doorTest } from "../test-door.ts";
 import { sweepDealAttentionAlerts } from "./attention-alerts.ts";
+import { readNextBoard } from "./next-board.ts";
+import { readNextDealDetail } from "./next-detail.ts";
 
 const JOB = { job: "attention_alerts" };
 const PATH = "deals/attention-alerts";
@@ -207,6 +209,86 @@ test("new attention reasons alert once on Updates, stay off Home, and re-alert a
 		200,
 		{ alerted: 0, unchanged: 0, cleared: 1 },
 	]);
+});
+
+test("the Plan, Board, national account count and nightly Updates share forecast attention", async (t) => {
+	const { db, runSql, readerUrl, save, joeId, sweep, today } =
+		await setupFixture(t);
+	const deal = randomUUID();
+	const account = randomUUID();
+	const client = randomUUID();
+	const entered = addDays(today, -1);
+	await runSql(`begin; select set_config('engine.user_id', '${joeId}', true);
+		insert into deal_kind (slug, label) values ('lease', 'Lease');
+		insert into phase (slug, label) values ('research', 'Research');
+		insert into role (slug, label) values ('client', 'Client'), ('national_account', 'National account');
+		insert into how_found (slug, label) values ('referral', 'Referral');
+		insert into party (id, kind, name, how_found) values
+			('${account}', 'company', 'Example Account', null), ('${client}', 'company', 'Example Location', 'referral');
+		insert into party_role (party_id, role) values ('${account}', 'national_account'), ('${client}', 'client');
+		insert into national_account (party_id) values ('${account}');
+		insert into client (party_id) values ('${client}');
+		insert into client_brand (location_id, brand_id, started_on) values ('${client}', '${account}', '${entered}');
+		insert into deal (id, name, kind, owner_user_id) values ('${deal}', 'Example Lease', 'lease', '${joeId}');
+		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${client}', 'client');
+		insert into deal_phase_change (deal_id, phase, happened_at) values
+			('${deal}', 'research', '${entered} 12:00 America/Chicago');
+		insert into next_step (deal_id, owner_party_id, what, due_on) values
+			('${deal}', '${joeId}', 'Send survey', '${addDays(today, 2)}');
+		insert into critical_date (deal_id, kind, due_on, source) values
+			('${deal}', 'lease_commencement', '${addDays(today, 40)}', 'manual');
+		commit;`);
+	await db.query(await readSchema("seed-typical-lengths.sql"));
+	const attention = await nextTransaction(readerUrl, "read", async (tx) => {
+		const board = await readNextBoard(tx, { partner: "joe" });
+		const card = board.deals.find(({ id }) => id === deal);
+		const detail = await readNextDealDetail(tx, deal);
+		assert.ok("plan" in detail && detail.attention);
+		assert.match(detail.attention.reason, /^On pace to miss /);
+		assert.equal(detail.attention.since, entered);
+		assert.deepEqual(card?.attention, detail.attention);
+		assert.ok(detail.plan.expected_signing_on);
+		assert.equal(
+			card?.timeline?.expected_signing_on,
+			detail.plan.expected_signing_on,
+		);
+		return detail.attention;
+	});
+	await t.test(
+		"the national count includes the deal even on the team board",
+		async () => {
+			await nextTransaction(readerUrl, "read", async (tx) => {
+				const board = await readNextBoard(tx, {
+					partner: "joe",
+					workspace: "team",
+				});
+				assert.equal(
+					board.accounts.find((row) => row.account_client_id === account)
+						?.attention_deals,
+					1,
+				);
+			});
+		},
+	);
+	await t.test(
+		"the nightly job sends one update with the same reason",
+		async () => {
+			assert.deepEqual(await sweep(), [
+				200,
+				{ alerted: 1, unchanged: 0, cleared: 0 },
+			]);
+			assert.deepEqual(await sweep(), [
+				200,
+				{ alerted: 0, unchanged: 1, cleared: 0 },
+			]);
+			const [status, updates] = await save(JOE, "updates", {}, "GET");
+			assert.equal(status, 200);
+			assert.ok(Array.isArray(updates.updates));
+			assert.partialDeepStrictEqual(updates.updates[0], {
+				title: attention.reason,
+			});
+		},
+	);
 });
 
 test("quiet hours hold attention alerts until quiet_until across midnight and DST", async (t) => {

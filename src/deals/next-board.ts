@@ -4,10 +4,15 @@ import {
 	sql,
 	type Transaction,
 } from "kysely";
-import { jsonObjectFrom } from "kysely/helpers/postgres";
-import { checkInWording, stepItemId } from "../home-steps.ts";
+import {
+	jsonArrayFrom,
+	jsonBuildObject,
+	jsonObjectFrom,
+} from "kysely/helpers/postgres";
+import { checkInWording, stepCopy, stepItemId } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
 import {
+	nameOldRecords,
 	type OldRecordNames,
 	readOldRecordNames,
 } from "../old-record-names.ts";
@@ -16,6 +21,13 @@ import { dealAttention } from "./attention.ts";
 import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
 import { automaticPhaseReceipt, phaseReceiptFields } from "./phase-receipt.ts";
+import {
+	boardTimeline,
+	hasForecastDate,
+	planFactsOf,
+	planForRead,
+	stepsOf,
+} from "./plan-read.ts";
 import {
 	boardClosedOn,
 	boardInvoicedOn,
@@ -42,6 +54,26 @@ const covers = (
 ) => sql<boolean>`daterange(${from}, ${to}) @> ${today}::date`;
 const dealReason = sql<string | null>`coalesce(d.reason,
 	case when imported.renewal_lease_unrecorded then 'renewal' end)`;
+// Today's one deal type is the kind, else the reason, under its old slug.
+const dealType = sql<string | null>`coalesce(d.kind,
+	case d.reason when 'start_up' then 'startup' else ${dealReason} end)`;
+const planKindFields = [
+	"d.kind",
+	dealReason.as("reason"),
+	sql<boolean>`d.reason is null and coalesce(imported.renewal_lease_unrecorded, false)`.as(
+		"renewal_lease_unrecorded",
+	),
+] as const;
+
+const planDealFields = [
+	"d.id",
+	"owner.slug as owner",
+	boardPhase.as("phase"),
+	boardOutcome.as("outcome"),
+	sql<string | null>`(${boardInvoicedOn})::text`.as("invoiced_on"),
+	dealType.as("type"),
+	...planKindFields,
+] as const;
 
 export function parkingNoteForDisplay(note: Expression<string | null>) {
 	const trimmed = sql`nullif(regexp_replace(${note}, '^[[:space:]]+|[[:space:]]+$', '', 'g'), '')`;
@@ -66,21 +98,10 @@ export const clientWebsiteOf = (
 		.where("website.client_party_id", "=", client)
 		.where("website.disabled_at", "is", null);
 
-// What the board and the deal page both show of a deal. A deal can have no client yet.
-export const selectNextDeals = (
-	db: Transaction<DB>,
-	today:
-		| string
-		| Expression<string> = sql<string>`(now() at time zone 'America/Chicago')::date`,
-) =>
+export const selectDealState = (db: Transaction<DB>) =>
 	db
 		.selectFrom("deal as d")
-		.leftJoin("deal_party as c", (join) =>
-			join.onRef("c.deal_id", "=", "d.id").on("c.role", "=", "client"),
-		)
-		.leftJoin("party as cp", "cp.id", "c.party_id")
 		.innerJoin("app_user as owner", "owner.id", "d.owner_user_id")
-		.leftJoin("app_user as parker", "parker.id", "d.parked_by_user_id")
 		.leftJoin("imported_deal_board as imported", "imported.deal_id", "d.id")
 		.leftJoinLateral(
 			(eb) =>
@@ -112,6 +133,21 @@ export const selectNextDeals = (
 					.as("last_close"),
 			(join) => join.onTrue(),
 		)
+		.select(planDealFields);
+
+// What the board and the deal page both show of a deal. A deal can have no client yet.
+export const selectNextDeals = (
+	db: Transaction<DB>,
+	today:
+		| string
+		| Expression<string> = sql<string>`(now() at time zone 'America/Chicago')::date`,
+) =>
+	selectDealState(db)
+		.leftJoin("deal_party as c", (join) =>
+			join.onRef("c.deal_id", "=", "d.id").on("c.role", "=", "client"),
+		)
+		.leftJoin("party as cp", "cp.id", "c.party_id")
+		.leftJoin("app_user as parker", "parker.id", "d.parked_by_user_id")
 		.leftJoinLateral(
 			(eb) =>
 				eb
@@ -141,21 +177,11 @@ export const selectNextDeals = (
 		.select((eb) => {
 			const phaseAt = eb.ref("p.happened_at");
 			return [
-				boardPhase.as("phase"),
-				boardOutcome.as("outcome"),
 				sql<string | null>`(${boardClosedOn})::text`.as("closed_on"),
 				sql<string | null>`case when p.phase = 'dead' then p.reason end`.as(
 					"lost_reason",
 				),
-				"d.id",
 				"d.name",
-				// Today's one deal type is the kind, else the reason, under its old slug.
-				sql<
-					string | null
-				>`coalesce(d.kind, case d.reason when 'start_up' then 'startup' else ${dealReason} end)`.as(
-					"type",
-				),
-				"owner.slug as owner",
 				dealAttention.as("attention"),
 				"c.party_id as client_id",
 				"cp.name as client_name",
@@ -227,7 +253,6 @@ export const selectNextDeals = (
 			];
 		})
 		.select([
-			sql<string | null>`(${boardInvoicedOn})::text`.as("invoiced_on"),
 			sql<
 				string | null
 			>`(select due_on::text from deal_next_date where deal_id = d.id)`.as(
@@ -285,11 +310,6 @@ export const selectNextDeals = (
 
 export const selectNextDealsWithFacts = (db: Transaction<DB>) =>
 	selectNextDeals(db).select((eb) => [
-		"d.kind",
-		dealReason.as("reason"),
-		sql<boolean>`d.reason is null and coalesce(imported.renewal_lease_unrecorded, false)`.as(
-			"renewal_lease_unrecorded",
-		),
 		jsonObjectFrom(
 			eb
 				.selectFrom("critical_date as cd")
@@ -403,6 +423,22 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			clientWebsiteOf(db, eb.ref("board.id"), eb.ref("board.client_id")).as(
 				"client_portal_url",
 			),
+			eb
+				.case()
+				.when("board.operating_state", "=", "active")
+				.then(
+					jsonBuildObject({
+						...planFactsOf(db, eb.ref("board.id"), eb.ref("board.kind")),
+						steps: jsonArrayFrom(
+							stepsOf(db, eb.ref("board.id")).where("s.status", "in", [
+								"open",
+								"done",
+							]),
+						),
+					}),
+				)
+				.end()
+				.as("timeline_facts"),
 			openActions(sql`s.deal_id = board.id`).as("open_actions"),
 			openActions(sql`s.party_id = board.client_id`, true).as("client_actions"),
 			// Deal notes have their own section and did not feed the old card summary.
@@ -427,6 +463,10 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			...[...deal.open_actions, ...deal.client_actions].map(
 				({ description }) => description,
 			),
+			...(deal.timeline_facts?.steps.flatMap(({ description, title }) => [
+				description,
+				title,
+			]) ?? []),
 		]),
 		...[...closed_deals, ...lost_deals].map(({ next_step }) => next_step),
 	]);
@@ -462,10 +502,49 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 		left join app_user u on u.id = o.owner_id
 		left join (${nextBoardQuery(db, { workspace: "all", account: null })}) b on b.account_client_id = na.party_id
 		group by na.party_id, p.name, u.slug, o.id order by p.name`.execute(db);
+	const forecastDeals = await nextBoardQuery(db, {
+		workspace: "national_account",
+		account: null,
+	})
+		.clearOrderBy()
+		.clearSelect()
+		.select([
+			"account_client_id",
+			"id",
+			"phase",
+			"outcome",
+			"owner",
+			"kind",
+			"reason",
+			"renewal_lease_unrecorded",
+			"type",
+			"invoiced_on",
+		])
+		.select((eb) =>
+			jsonBuildObject(
+				planFactsOf(db, eb.ref("board.id"), eb.ref("board.kind")),
+			).as("facts"),
+		)
+		.where("operating_state", "=", "active")
+		.where("attention", "is", null)
+		.where((eb) => hasForecastDate(eb.ref("board.id")))
+		.execute();
+	const accountsById = new Map(
+		accounts.map((account) => [account.account_client_id, account]),
+	);
+	for (const { facts, ...deal } of forecastDeals) {
+		const account =
+			deal.account_client_id && accountsById.get(deal.account_client_id);
+		if (
+			account &&
+			planForRead({ ...deal, ...facts, steps: [], attention: null }).attention
+		)
+			account.attention_deals += 1;
+	}
 	return {
 		schema_version: "local-deals-board.v2",
 		actor: input.partner,
-		deals: deals.map(({ client_actions, ...deal }) => {
+		deals: deals.map(({ client_actions, timeline_facts, ...deal }) => {
 			const open_actions = (
 				deal.open_actions.length === 0 &&
 				openDeals.get(deal.client_id)?.length === 1
@@ -474,6 +553,22 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			).map(boardAction(names));
 			return {
 				...checkInNextStep(names)(deal),
+				...(timeline_facts
+					? boardTimeline({
+							...deal,
+							...timeline_facts,
+							steps: timeline_facts.steps.map((step) => ({
+								...step,
+								label: stepCopy(
+									{
+										what: nameOldRecords(step.description, names),
+										item_title: step.title && nameOldRecords(step.title, names),
+									},
+									names,
+								).title,
+							})),
+						})
+					: { timeline: null }),
 				open_actions,
 				item_schema_version: "deal-items.v1",
 				// The list row shows these steps. A date is not required, and a
