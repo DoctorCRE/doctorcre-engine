@@ -13,6 +13,7 @@ import {
 	readDocMailPriorities,
 } from "./doc-mail.ts";
 import {
+	type DocMatch,
 	describeDocMatches,
 	findDocRecords,
 	readDocRecord,
@@ -45,9 +46,10 @@ type DraftSource = Omit<Source, "ref"> & {
 	ref: { kind: "reply_draft"; id: string };
 	version: number;
 };
+type ClaimSource = Source | DocMatch | DraftSource | MailSource;
 export type DocClaimState = {
 	reads: number;
-	sources: Record<string, Source | DraftSource | MailSource>;
+	sources: Record<string, ClaimSource>;
 	choices?: Source[];
 	failed?: true;
 };
@@ -76,6 +78,12 @@ function sourceFor(state: DocClaimState, value: unknown) {
 		return state.sources[key];
 }
 
+function citation(record: ClaimSource) {
+	if (!("city" in record)) return record;
+	const { ref, label, href } = record;
+	return { ref, label, href };
+}
+
 function propose(payload: unknown, state: DocClaimState) {
 	if (state.failed) throw new Error("A Doc read failed");
 	const {
@@ -88,9 +96,10 @@ function propose(payload: unknown, state: DocClaimState) {
 		source,
 		target: ref,
 	} = proposal.parse(payload);
-	const target = sourceFor(state, source ?? ref);
-	if (!target || state.choices)
+	const record = sourceFor(state, source ?? ref);
+	if (!record || state.choices)
 		throw new Error("Choose an authorized source first");
+	const target = citation(record);
 	const replyOnly =
 		text === undefined && what === undefined && due_on === undefined;
 	if (isMailSource(target)) {
@@ -149,10 +158,11 @@ export function validateDocAnswer(payload: unknown, state: DocClaimState) {
 				});
 	if (kind === "answer" && !cited.length)
 		throw new Error("Doc answer has no sources");
+	const unique = [...new Set(cited)];
 	return {
 		kind,
 		text,
-		sources: [...new Set(cited)],
+		sources: kind === "clarification" ? unique : unique.map(citation),
 		proposal:
 			kind === "answer" && proposal != null ? propose(proposal, state) : null,
 	};
@@ -167,7 +177,7 @@ export function registerDocTools(
 	{ readConnection, partner, partnerId, draft, state, timeout }: ClaimRead,
 ) {
 	const deadline = Date.now() + timeout;
-	function remember(record: Source | MailSource) {
+	function remember(record: Source | DocMatch | MailSource) {
 		const source = `${record.ref.kind}:${record.ref.id}`;
 		state.sources[source] = record;
 		return { ...record, source };
@@ -214,10 +224,7 @@ export function registerDocTools(
 					state.choices = await describeDocMatches(db, choices);
 					return validateDocAnswer(null, state);
 				}
-				return matches.map(({ city, ...record }) => ({
-					...remember(record),
-					city,
-				}));
+				return (await describeDocMatches(db, matches)).map(remember);
 			}),
 	);
 	server.registerTool(

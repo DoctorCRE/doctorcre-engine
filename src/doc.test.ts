@@ -1328,6 +1328,22 @@ test("lists chats by their newest message and marks busy or waiting chats", asyn
 		(await marks(`/conversations?before=${waiting}`)).map(({ id }) => id),
 		[idle],
 	);
+	const selected = `/conversations?ids=${waiting},${idle}` as const;
+	const summaries = await send(selected, 200);
+	assert.deepEqual(
+		summaries.conversations.map(({ id, state }) => ({ id, state })),
+		[
+			{ id: waiting, state: "waiting_ok" },
+			{ id: idle, state: null },
+		],
+	);
+	assert.equal(summaries.next_before, null);
+	assert.deepEqual((await client("dell")(selected, 200)).conversations, []);
+	assert.equal(
+		(await send(`/conversations?ids=${Array(31).fill(working).join(",")}`, 400))
+			.error,
+		"invalid_field_value",
+	);
 	const { conversation } = await send(`/conversations/${working}`, 200);
 	assert.equal(conversation.state, "working");
 
@@ -1786,6 +1802,44 @@ test("a first question and follow-ups cite the exact records and ask which lead 
 		kind: "answer",
 		text: "Sample",
 		sources: [{ ...south, label: "Example Juniper" }],
+		proposal: null,
+	});
+
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		update party set name = case id when $1 then 'Juniper Medical' else 'Juniper Clinic' end
+		from stamp where id in ($1, $2)`,
+		[north.ref.id, south.ref.id],
+	);
+	const differentNames = await ask(
+		"Which Juniper is this about?",
+		async (tool) => {
+			const matches = await tool("find", { query: "Juniper", kind: "lead" });
+			assert.ok(Array.isArray(matches));
+			return tool("validate_answer", {
+				kind: "clarification",
+				text: "Which Juniper did you mean?",
+				sources: matches.map((match) => match.source),
+			});
+		},
+	);
+	assert.deepEqual(differentNames, {
+		kind: "clarification",
+		text: "Which Juniper did you mean?",
+		sources: [
+			{
+				...south,
+				label: "Juniper Clinic",
+				city: "Sample South",
+				deal_count: 1,
+			},
+			{
+				...north,
+				label: "Juniper Medical",
+				city: "Sample North",
+				deal_count: 0,
+			},
+		],
 		proposal: null,
 	});
 });

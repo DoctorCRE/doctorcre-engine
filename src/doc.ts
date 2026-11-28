@@ -202,7 +202,21 @@ const turnFields = sql`t.id, to_jsonb(t.created_at) #>> '{}' as created_at, t.po
 		), 'gone')
 	) end as draft_review`;
 
-async function listChats(tx: DocTransaction, before?: string) {
+const chatPageSize = 30;
+
+async function listChats(
+	tx: DocTransaction,
+	before?: string,
+	requestedIds?: string,
+) {
+	const ids = requestedIds?.split(",");
+	if (
+		ids &&
+		(ids.length > chatPageSize ||
+			ids.some((id) => !isUuid(id)) ||
+			before !== undefined)
+	)
+		return reject(400, "invalid_field_value", ["ids"]);
 	if (
 		before !== undefined &&
 		(!isUuid(before) ||
@@ -216,11 +230,15 @@ async function listChats(tx: DocTransaction, before?: string) {
 	const cursor = before
 		? sql`and (latest.created_at, c.id) < ((select created_at from (${latestTurn(before)}) b), ${before}::uuid)`
 		: sql``;
-	const { rows } = await sql<Conversation>`${conversations} ${cursor}
-		order by latest.created_at desc, c.id desc limit 31`.execute(tx);
+	const selected = ids ? sql`and c.id = any(${ids}::uuid[])` : sql``;
+	const { rows } =
+		await sql<Conversation>`${conversations} ${cursor} ${selected}
+		order by latest.created_at desc, c.id desc limit ${chatPageSize + 1}`.execute(
+			tx,
+		);
 	return {
-		conversations: rows.slice(0, 30),
-		next_before: rows[30] ? rows[29]?.id : null,
+		conversations: rows.slice(0, chatPageSize),
+		next_before: rows[chatPageSize] ? rows[chatPageSize - 1]?.id : null,
 	};
 }
 
@@ -358,7 +376,11 @@ export function docRoutes() {
 			}));
 		})
 		.get("/conversations", async (c) =>
-			c.json(await transact(c, (tx) => listChats(tx, c.req.query("before")))),
+			c.json(
+				await transact(c, (tx) =>
+					listChats(tx, c.req.query("before"), c.req.query("ids")),
+				),
+			),
 		)
 		.get("/conversations/:id", async (c) => {
 			const id = c.req.param("id");
