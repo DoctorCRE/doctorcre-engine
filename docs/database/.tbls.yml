@@ -63,6 +63,7 @@ viewpoints:
       - next.deal_open_name
       - next.deal_party
       - next.deal_phase_change
+      - next.deal_plan_date
       - next.deal_reason
       - next.phase
       - next.stage

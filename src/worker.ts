@@ -40,6 +40,7 @@ import {
 } from "./deals/next-change.ts";
 import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
+import { dealPlanDates } from "./deals/plan-dates.ts";
 import { dealSourceReads, deals } from "./deals/routes.ts";
 import { dealTours } from "./deals/tours.ts";
 import { typicalLengths } from "./deals/typical-lengths.ts";
@@ -187,6 +188,7 @@ partnerApi.route("/api/engine", prospectReads);
 partnerApi.route("/api/engine", prospectChanges);
 partnerApi.route("/api/engine", nextDeals);
 partnerApi.route("/api/engine", typicalLengths);
+partnerApi.route("/api/engine", dealPlanDates);
 partnerApi.route("/api/engine", automaticPhaseUndo);
 partnerApi.route("/api/engine", nationalAccounts);
 partnerApi.route("/api/engine", dealParticipants);
