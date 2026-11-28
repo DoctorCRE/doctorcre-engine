@@ -113,14 +113,13 @@ See [Send a new email from Doc](../new-database.md#send-a-new-email-from-doc).
 ## Kept from our rules
 
 - [ ] **Send** is neutral. The save button is the one orange button in view.
-- [ ] No microphone, right-hand panel, search over chats, rows that list Doc's steps, or model picker in the chat. The model choice lives on Settings.
+- [ ] Keep the chat free of a microphone, a right-hand panel, search over chats, and rows that list Doc's steps.
 - [ ] Tones, type sizes and spacing come from the app's tokens. A chat uses three text sizes, and a new chat four. See [design principles](../design-principles.md).
 
 ## Choose who answers, watch it arrive, see it drawn
 
-The owner approved these on 2026-11-25. None is built yet. Each line replaces any line above that says otherwise once its unit ships. The engine side is [Planned Doc changes](../new-database.md#planned-doc-changes).
+These items are planned. On approval, the [Doc harness drawing](../doc-harness/setup.md#ask-doc-picker) supersedes the November 25 plan to put model choice in Settings. The [record picker](#what-each-control-does) still supplies deal, lead and client context. Each change takes effect when its unit ships. The engine side is [Planned Doc changes](../new-database.md#planned-doc-changes).
 
-- [ ] **Who answers** on Settings, under Doc link, lists each model the partner's Mac reports: Claude, Codex, Grok and Gemini. Each row shows "Ready", "Sign in on your Mac" or "Paused until 4:40 AM". A partner whose Mac reports only Claude sees no picker.
 - [ ] The partner picks a first choice and may pick a second. Each choice offers the models and effort levels its tool lists, with the tool's default first. Saving applies from the next question in every chat.
 - [ ] A chat started on one model continues on another with its earlier questions and answers.
 - [ ] When the plan limit gives a reset time, the waiting line reads "Doc is paused until 4:40 AM". Without one it reads "Doc is paused until your Claude plan resets", with the paused model's name in place of Claude.

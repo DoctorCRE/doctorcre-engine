@@ -9,7 +9,7 @@
 
 ## Q1 Standing grant scope
 
-Which actions require approval and what counts as the same kind? Options are an action kind alone or a kind with the target and capability limits shown in the request. Recommend scoped grants with one decision for repeat use within scope. For a paused request, either resume an exact live action or store the grant and restart from current facts if the attempt expired. Recommend the latter for expired attempts, with no automatic dispatch from a late decision. A CLI with a native approval interface could supply pre-dispatch requests if it can leave the decision to Doc. Otherwise route the applicable actions through Doc's tools. Prove coverage before enabling an unrestricted driver for actions Doc must control.
+Which actions require approval and what counts as the same kind? Options are an action kind alone or a kind with the target and capability limits shown in the request. Recommend scoped grants with one decision for repeat use within scope. A live approval can resume only its exact action. Once the claim expires, choose between expiring the approval card immediately or leaving the card available to save a grant until another claim supersedes it. Recommend the second option. A late approval would save the grant once. The next Mac claim would independently check current facts and the grant. Neither a late decision nor a backup takeover would dispatch the original action. A CLI with a native approval interface could supply pre-dispatch requests if it can leave the decision to Doc. Otherwise route the applicable actions through Doc's tools. Prove coverage before enabling an unrestricted driver for actions Doc must control.
 
 ## Q2 Unattended mail
 
@@ -21,7 +21,7 @@ Should a standing action grant authorize future DoctorCRE saves or sends by itse
 
 ## Q4 Loading and evidence
 
-Should open-ended chats select a playbook by the wording of the question or only use playbooks launched from known app actions and explicit requests? Recommend selection from explicit context or requests for the first two playbooks. For deal activity outside the current projection, either show what is available or extend the engine projection for an approved scenario. Recommend adding fields only when a trace case identifies a missing fact. Reuse decision 220's structured numeric checks where a visual is used. Decide which structured values should also appear outside visual blocks.
+Should open-ended chats select a playbook by the wording of the question or only use playbooks launched from known app actions and explicit requests? Recommend selection from explicit context or requests for the first two playbooks. For deal activity outside the current projection, either show what is available or extend the engine projection for an approved scenario. Recommend adding fields only when a trace case identifies a missing fact. Reuse decision 220's structured numeric checks where a visual is used. Should plain-text answers gain structured value checks, or should partners judge whether the wording agrees with its sources? Recommend starting with staging judgment for prose and retaining the existing projection and source checks in S4.
 
 ## Q5 Filing without a review
 
