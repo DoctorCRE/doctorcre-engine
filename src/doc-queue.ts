@@ -89,6 +89,8 @@ const mailKinds = {
 	mac: [],
 	mac_with_judgment: mail,
 	mac_with_split: [...mail, "email_split"],
+	mac_with_introduction: [...mail, "introduction"],
+	mac_with_split_and_introduction: [...mail, "email_split", "introduction"],
 	backup: [],
 	backup_mail: mail,
 } satisfies Record<string, JudgmentKind[]>;
@@ -97,7 +99,6 @@ export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
 	runner: keyof typeof mailKinds,
-	introductions = false,
 ) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
@@ -107,12 +108,7 @@ export async function claimDocWork(
 			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
 				or (select status from ${docLinkState(owner)} link) <> 'ready'`
 			: sql`true`;
-	const kinds: JudgmentKind[] = [...mailKinds[runner]];
-	if (
-		introductions &&
-		(runner === "mac_with_judgment" || runner === "mac_with_split")
-	)
-		kinds.push("introduction");
+	const kinds = mailKinds[runner];
 	const turnQueuedAt = sql`coalesce(requeued_at, created_at)`;
 	const mailQueuedAt = sql`created_at`;
 	// Turns still run before the separate judgment storage migration.
@@ -190,14 +186,19 @@ export async function claimDocWork(
 			where j.id = ${candidate.id} and j.owner_user_id = ${owner}
 		`.execute(tx);
 		if (!job) continue;
-		const context =
-			job.kind === "introduction"
-				? await introductionMail(tx, job.activity_id)
-				: undefined;
+		const { kind, destinations, activity_id, subject, body } = job;
+		const payload =
+			kind === "introduction"
+				? await introductionMail(tx, activity_id).then(
+						(context) => context && { kind, context },
+					)
+				: kind === "email_filing"
+					? { kind, destinations }
+					: { kind };
 		const valid =
-			(job.kind !== "introduction" || context !== undefined) &&
-			job.subject !== null &&
-			(job.kind === "email_filing") === Boolean(job.destinations.length);
+			payload &&
+			subject !== null &&
+			(kind === "email_filing") === Boolean(destinations.length);
 		const claim_id = crypto.randomUUID();
 		const claimed = await tx
 			.updateTable("doc_judgment_job")
@@ -215,15 +216,7 @@ export async function claimDocWork(
 			.returning(claimUntilText)
 			.executeTakeFirst();
 		if (!valid || !claimed) continue;
-		const { kind, destinations, activity_id, subject, body } = job;
-		const work = { activity_id, subject, body, claim_id, ...claimed };
-		if (kind === "introduction") {
-			if (context) return { ...work, kind, context };
-			continue;
-		}
-		return kind === "email_filing"
-			? { ...work, kind, destinations }
-			: { ...work, kind };
+		return { activity_id, subject, body, claim_id, ...claimed, ...payload };
 	}
 }
 

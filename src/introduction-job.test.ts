@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import {
+	introductionMail,
+	validateIntroductions,
+} from "./activity/introduction-judgment.ts";
 import { docLinkOwnerTransaction } from "./doc-link.ts";
 import { claimDocWork, finishDocJudgment } from "./doc-queue.ts";
 import { doorTest } from "./test-door.ts";
@@ -59,10 +63,8 @@ const capture = async (body: string, sender = "joe@example.test") => {
 
 const ownerWork = <T>(run: Parameters<typeof docLinkOwnerTransaction<T>>[2]) =>
 	docLinkOwnerTransaction(writerUrl, joe, run);
-const claim = (
-	runner: Parameters<typeof claimDocWork>[2],
-	introductions = false,
-) => ownerWork((tx) => claimDocWork(tx, joe, runner, introductions));
+const claim = (runner: Parameters<typeof claimDocWork>[2]) =>
+	ownerWork((tx) => claimDocWork(tx, joe, runner));
 const jobsFor = (activity: string) =>
 	db.query(
 		"select owner_user_id, result from doc_judgment_job where activity_id = $1 and kind = 'introduction'",
@@ -89,12 +91,12 @@ test("capture and Mac judgment save exact unconfirmed introductions without chan
 			saved: true,
 		},
 		{
-			body: "I'm introducing Pat Example to your team for Example West Suite.",
+			body: "At Example Surveying, I'm introducing Pat Example for Example West Suite.",
 			result: { ...finding, deal_id: deal },
 			saved: true,
 		},
 		{
-			body: "Sam Example, meet the team.",
+			body: "Sam Example, meet the team from Example Surveying.",
 			result: { ...finding, introduced_party_id: sam },
 			saved: false,
 		},
@@ -120,7 +122,7 @@ test("capture and Mac judgment save exact unconfirmed introductions without chan
 		assert.equal(await claim("mac_with_split"), null);
 		assert.equal(await claim("backup_mail"), null);
 
-		const work = await claim("mac_with_split", true);
+		const work = await claim("mac_with_split_and_introduction");
 		assert.ok(work?.kind === "introduction");
 		assert.equal(work.activity_id, activity);
 		const answer = (quote: string) =>
@@ -191,6 +193,136 @@ test("capture and Mac judgment save exact unconfirmed introductions without chan
 		chosen: 0,
 		knows: 0,
 	});
-	const ordinary = await capture("Pat Example is free at noon.");
-	assert.equal((await jobsFor(ordinary)).rowCount, 0);
+	for (const body of [
+		"Pat Example is free at noon.",
+		"Meet Pat Exemplary from Example Surveying.",
+	]) {
+		assert.equal((await jobsFor(await capture(body))).rowCount, 0);
+	}
+	const duplicateVendor = randomUUID();
+	const duplicatePerson = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values
+			('${duplicateVendor}', 'company', 'Surveying Alias'), ('${duplicatePerson}', 'person', 'Pat Alias');
+		insert into party_role (party_id, role) values ('${duplicateVendor}', 'vendor');
+		insert into introduction (vendor_id, introduced_party_id, made_by, introduced_by_user_id, introduced_on, confirmed, source_job_id)
+		select '${duplicateVendor}', introduced_party_id, made_by, introduced_by_user_id, introduced_on, false, source_job_id
+		from introduction where not confirmed;
+		insert into introduction (vendor_id, introduced_party_id, made_by, introduced_by_user_id, introduced_on, confirmed, source_job_id)
+		select vendor_id, '${duplicatePerson}', made_by, introduced_by_user_id, introduced_on, false, source_job_id
+		from introduction where not confirmed and vendor_id = '${vendor}';
+		select merge_party('${duplicateVendor}', '${vendor}');
+		select merge_party('${duplicatePerson}', '${pat}');
+		commit;`);
+	const pending = await db.query(
+		"select id, source_job_id from introduction where not confirmed and vendor_id = $1 and introduced_party_id = $2",
+		[vendor, pat],
+	);
+	assert.equal(pending.rowCount, 1);
+	const sourced = pending.rows[0];
+	assert.ok(sourced);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		update introduction set confirmed = true where id = '${sourced.id}'; commit;`);
+	await assert.rejects(
+		db.query("delete from doc_judgment_job where id = $1", [
+			sourced.source_job_id,
+		]),
+		{ constraint: "introduction_source_job_id_fkey" },
+	);
+	assert.equal(
+		(
+			await db.query("select from introduction where id = $1 and confirmed", [
+				sourced.id,
+			])
+		).rowCount,
+		1,
+	);
+
+	const ambiguousDeal = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id) values ('${ambiguousDeal}', 'EXAMPLE West-Suite', '${joe}');
+		commit;`);
+	const body = "Pat Example, meet Example Surveying for Example West Suite.";
+	const activity = await capture(body);
+	const context = await ownerWork((tx) => introductionMail(tx, activity));
+	assert.ok(context);
+	assert.equal(
+		context.candidates.some((c) => c.kind === "deal"),
+		false,
+	);
+	assert.equal(
+		validateIntroductions(
+			{ introductions: [{ ...finding, deal_id: deal, quote: body }] },
+			context,
+			() => true,
+		),
+		undefined,
+	);
+
+	const anotherPerson = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${anotherPerson}', 'person', 'PAT-Example');
+		commit;`);
+	const someKnown = await capture(
+		"Pat Example and Sam Example, meet Example Surveying.",
+	);
+	const people = await ownerWork((tx) => introductionMail(tx, someKnown));
+	assert.deepEqual(
+		people?.candidates.filter((c) => c.kind === "person").map((c) => c.id),
+		[sam],
+	);
+
+	const anotherVendor = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${anotherVendor}', 'company', 'EXAMPLE-Surveying');
+		insert into party_role (party_id, role) values ('${anotherVendor}', 'vendor');
+		commit;`);
+	const ambiguous = await capture(
+		"Pat Example and Sam Example, meet Example Surveying.",
+	);
+	assert.equal((await jobsFor(ambiguous)).rowCount, 0);
+});
+
+test("a verbatim quote must be meaningful and name the records it supports", () => {
+	const result = {
+		vendor_id: vendor,
+		introduced_party_id: pat,
+		deal_id: null,
+		made_by: "vendor",
+		introduced_by_user_id: null,
+	};
+	const context = {
+		sent_on: "2026-11-01",
+		sender_ids: [],
+		candidates: [
+			{
+				id: vendor,
+				kind: "vendor" as const,
+				name: "A B",
+				aliases: ["Contact Example"],
+			},
+			{ id: pat, kind: "person" as const, name: "C D", aliases: [] },
+			{
+				id: deal,
+				kind: "deal" as const,
+				name: "Example West Suite",
+				aliases: [],
+			},
+		],
+	};
+	const body =
+		"A B, meet C D. This is a long introduction. I'll introduce C D to Contact Example.";
+	const validate = (quote: string, deal_id: string | null = null) =>
+		validateIntroductions(
+			{ introductions: [{ ...result, quote, deal_id }] },
+			context,
+			(q) => body.includes(q),
+		);
+	assert.equal(validate("A B, meet C D."), undefined);
+	assert.equal(validate("This is a long introduction."), undefined);
+	assert.equal(
+		validate("I'll introduce C D to Contact Example.", deal),
+		undefined,
+	);
+	assert.ok(validate("I'll introduce C D to Contact Example."));
 });

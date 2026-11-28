@@ -3,22 +3,39 @@ begin;
 set local lock_timeout = '1s';
 set local search_path = next, pg_temp;
 
+do $$ begin
+	if to_regclass('next.doc_judgment_job') is null or to_regclass('next.lead_source_sender') is null
+		or to_regclass('next.lead_email_source') is null
+		or to_regprocedure('next.queue_email_summary(uuid)') is null
+		or to_regclass('next.doc_judgment_job_one_split') is null
+		or to_regprocedure('next.queue_email_split(uuid)') is null
+		or not exists (select from pg_attribute where attrelid = to_regclass('next.email')
+			and attname = 'authored' and not attisdropped) then
+		raise exception 'Install the email split job and its prerequisites before the introduction job';
+	end if;
+end $$;
+
 alter table introduction
-	add column confirmed boolean not null default true,
-	add column source_job_id uuid references doc_judgment_job on delete cascade,
-	add column source text generated always as (case when source_job_id is not null then 'found in email' end) stored,
+	add column if not exists confirmed boolean not null default true,
+	add column if not exists source_job_id uuid,
+	add column if not exists source text generated always as (case when source_job_id is not null then 'found in email' end) stored,
+	drop constraint if exists introduction_source_job_id_fkey,
+	add foreign key (source_job_id) references doc_judgment_job on delete restrict,
+	drop constraint if exists introduction_email_evidence,
 	add constraint introduction_email_evidence check (
 		(confirmed or source_job_id is not null) and (source_job_id is null or introduced_on is not null)
 	);
 
 alter table introduction enable row level security;
+drop policy if exists confirmed_introduction on introduction;
 create policy confirmed_introduction on introduction to engine, engine_reader
 	using (confirmed) with check (confirmed or current_setting('engine.job', true) = 'mail_capture');
 
 -- A recorded row wins, including when a partner records it after the mail job.
-create function keep_recorded_introduction() returns trigger
+create or replace function keep_recorded_introduction() returns trigger
 language plpgsql security definer as $$
 begin
+	perform from party where id in (new.vendor_id, new.introduced_party_id) order by id for key share;
 	perform pg_advisory_xact_lock(hashtextextended('introduction:' || new.vendor_id, 0));
 	if new.confirmed then
 		delete from introduction i where not i.confirmed and i.id <> new.id
@@ -29,6 +46,9 @@ begin
 			and (i.vendor_id, i.made_by, i.introduced_party_id) = (new.vendor_id, new.made_by, new.introduced_party_id)
 			and (i.introduced_on is null or i.introduced_on = new.introduced_on)
 	) then
+		if tg_when = 'AFTER' then
+			delete from introduction where id = new.id;
+		end if;
 		return null;
 	end if;
 	return new;
@@ -38,15 +58,20 @@ do $$ begin
 	execute format('alter function keep_recorded_introduction set search_path = pg_catalog, %I, pg_temp', current_schema());
 end $$;
 revoke execute on function keep_recorded_introduction from public;
-create trigger keep_recorded_introduction before insert or update of introduced_on, confirmed on introduction
+create or replace trigger keep_recorded_introduction before insert or update of introduced_on, confirmed on introduction
 	for each row execute function keep_recorded_introduction();
 
-alter table doc_judgment_job drop constraint doc_judgment_job_kind_check,
+-- The old row must move before discarding a duplicate so a party merge can release its foreign keys.
+create or replace trigger dedup_moved_introduction after update of vendor_id, introduced_party_id on introduction
+	for each row when (old.vendor_id <> new.vendor_id or old.introduced_party_id <> new.introduced_party_id)
+	execute function keep_recorded_introduction();
+
+alter table doc_judgment_job drop constraint if exists doc_judgment_job_kind_check,
 	add constraint doc_judgment_job_kind_check check (kind in ('email_summary', 'email_filing', 'email_split', 'introduction'));
 
-create unique index doc_judgment_job_one_introduction on doc_judgment_job (activity_id) where kind = 'introduction';
+create unique index if not exists doc_judgment_job_one_introduction on doc_judgment_job (activity_id) where kind = 'introduction';
 
-create function queue_introduction(email_id uuid) returns void
+create or replace function queue_introduction(email_id uuid) returns void
 language sql security definer as $$
 	insert into doc_judgment_job (owner_user_id, activity_id, idempotency_key, kind)
 	select m.user_id, m.activity_id, md5('introduction:' || m.activity_id)::uuid, 'introduction'

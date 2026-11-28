@@ -10,9 +10,14 @@ do $$ begin
 	end if;
 end $$;
 
-alter table doc_judgment_job
-	drop constraint if exists doc_judgment_job_kind_check,
-	add constraint doc_judgment_job_kind_check check (kind in ('email_summary', 'email_filing', 'email_split'));
+-- A later judgment migration owns the kind check once installed.
+do $$ begin
+	if to_regprocedure('next.queue_introduction(uuid)') is null then
+		alter table doc_judgment_job
+			drop constraint if exists doc_judgment_job_kind_check,
+			add constraint doc_judgment_job_kind_check check (kind in ('email_summary', 'email_filing', 'email_split'));
+	end if;
+end $$;
 
 -- Two captures can both pass the not-exists check. One transaction, so the index is not concurrent.
 create unique index if not exists doc_judgment_job_one_split
@@ -45,7 +50,7 @@ grant execute on function queue_email_split to engine;
 
 commit;
 
--- Read back the kind check, the one-split index and the enqueue function. Expect the three kinds,
+-- Read back the kind check, the one-split index and the enqueue function. Expect the split kind,
 -- one partial unique index on activity_id, one security-definer function with the fixed search path,
 -- engine execute, and no reader or public execute.
 -- select pg_get_constraintdef(oid) from pg_constraint

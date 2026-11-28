@@ -4539,7 +4539,7 @@ end $$;
 revoke execute on function queue_introduction from public;
 grant execute on function queue_introduction to engine;
 
-alter table introduction add foreign key (source_job_id) references doc_judgment_job on delete cascade;
+alter table introduction add foreign key (source_job_id) references doc_judgment_job on delete restrict;
 alter table introduction enable row level security;
 create policy confirmed_introduction on introduction to engine, engine_reader
 	using (confirmed) with check (confirmed or current_setting('engine.job', true) = 'mail_capture');
@@ -4548,6 +4548,7 @@ create policy confirmed_introduction on introduction to engine, engine_reader
 create function keep_recorded_introduction() returns trigger
 language plpgsql security definer as $$
 begin
+	perform from party where id in (new.vendor_id, new.introduced_party_id) order by id for key share;
 	perform pg_advisory_xact_lock(hashtextextended('introduction:' || new.vendor_id, 0));
 	if new.confirmed then
 		delete from introduction i where not i.confirmed and i.id <> new.id
@@ -4558,6 +4559,9 @@ begin
 			and (i.vendor_id, i.made_by, i.introduced_party_id) = (new.vendor_id, new.made_by, new.introduced_party_id)
 			and (i.introduced_on is null or i.introduced_on = new.introduced_on)
 	) then
+		if tg_when = 'AFTER' then
+			delete from introduction where id = new.id;
+		end if;
 		return null;
 	end if;
 	return new;
@@ -4569,6 +4573,11 @@ end $$;
 revoke execute on function keep_recorded_introduction from public;
 create trigger keep_recorded_introduction before insert or update of introduced_on, confirmed on introduction
 	for each row execute function keep_recorded_introduction();
+
+-- The old row must move before discarding a duplicate so a party merge can release its foreign keys.
+create trigger dedup_moved_introduction after update of vendor_id, introduced_party_id on introduction
+	for each row when (old.vendor_id <> new.vendor_id or old.introduced_party_id <> new.introduced_party_id)
+	execute function keep_recorded_introduction();
 
 create table doc_judgment_destination (
 	job_id uuid not null,

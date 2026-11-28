@@ -90,19 +90,17 @@ export function claimDocLink(c: Context<WriterEnv>) {
 				?.split(",")
 				.map((token) => token.trim()),
 		);
+		const runner = !asked.has("judgment")
+			? "mac"
+			: asked.has("email_split")
+				? asked.has("introduction")
+					? "mac_with_split_and_introduction"
+					: "mac_with_split"
+				: asked.has("introduction")
+					? "mac_with_introduction"
+					: "mac_with_judgment";
 		const work =
-			readiness === "ready"
-				? await claimDocWork(
-						tx,
-						owner,
-						asked.has("judgment")
-							? asked.has("email_split")
-								? "mac_with_split"
-								: "mac_with_judgment"
-							: "mac",
-						asked.has("introduction"),
-					)
-				: null;
+			readiness === "ready" ? await claimDocWork(tx, owner, runner) : null;
 		return work
 			? Response.json(work, { headers: noStore })
 			: new Response(null, { status: 204, headers: noStore });
