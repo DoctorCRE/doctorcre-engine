@@ -100,6 +100,7 @@ export function claimDocLink(c: Context<WriterEnv>) {
 								? "mac_with_split"
 								: "mac_with_judgment"
 							: "mac",
+						asked.has("introduction"),
 					)
 				: null;
 		return work

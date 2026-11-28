@@ -4,7 +4,13 @@ import {
 	filingDestination,
 	saveFilingJudgment,
 } from "./activity/filing-judgment.ts";
+import {
+	introductionMail,
+	saveIntroductions,
+	validateIntroductions,
+} from "./activity/introduction-judgment.ts";
 import { recentDocTurns } from "./doc.ts";
+import type { judgmentClaimSchema } from "./doc-judgment-prompt.ts";
 import { docLinkState, recordDocPoll } from "./doc-link.ts";
 import { type DocClaimState, validateDocAnswer } from "./doc-tools.ts";
 import type { DB } from "./next-database.d.ts";
@@ -62,7 +68,7 @@ async function claimDocTurn(
 	};
 }
 
-type JudgmentKind = "email_summary" | "email_filing" | "email_split";
+type JudgmentKind = z.infer<typeof judgmentClaimSchema>["kind"];
 type JudgmentInput = {
 	kind: JudgmentKind;
 	activity_id: string;
@@ -78,7 +84,7 @@ const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
 	) order by position) from doc_judgment_destination where job_id = j.id), '[]') as destinations`;
 
 const mail = ["email_summary", "email_filing"] satisfies JudgmentKind[];
-// Splits run only on the partner's own Mac, once its runner asks for them.
+// Split and introduction jobs require a capable Mac on the partner's plan.
 const mailKinds = {
 	mac: [],
 	mac_with_judgment: mail,
@@ -91,6 +97,7 @@ export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
 	runner: keyof typeof mailKinds,
+	introductions = false,
 ) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
@@ -100,7 +107,12 @@ export async function claimDocWork(
 			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
 				or (select status from ${docLinkState(owner)} link) <> 'ready'`
 			: sql`true`;
-	const kinds: JudgmentKind[] = mailKinds[runner];
+	const kinds: JudgmentKind[] = [...mailKinds[runner]];
+	if (
+		introductions &&
+		(runner === "mac_with_judgment" || runner === "mac_with_split")
+	)
+		kinds.push("introduction");
 	const turnQueuedAt = sql`coalesce(requeued_at, created_at)`;
 	const mailQueuedAt = sql`created_at`;
 	// Turns still run before the separate judgment storage migration.
@@ -178,7 +190,12 @@ export async function claimDocWork(
 			where j.id = ${candidate.id} and j.owner_user_id = ${owner}
 		`.execute(tx);
 		if (!job) continue;
+		const context =
+			job.kind === "introduction"
+				? await introductionMail(tx, job.activity_id)
+				: undefined;
 		const valid =
+			(job.kind !== "introduction" || context !== undefined) &&
 			job.subject !== null &&
 			(job.kind === "email_filing") === Boolean(job.destinations.length);
 		const claim_id = crypto.randomUUID();
@@ -200,6 +217,10 @@ export async function claimDocWork(
 		if (!valid || !claimed) continue;
 		const { kind, destinations, activity_id, subject, body } = job;
 		const work = { activity_id, subject, body, claim_id, ...claimed };
+		if (kind === "introduction") {
+			if (context) return { ...work, kind, context };
+			continue;
+		}
 		return kind === "email_filing"
 			? { ...work, kind, destinations }
 			: { ...work, kind };
@@ -252,9 +273,17 @@ function splitBody(body: string, paragraphs: string[]) {
 	};
 }
 
-function validateJudgment(outcome: unknown, work: JudgmentInput) {
+async function validateJudgment(
+	tx: Transaction<DB>,
+	outcome: unknown,
+	work: JudgmentInput,
+) {
 	const quotesEmail = (quote: string) =>
 		work.body.includes(quote) || work.subject.includes(quote);
+	if (work.kind === "introduction") {
+		const context = await introductionMail(tx, work.activity_id);
+		return context && validateIntroductions(outcome, context, quotesEmail);
+	}
 	if (work.kind === "email_split") {
 		const result = splitResult.safeParse(outcome).data;
 		return result && splitBody(work.body, result.authored);
@@ -319,7 +348,9 @@ export async function saveDocJudgment(
 	`.execute(tx);
 	if (!job) return 404;
 	const result =
-		outcome.kind === "answered" ? validateJudgment(outcome.result, job) : null;
+		outcome.kind === "answered"
+			? await validateJudgment(tx, outcome.result, job)
+			: null;
 	if (result === undefined) {
 		if (job.kind === "email_filing") await saveFilingJudgment(tx, job, []);
 		return 422;
@@ -357,6 +388,8 @@ export async function saveDocJudgment(
 			job,
 			result && "facts" in result ? result.facts : [],
 		);
+	if (result && "introductions" in result)
+		await saveIntroductions(tx, job.id, result);
 	if (summary || split)
 		await sql`select set_config('engine.job', 'mail_capture', true)`.execute(
 			tx,

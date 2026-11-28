@@ -14,6 +14,7 @@ import {
 	eligibleMailLinks,
 	knownMailDestination,
 } from "./filing-evidence.ts";
+import { introductionMail } from "./introduction-judgment.ts";
 
 type Email = {
 	message_id: string;
@@ -369,15 +370,22 @@ export async function recordEmail(
 	if (autoFile && mailboxAdded) {
 		const {
 			rows: [storage],
-		} = await sql<{ installed: boolean; split: boolean }>`
+		} = await sql<{
+			installed: boolean;
+			split: boolean;
+			introduction: boolean;
+		}>`
 			select to_regclass('next.doc_judgment_job') is not null
 				and to_regprocedure('next.queue_email_summary(uuid)') is not null as installed,
-				to_regprocedure('next.queue_email_split(uuid)') is not null as split
+				to_regprocedure('next.queue_email_split(uuid)') is not null as split,
+				to_regprocedure('next.queue_introduction(uuid)') is not null as introduction
 		`.execute(tx);
 		if (storage?.installed)
 			await sql`select queue_email_summary(${activity_id})`.execute(tx);
 		if (storage?.split)
 			await sql`select queue_email_split(${activity_id})`.execute(tx);
+		if (storage?.introduction && (await introductionMail(tx, activity_id)))
+			await sql`select queue_introduction(${activity_id})`.execute(tx);
 		if (queueFiling) {
 			const {
 				rows: [filing],

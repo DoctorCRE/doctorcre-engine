@@ -115,7 +115,10 @@ test("the migration gives an existing queue the split kind and its enqueue", asy
 	const migration = await readSchema("add-email-split-job.sql");
 	await db.query(migration);
 	await db.query(migration);
-	assert.deepEqual(await catalog(), fresh);
+	const migrated = await catalog();
+	assert.equal(migrated?.one_split, fresh?.one_split);
+	assert.equal(migrated?.enqueue, fresh?.enqueue);
+	assert.match(migrated?.kinds, /email_split/);
 	assert.match(fresh?.kinds, /email_split/);
 	assert.match(fresh?.one_split, /UNIQUE INDEX doc_judgment_job_one_split/);
 	assert.match(

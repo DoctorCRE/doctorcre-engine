@@ -137,7 +137,7 @@ const link = (...replies: Reply[]) => runLink(replies);
 const poll = (readiness: string) => ({
 	path: "/api/engine/doc/link/claim",
 	readiness,
-	work: readiness === "ready" ? "judgment, email_split" : null,
+	work: readiness === "ready" ? "judgment, email_split, introduction" : null,
 	body: null,
 });
 const result = (body: unknown) => ({
